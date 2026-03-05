@@ -408,7 +408,7 @@ async def download_pptx(jwt_token: str, project_id: str):
 
 @router.get("/{jwt_token}/api/generate/{project_id}/download/pdf")
 async def download_pdf(jwt_token: str, project_id: str):
-    """PDF 다운로드 (PPTX를 PDF로 변환)"""
+    """PDF 다운로드 (미구현)"""
     get_user_key(jwt_token)
     raise HTTPException(status_code=501, detail="PDF 변환 기능은 준비 중입니다")
 
