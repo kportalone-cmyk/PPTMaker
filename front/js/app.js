@@ -1731,7 +1731,8 @@ function renderSlideAtIndex(index) {
         });
 
         if (obj.obj_type === 'image' && obj.image_url) {
-            div.append(`<img src="${obj.image_url}" style="width:100%;height:100%;object-fit:contain;">`);
+            const imgFit = obj.image_fit || 'contain';
+            div.append(`<img src="${obj.image_url}" style="width:100%;height:100%;object-fit:${imgFit};">`);
         } else if (obj.obj_type === 'text') {
             const style = obj.text_style || {};
             const text = obj.generated_text || obj.text_content || '';
@@ -1805,7 +1806,8 @@ function renderSlideToContainer(container, slide, thumbW, thumbH) {
         });
 
         if (obj.obj_type === 'image' && obj.image_url) {
-            div.append(`<img src="${obj.image_url}" style="width:100%;height:100%;object-fit:contain;">`);
+            const imgFit = obj.image_fit || 'contain';
+            div.append(`<img src="${obj.image_url}" style="width:100%;height:100%;object-fit:${imgFit};">`);
         } else if (obj.obj_type === 'shape') {
             // 도형은 축소 렌더링 생략 (너무 작음)
         } else if (obj.obj_type === 'text') {
@@ -2377,7 +2379,8 @@ function renderSlideAtIndexEditable(index) {
         if (currentItemIdx >= 0) div.attr('data-item-idx', currentItemIdx);
 
         if (obj.obj_type === 'image' && obj.image_url) {
-            div.append(`<img src="${obj.image_url}" style="width:100%;height:100%;object-fit:contain;pointer-events:none;">`);
+            const imgFit = obj.image_fit || 'contain';
+            div.append(`<img src="${obj.image_url}" style="width:100%;height:100%;object-fit:${imgFit};pointer-events:none;">`);
             div.append(`<button class="edit-img-replace-btn" onclick="triggerEditImageReplace(${objIdx})">${t('editReplaceImage')}</button>`);
         } else if (obj.obj_type === 'shape') {
             const svg = _createEditShapeSVG(obj);
@@ -3157,7 +3160,8 @@ function renderPresentationSlide(index, panel) {
         });
 
         if (obj.obj_type === 'image' && obj.image_url) {
-            div.append(`<img src="${obj.image_url}" style="width:100%;height:100%;object-fit:contain;">`);
+            const imgFit = obj.image_fit || 'contain';
+            div.append(`<img src="${obj.image_url}" style="width:100%;height:100%;object-fit:${imgFit};">`);
         } else if (obj.obj_type === 'text') {
             const style = obj.text_style || {};
             const text = obj.generated_text || obj.text_content || '';

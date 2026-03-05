@@ -154,6 +154,8 @@ async def create_slide(jwt_token: str, data: SlideCreate):
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
     }
+    if data.background_image:
+        doc["background_image"] = data.background_image
     result = await db.slides.insert_one(doc)
     doc["_id"] = str(result.inserted_id)
     return {"slide": doc}
@@ -171,6 +173,8 @@ async def update_slide(jwt_token: str, slide_id: str, data: SlideUpdate):
         update_data["order"] = data.order
     if data.slide_meta is not None:
         update_data["slide_meta"] = data.slide_meta
+    if data.background_image is not None:
+        update_data["background_image"] = data.background_image if data.background_image else None
     update_data["updated_at"] = datetime.utcnow()
 
     result = await db.slides.update_one(

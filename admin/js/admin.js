@@ -452,12 +452,25 @@ async function selectTemplate(templateId) {
 }
 
 function updateBgUI() {
-    if (state.currentTemplate && state.currentTemplate.background_image) {
-        $('#canvasBg').css('background-image', `url(${state.currentTemplate.background_image})`);
+    // 슬라이드별 배경 우선, 없으면 템플릿 배경
+    const slideBg = state.currentSlide && (typeof state.currentSlide === 'object')
+        ? state.currentSlide.background_image : null;
+    const templateBg = state.currentTemplate ? state.currentTemplate.background_image : null;
+    const bgImage = slideBg || templateBg;
+
+    if (bgImage) {
+        $('#canvasBg').css('background-image', `url(${bgImage})`);
         $('#btnRemoveBg').show();
     } else {
         $('#canvasBg').css('background-image', 'none');
         $('#btnRemoveBg').hide();
+    }
+
+    // 슬라이드 배경 해제 버튼 표시
+    if (slideBg) {
+        $('#btnRemoveSlideBg').show();
+    } else {
+        $('#btnRemoveSlideBg').hide();
     }
 }
 
@@ -584,9 +597,10 @@ function renderSlideThumbnail(slide) {
 
     container.innerHTML = '';
 
-    // 배경 이미지
-    if (state.currentTemplate && state.currentTemplate.background_image) {
-        container.style.backgroundImage = `url(${state.currentTemplate.background_image})`;
+    // 배경 이미지 (슬라이드별 우선)
+    const bgImage = slide.background_image || (state.currentTemplate && state.currentTemplate.background_image);
+    if (bgImage) {
+        container.style.backgroundImage = `url(${bgImage})`;
         container.style.backgroundSize = 'cover';
         container.style.backgroundPosition = 'center';
     } else {
@@ -618,7 +632,7 @@ function renderSlideThumbnail(slide) {
             img.src = obj.image_url;
             img.style.width = '100%';
             img.style.height = '100%';
-            img.style.objectFit = 'contain';
+            img.style.objectFit = obj.image_fit || 'contain';
             el.appendChild(img);
         } else if (obj.obj_type === 'shape') {
             el.style.overflow = 'visible';
@@ -856,10 +870,8 @@ function renderCanvas() {
     clearCanvas();
     const canvas = $('#canvas');
 
-    // 배경 이미지
-    if (state.currentTemplate && state.currentTemplate.background_image) {
-        $('#canvasBg').css('background-image', `url(${state.currentTemplate.background_image})`);
-    }
+    // 배경 이미지 (슬라이드별 우선)
+    updateBgUI();
 
     state.objects.forEach(obj => {
         const el = createObjectElement(obj);
@@ -882,7 +894,8 @@ function createObjectElement(obj) {
         });
 
     if (obj.obj_type === 'image' && obj.image_url) {
-        div.append(`<img src="${obj.image_url}" alt="image">`);
+        const fit = obj.image_fit || 'contain';
+        div.append(`<img src="${obj.image_url}" alt="image" style="object-fit:${fit};">`);
     } else if (obj.obj_type === 'shape') {
         div.append(createShapeSVG(obj));
     } else if (obj.obj_type === 'text') {
@@ -1010,6 +1023,7 @@ async function handleImageUpload(event) {
             width: 200,
             height: 150,
             image_url: res.image_url,
+            image_fit: 'contain',
             role: null,
             placeholder: null,
         };
@@ -1066,11 +1080,73 @@ async function removeBackground() {
     }
 }
 
+async function setImageAsBackground() {
+    if (!state.selectedObject || state.selectedObject.obj_type !== 'image') return;
+    if (!state.currentSlide) return;
+
+    const imageUrl = state.selectedObject.image_url;
+    if (!imageUrl) return;
+
+    const slideId = typeof state.currentSlide === 'object' ? state.currentSlide._id : state.currentSlide;
+
+    try {
+        await apiPut('/api/admin/slides/' + slideId, {
+            background_image: imageUrl,
+        });
+
+        // 슬라이드 로컬 상태 업데이트
+        const slide = state.slides.find(s => s._id === slideId);
+        if (slide) slide.background_image = imageUrl;
+        if (typeof state.currentSlide === 'object') state.currentSlide.background_image = imageUrl;
+
+        updateBgUI();
+
+        // 이미지 오브젝트 제거
+        const objId = state.selectedObject.obj_id;
+        state.objects = state.objects.filter(o => o.obj_id !== objId);
+        $(`[data-obj-id="${objId}"]`).remove();
+        state.selectedObject = null;
+        $('#objProperties').hide();
+        $('#imageProperties').hide();
+        $('#textProperties').hide();
+        $('#shapeProperties').hide();
+
+        if (slide) renderSlideThumbnail(slide);
+
+        showToast('이 슬라이드의 배경이 설정되었습니다', 'success');
+    } catch (e) {
+        showToast('배경 설정 실패', 'error');
+    }
+}
+
+async function removeSlideBackground() {
+    if (!state.currentSlide) return;
+    const slideId = typeof state.currentSlide === 'object' ? state.currentSlide._id : state.currentSlide;
+
+    try {
+        await apiPut('/api/admin/slides/' + slideId, {
+            background_image: '',
+        });
+
+        const slide = state.slides.find(s => s._id === slideId);
+        if (slide) delete slide.background_image;
+        if (typeof state.currentSlide === 'object') delete state.currentSlide.background_image;
+
+        updateBgUI();
+        if (slide) renderSlideThumbnail(slide);
+
+        showToast('슬라이드 배경이 해제되었습니다', 'success');
+    } catch (e) {
+        showToast('배경 해제 실패', 'error');
+    }
+}
+
 function deleteObject(objId) {
     state.objects = state.objects.filter(o => o.obj_id !== objId);
     $(`[data-obj-id="${objId}"]`).remove();
     state.selectedObject = null;
     $('#objProperties').hide();
+    $('#imageProperties').hide();
     $('#textProperties').hide();
     $('#shapeProperties').hide();
 }
@@ -1278,12 +1354,39 @@ $(document).on('mouseup', function (e) {
     state.isResizing = false;
 });
 
-// ESC 키로 드로잉 모드 취소
+// 키보드 이벤트 처리
 $(document).on('keydown', function (e) {
+    // ESC: 드로잉 모드 취소
     if (e.key === 'Escape' && state.isDrawing) {
         cancelDrawMode();
         e.preventDefault();
+        return;
     }
+
+    // 화살표 키: 선택된 오브젝트 이동
+    if (!state.selectedObject) return;
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].indexOf(e.key) === -1) return;
+
+    // 텍스트 편집 중이면 무시
+    const active = document.activeElement;
+    if (active && (active.isContentEditable || active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return;
+
+    e.preventDefault();
+    const step = e.shiftKey ? 10 : 1;
+    const obj = state.selectedObject;
+
+    switch (e.key) {
+        case 'ArrowLeft':  obj.x = Math.max(0, obj.x - step); break;
+        case 'ArrowRight': obj.x = Math.min(960 - obj.width, obj.x + step); break;
+        case 'ArrowUp':    obj.y = Math.max(0, obj.y - step); break;
+        case 'ArrowDown':  obj.y = Math.min(540 - obj.height, obj.y + step); break;
+    }
+
+    obj.x = Math.round(obj.x);
+    obj.y = Math.round(obj.y);
+
+    $(`[data-obj-id="${obj.obj_id}"]`).css({ left: obj.x + 'px', top: obj.y + 'px' });
+    updatePositionInputs();
 });
 
 // 캔버스 외부 클릭 시 드로잉 모드 취소
@@ -1318,6 +1421,7 @@ $('#canvas').on('mousedown', function (e) {
         $('.canvas-object').removeClass('selected');
         state.selectedObject = null;
         $('#objProperties').hide();
+        $('#imageProperties').hide();
         $('#textProperties').hide();
         $('#shapeProperties').hide();
     }
@@ -1336,7 +1440,13 @@ function updatePropertiesPanel() {
     $('#propW').val(Math.round(obj.width));
     $('#propH').val(Math.round(obj.height));
 
-    if (obj.obj_type === 'text') {
+    if (obj.obj_type === 'image') {
+        $('#imageProperties').show();
+        $('#textProperties').hide();
+        $('#shapeProperties').hide();
+        $('#propImageFit').val(obj.image_fit || 'contain');
+    } else if (obj.obj_type === 'text') {
+        $('#imageProperties').hide();
         $('#textProperties').show();
         $('#shapeProperties').hide();
         const style = obj.text_style || {};
@@ -1348,6 +1458,7 @@ function updatePropertiesPanel() {
         $('#propAlign').val(style.align || 'left');
         $('#propTextContent').val(obj.text_content || '');
     } else if (obj.obj_type === 'shape') {
+        $('#imageProperties').hide();
         $('#textProperties').hide();
         $('#shapeProperties').show();
         const s = obj.shape_style || {};
@@ -1363,6 +1474,7 @@ function updatePropertiesPanel() {
         $('#propArrowHead').val(s.arrow_head || 'end');
         updateShapePropertyVisibility();
     } else {
+        $('#imageProperties').hide();
         $('#textProperties').hide();
         $('#shapeProperties').hide();
     }
@@ -1395,6 +1507,14 @@ function updateObjPosition() {
         width: state.selectedObject.width + 'px',
         height: state.selectedObject.height + 'px',
     });
+}
+
+function updateImageFit(value) {
+    if (!state.selectedObject || state.selectedObject.obj_type !== 'image') return;
+    state.selectedObject.image_fit = value;
+    const img = $(`[data-obj-id="${state.selectedObject.obj_id}"] img`);
+    img.css('object-fit', value);
+    renderSlideThumbnail(state.slides.find(s => s._id === state.currentSlide));
 }
 
 function updateTextStyle(prop, value) {

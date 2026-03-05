@@ -105,6 +105,9 @@
                 <button class="btn btn-danger" onclick="removeBackground()" id="btnRemoveBg" style="display:none;" title="배경 이미지 제거">
                     배경 제거
                 </button>
+                <button class="btn" onclick="removeSlideBackground()" id="btnRemoveSlideBg" style="display:none;color:#e67e22;border-color:#e67e22;font-size:12px;" title="이 슬라이드 배경 해제">
+                    슬라이드 배경 해제
+                </button>
                 <input type="file" id="bgUploadInput" accept="image/*" style="display:none;" onchange="handleBgUpload(event)">
                 <div class="separator"></div>
                 <button class="btn btn-primary" onclick="saveSlide()">
@@ -169,6 +172,23 @@
                         <label>높이</label>
                         <input type="number" id="propH" onchange="updateObjPosition()">
                     </div>
+                </div>
+            </div>
+
+            <!-- 이미지 전용 속성 -->
+            <div id="imageProperties" style="display:none;">
+                <h3 style="margin-top:16px;">이미지 설정</h3>
+                <div class="prop-group">
+                    <label>이미지 맞춤</label>
+                    <select id="propImageFit" onchange="updateImageFit(this.value)">
+                        <option value="contain">원본 비율 유지</option>
+                        <option value="cover">영역에 맞춤 (잘림 가능)</option>
+                    </select>
+                </div>
+                <div class="prop-group" style="margin-top:12px;">
+                    <button class="btn" onclick="setImageAsBackground()" style="width:100%;padding:8px;font-size:13px;background:#2d5a8e;color:#fff;border:none;border-radius:4px;cursor:pointer;">
+                        배경으로 설정
+                    </button>
                 </div>
             </div>
 

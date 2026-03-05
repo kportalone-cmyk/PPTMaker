@@ -8,6 +8,7 @@ from pptx.dml.color import RGBColor
 from pptx.oxml.ns import qn
 from services.mongo_service import get_db
 from bson import ObjectId
+from PIL import Image as PILImage
 import os
 import uuid
 from config import settings
@@ -43,6 +44,31 @@ def _px_to_emu(x, y, w, h):
         int(w / SLIDE_W_PX * SLIDE_W_EMU),
         int(h / SLIDE_H_PX * SLIDE_H_EMU),
     )
+
+
+def _apply_cover_crop(pic, img_path: str, target_w_emu: int, target_h_emu: int):
+    """image_fit='cover' 적용: 이미지를 영역에 맞춰 채우고 초과 부분을 크롭"""
+    try:
+        with PILImage.open(img_path) as img:
+            img_w, img_h = img.size
+        target_ratio = target_w_emu / target_h_emu
+        img_ratio = img_w / img_h
+
+        # 크롭 비율 계산 (0~100000 범위, 1000분율이 아니라 100000분율)
+        if img_ratio > target_ratio:
+            # 이미지가 더 넓음 → 좌우 크롭
+            crop_w = 1 - (target_ratio / img_ratio)
+            crop_each = int(crop_w / 2 * 100000)
+            pic.crop_left = crop_each
+            pic.crop_right = crop_each
+        else:
+            # 이미지가 더 높음 → 상하 크롭
+            crop_h = 1 - (img_ratio / target_ratio)
+            crop_each = int(crop_h / 2 * 100000)
+            pic.crop_top = crop_each
+            pic.crop_bottom = crop_each
+    except Exception:
+        pass
 
 
 async def generate_pptx(project_id: str) -> str:
@@ -108,9 +134,11 @@ async def generate_pptx(project_id: str) -> str:
                 img_path = os.path.join(".", obj["image_url"].lstrip("/"))
                 if os.path.exists(img_path):
                     try:
-                        slide.shapes.add_picture(
+                        pic = slide.shapes.add_picture(
                             img_path, Emu(xe), Emu(ye), Emu(we), Emu(he),
                         )
+                        if obj.get("image_fit") == "cover":
+                            _apply_cover_crop(pic, img_path, we, he)
                     except Exception:
                         pass
 

@@ -32,6 +32,7 @@ class SlideObject(BaseModel):
     height: float = 100
     # 이미지용
     image_url: Optional[str] = None
+    image_fit: Optional[str] = "contain"  # "contain" | "cover"
     # 텍스트용
     text_content: Optional[str] = None
     text_style: Optional[TextObjectStyle] = None
@@ -47,12 +48,14 @@ class SlideCreate(BaseModel):
     order: int = 0
     objects: list[SlideObject] = []
     slide_meta: dict = {}  # 슬라이드 메타정보 (제목여부, 설명 텍스트 수 등)
+    background_image: Optional[str] = None  # 슬라이드별 배경 이미지
 
 
 class SlideUpdate(BaseModel):
     objects: Optional[list[SlideObject]] = None
     order: Optional[int] = None
     slide_meta: Optional[dict] = None
+    background_image: Optional[str] = None  # 슬라이드별 배경 이미지 (빈 문자열이면 제거)
 
 
 class TemplateCreate(BaseModel):
