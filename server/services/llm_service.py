@@ -90,7 +90,7 @@ async def generate_slide_content(
    - 각 item은 heading(부제목, 키워드 1~5단어) + detail(설명, 1~3문장) 구조입니다.
    - heading은 템플릿의 "부제목" 필드에, detail은 "설명" 필드에 순서대로 매핑됩니다.
    - **카탈로그의 "items를 정확히 N개 생성하세요" 안내를 반드시 따르세요.** 부제목과 설명 필드 수 중 작은 값이 표현 가능한 최대 items 수입니다.
-   - 최소 3개 이상의 items를 생성하세요. items를 1개만 작성하면 안 됩니다.
+   - 최소 3개, 최대 4개의 items를 생성하세요. items를 1개만 작성하면 안 됩니다.
    - 각 item의 heading은 서로 다른 관점/주제를 다뤄야 합니다.
 4. 예시 - subtitle_count=3, description_count=3인 content 슬라이드:
    {{"type":"content","template_index":3,"title":"디지털 전환 핵심 전략","governance":"클라우드 전환, 데이터 분석, 업무 자동화를 통한 디지털 혁신 추진",
@@ -329,6 +329,7 @@ def _build_slides_description(slides_meta: list[dict]) -> str:
             effective_items = min(ph_sub_actual, ph_desc_actual)
         else:
             effective_items = max(ph_sub_actual, ph_desc_actual, subtitle_count, desc_count)
+        effective_items = min(effective_items, 4)  # 슬라이드당 최대 4개 항목 제한
 
         lines.append(f"  특성: has_title={has_title}, has_governance={has_governance}, subtitle_count={ph_sub_actual}, description_count={ph_desc_actual}")
         if content_type == "body" and effective_items > 0:
@@ -978,7 +979,7 @@ def _build_generation_prompts(
    - 각 item은 heading(부제목, 키워드 1~5단어) + detail(설명, 1~3문장) 구조입니다.
    - heading은 템플릿의 "부제목" 필드에, detail은 "설명" 필드에 순서대로 매핑됩니다.
    - **카탈로그의 "items를 정확히 N개 생성하세요" 안내를 반드시 따르세요.** 부제목과 설명 필드 수 중 작은 값이 표현 가능한 최대 items 수입니다.
-   - 최소 3개 이상의 items를 생성하세요. items를 1개만 작성하면 안 됩니다.
+   - 최소 3개, 최대 4개의 items를 생성하세요. items를 1개만 작성하면 안 됩니다.
    - 각 item의 heading은 서로 다른 관점/주제를 다뤄야 합니다.
 4. 예시 - subtitle_count=3, description_count=3인 content 슬라이드:
    {{"type":"content","template_index":3,"title":"디지털 전환 핵심 전략","governance":"클라우드 전환, 데이터 분석, 업무 자동화를 통한 디지털 혁신 추진",

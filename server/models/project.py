@@ -23,5 +23,10 @@ class GenerateRequest(BaseModel):
     slide_count: str = "auto"  # 슬라이드 수: "auto" 또는 "5","10","15","20","25","30"
 
 
+class SlideUpdateRequest(BaseModel):
+    objects: list
+    items: Optional[list] = None
+
+
 class SlideReorderRequest(BaseModel):
     slide_ids: list[str]

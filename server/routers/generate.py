@@ -1,8 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse, StreamingResponse
 from bson import ObjectId
 from datetime import datetime
-from models.project import GenerateRequest, SlideReorderRequest
+from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest
 from services.mongo_service import get_db
 from services.auth_service import decode_jwt_token
 from services.template_service import recommend_slide, get_template_slides
@@ -10,7 +10,9 @@ from services.ppt_service import generate_pptx
 from services.llm_service import generate_slide_content, generate_slide_content_stream
 from config import settings
 import os
+import uuid
 import json
+import aiofiles
 
 router = APIRouter(tags=["generate"])
 
@@ -334,15 +336,35 @@ async def get_generated_slides(jwt_token: str, project_id: str):
 
 
 @router.put("/{jwt_token}/api/generate/slides/{slide_id}")
-async def update_generated_slide(jwt_token: str, slide_id: str, objects: list):
+async def update_generated_slide(jwt_token: str, slide_id: str, data: SlideUpdateRequest):
     """생성된 슬라이드 수정"""
     get_user_key(jwt_token)
     db = get_db()
+    update_fields = {
+        "objects": data.objects,
+        "updated_at": datetime.utcnow(),
+    }
+    if data.items is not None:
+        update_fields["items"] = data.items
     await db.generated_slides.update_one(
         {"_id": ObjectId(slide_id)},
-        {"$set": {"objects": objects, "updated_at": datetime.utcnow()}}
+        {"$set": update_fields}
     )
     return {"success": True}
+
+
+@router.post("/{jwt_token}/api/generate/upload-image")
+async def upload_edit_image(jwt_token: str, file: UploadFile = File(...)):
+    """사용자 슬라이드 편집용 이미지 업로드"""
+    get_user_key(jwt_token)
+    ext = os.path.splitext(file.filename)[1]
+    filename = f"{uuid.uuid4().hex}{ext}"
+    save_path = os.path.join(settings.UPLOAD_DIR, "images", filename)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    async with aiofiles.open(save_path, "wb") as f:
+        content = await file.read()
+        await f.write(content)
+    return {"image_url": f"/uploads/images/{filename}"}
 
 
 @router.put("/{jwt_token}/api/generate/{project_id}/reorder")
@@ -492,6 +514,10 @@ def _build_gen_objects(template_slide: dict, contents: dict) -> list:
             if placeholder_name:
                 generated_text = contents.get(placeholder_name)
                 if generated_text is None:
+                    # 내용이 매핑되지 않은 subtitle/description 오브젝트 제거
+                    role = obj.get("role") or obj.get("_auto_role", "")
+                    if role in ("subtitle", "description"):
+                        continue
                     generated_text = obj.get("text_content", "")
                 elif not generated_text:
                     generated_text = ""

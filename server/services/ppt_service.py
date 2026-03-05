@@ -74,8 +74,20 @@ async def generate_pptx(project_id: str) -> str:
                     prs.slide_width, prs.slide_height
                 )
 
-        # 오브젝트 렌더링
+        # 오브젝트 렌더링 (items 소진된 초과 subtitle/description 제거)
+        items = gen_slide.get("items", [])
+        ppt_sub_idx = 0
+        ppt_desc_idx = 0
         for obj in gen_slide.get("objects", []):
+            role = obj.get("role", "") or obj.get("_auto_role", "")
+            if items and role == "subtitle":
+                if ppt_sub_idx >= len(items):
+                    continue
+                ppt_sub_idx += 1
+            elif items and role == "description":
+                if ppt_desc_idx >= len(items):
+                    continue
+                ppt_desc_idx += 1
             # 캔버스 좌표 → PPTX EMU 변환
             x_emu = int(obj["x"] / slide_width_px * 12192000)
             y_emu = int(obj["y"] / slide_height_px * 6858000)

@@ -18,9 +18,25 @@ const state = {
     searchHighlightIndex: -1,
     lastWebSearchResult: null,
     sidebarCollapsed: false,
+    editMode: false,
+    editSelectedObj: null,
+    editDragging: false,
+    editResizing: false,
+    editDragOffset: { x: 0, y: 0 },
+    editResizeDir: '',
+    editResizeStart: null,
+    editDirtySlides: new Set(),
 };
 
 let _animationCancelled = false;
+let _isAnimating = false;
+
+// 탭 전환 시 애니메이션 즉시 완료 처리
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && _isAnimating && !_animationCancelled) {
+        _animationCancelled = true;
+    }
+});
 
 // ============ 다국어 사전 ============
 const I18N = {
@@ -62,6 +78,11 @@ const I18N = {
         downloadPptx: 'PPTX',
         downloadPdf: 'PDF',
         copyShareLink: '공유',
+        editSlide: '편집',
+        editSave: '저장',
+        editReplaceImage: '이미지 교체',
+        editUnsavedChanges: '저장하지 않은 변경사항이 있습니다. 저장하시겠습니까?',
+        editSaved: '변경사항이 저장되었습니다',
         noSlides: '아래에서 지침을 입력하고 생성 버튼을 눌러주세요',
         prev: '이전',
         next: '다음',
@@ -152,6 +173,11 @@ const I18N = {
         downloadPptx: 'PPTX',
         downloadPdf: 'PDF',
         copyShareLink: 'Share',
+        editSlide: 'Edit',
+        editSave: 'Save',
+        editReplaceImage: 'Replace',
+        editUnsavedChanges: 'You have unsaved changes. Save now?',
+        editSaved: 'Changes saved',
         noSlides: 'Enter instructions below and click Generate',
         prev: 'Prev',
         next: 'Next',
@@ -242,6 +268,11 @@ const I18N = {
         downloadPptx: 'PPTX',
         downloadPdf: 'PDF',
         copyShareLink: '共有',
+        editSlide: '編集',
+        editSave: '保存',
+        editReplaceImage: '画像変更',
+        editUnsavedChanges: '保存されていない変更があります。保存しますか？',
+        editSaved: '変更が保存されました',
         noSlides: '指示を入力し生成ボタンを押してください',
         prev: '前',
         next: '次',
@@ -332,6 +363,11 @@ const I18N = {
         downloadPptx: 'PPTX',
         downloadPdf: 'PDF',
         copyShareLink: '分享',
+        editSlide: '编辑',
+        editSave: '保存',
+        editReplaceImage: '替换图片',
+        editUnsavedChanges: '有未保存的更改。是否保存？',
+        editSaved: '更改已保存',
         noSlides: '请在下方输入指令并点击生成',
         prev: '上一页',
         next: '下一页',
@@ -709,7 +745,8 @@ function loadWebFonts(fonts) {
 async function loadAndApplyWebFonts() {
     try {
         const res = await apiGet('/api/fonts');
-        loadWebFonts(res.fonts || []);
+        state.fonts = res.fonts || [];
+        loadWebFonts(state.fonts);
     } catch (e) {
         console.warn('Failed to load fonts:', e);
     }
@@ -985,22 +1022,64 @@ async function executeProjectReset() {
 
 // ============ 리소스 관리 ============
 function renderResourceChips() {
-    const container = $('#resourceChips');
-    container.empty();
+    const count = state.resources.length;
+    const summary = $('#resourceSummary');
+    const countText = $('#resourceCountText');
+    const list = $('#resourceDropdownList');
+
+    // 요약 버튼 표시/숨김
+    if (count > 0) {
+        countText.text(count + '개 리소스');
+        summary.show();
+    } else {
+        summary.hide();
+        $('#resourceDropdown').hide();
+        summary.removeClass('open');
+    }
+
+    // 드롭다운 리스트 렌더링
+    list.empty();
+    const icons = { file: '📎', text: '📝', web: '🔍' };
+    const typeLabels = { file: 'File', text: 'Text', web: 'Web' };
 
     state.resources.forEach(r => {
-        const icons = { file: '📎', text: '📝', web: '🔍' };
         const icon = icons[r.resource_type] || '📄';
         const iconClass = r.resource_type || 'file';
-        container.append(`
-            <div class="resource-chip" onclick="showResourceContent('${r._id}')" title="${escapeHtml(r.title || r.resource_type)}">
-                <span class="chip-icon ${iconClass}">${icon}</span>
-                <span>${escapeHtml(r.title || r.resource_type)}</span>
-                <button class="chip-remove" onclick="event.stopPropagation();deleteResource('${r._id}')" title="Remove">&times;</button>
+        const typeLabel = typeLabels[r.resource_type] || r.resource_type;
+        list.append(`
+            <div class="resource-dd-item" onclick="showResourceContent('${r._id}')">
+                <div class="resource-dd-icon ${iconClass}">${icon}</div>
+                <div class="resource-dd-info">
+                    <div class="resource-dd-title">${escapeHtml(r.title || r.resource_type)}</div>
+                    <div class="resource-dd-type">${typeLabel}</div>
+                </div>
+                <button class="resource-dd-remove" onclick="event.stopPropagation();deleteResource('${r._id}')" title="Remove">&times;</button>
             </div>
         `);
     });
 }
+
+function toggleResourceDropdown() {
+    const dropdown = $('#resourceDropdown');
+    const summary = $('#resourceSummary');
+    const isOpen = dropdown.is(':visible');
+    if (isOpen) {
+        dropdown.hide();
+        summary.removeClass('open');
+    } else {
+        dropdown.show();
+        summary.addClass('open');
+    }
+}
+
+// 드롭다운 외부 클릭 시 닫기 (모달 내부 클릭은 제외)
+$(document).on('click', function(e) {
+    if ($(e.target).closest('.modal, .modal-overlay').length) return;
+    if (!$(e.target).closest('#resourceSummary, #resourceDropdown').length) {
+        $('#resourceDropdown').hide();
+        $('#resourceSummary').removeClass('open');
+    }
+});
 
 function showTextResourceModal() {
     $('#textResTitle').val('');
@@ -1296,9 +1375,24 @@ async function generatePPT() {
     $('#slideCounter').text('0 / 0');
     $('#slideCounterInline').text('0 / 0');
 
-    // 캔버스 영역에 미니 로딩 표시
+    // 캔버스 영역에 로딩 애니메이션 표시
     $('#previewCanvas .preview-obj').remove();
     $('#previewBg').css('background-image', 'none');
+    $('#canvasLoadingOverlay').remove();
+    $('#previewCanvas').append(`
+        <div class="canvas-loading-overlay" id="canvasLoadingOverlay">
+            <div class="canvas-loading-animation">
+                <div class="canvas-loading-ring"></div>
+                <div class="loading-slide"></div>
+                <div class="loading-slide"></div>
+                <div class="loading-slide"></div>
+            </div>
+            <div class="canvas-loading-text">
+                <div class="canvas-loading-title">슬라이드를 만들고 있습니다</div>
+                <div class="canvas-loading-sub">AI가 최적의 레이아웃을 설계하는 중<span class="canvas-loading-dots"><span>.</span><span>.</span><span>.</span></span></div>
+            </div>
+        </div>
+    `);
 
     try {
         const response = await fetch(`/${state.jwtToken}/api/generate/stream`, {
@@ -1352,6 +1446,7 @@ async function generatePPT() {
             $('#wsSlideTools').hide();
         }
     } finally {
+        $('#canvasLoadingOverlay').remove();
         $('#btnGenerate').prop('disabled', false);
         $('#streamingProgress').remove();
         $('#slideTextList').removeClass('streaming-active');
@@ -1434,6 +1529,9 @@ function _handleStreamEvent(data) {
         }
 
         case 'slide': {
+            // 첫 슬라이드 도착 시 로딩 오버레이 제거
+            $('#canvasLoadingOverlay').remove();
+
             const slide = data.slide;
             state.generatedSlides.push(slide);
             const idx = state.generatedSlides.length - 1;
@@ -1624,6 +1722,9 @@ function renderSlideAtIndex(index) {
                 descIndex++;
                 // 텍스트가 넘칠 경우 높이 자동 확장
                 div.css({ height: 'auto', minHeight: (obj.height * scaleY) + 'px', overflow: 'visible' });
+            } else if ((role === 'subtitle' || role === 'description') && items.length > 0) {
+                // items 소진된 초과 subtitle/description 오브젝트는 렌더링하지 않음
+                return;
             } else {
                 div.css('whiteSpace', 'pre-wrap');
                 div.text(text);
@@ -1690,6 +1791,9 @@ function renderSlideToContainer(container, slide, thumbW, thumbH) {
                 div.css('whiteSpace', 'pre-wrap');
                 div.text(thumbItems[thumbDescIdx].detail || '');
                 thumbDescIdx++;
+            } else if ((role === 'subtitle' || role === 'description') && thumbItems.length > 0) {
+                // items 소진된 초과 subtitle/description 오브젝트는 렌더링하지 않음
+                return;
             } else {
                 div.css('whiteSpace', 'pre-wrap');
                 div.text(text);
@@ -1969,16 +2073,28 @@ function updateSlideNav() {
 
 function goToSlide(index) {
     _animationCancelled = true;
+    if (state.editMode) collectEditedText();
     state.currentSlideIndex = index;
-    renderSlideAtIndex(index);
+    if (state.editMode) {
+        renderSlideAtIndexEditable(index);
+        _updateEditSlideCounter();
+    } else {
+        renderSlideAtIndex(index);
+    }
     updateSlideNav();
 }
 
 function prevSlide() {
     if (state.currentSlideIndex > 0) {
         _animationCancelled = true;
+        if (state.editMode) collectEditedText();
         state.currentSlideIndex--;
-        renderSlideAtIndex(state.currentSlideIndex);
+        if (state.editMode) {
+            renderSlideAtIndexEditable(state.currentSlideIndex);
+            _updateEditSlideCounter();
+        } else {
+            renderSlideAtIndex(state.currentSlideIndex);
+        }
         updateSlideNav();
     }
 }
@@ -1986,8 +2102,14 @@ function prevSlide() {
 function nextSlide() {
     if (state.currentSlideIndex < state.generatedSlides.length - 1) {
         _animationCancelled = true;
+        if (state.editMode) collectEditedText();
         state.currentSlideIndex++;
-        renderSlideAtIndex(state.currentSlideIndex);
+        if (state.editMode) {
+            renderSlideAtIndexEditable(state.currentSlideIndex);
+            _updateEditSlideCounter();
+        } else {
+            renderSlideAtIndex(state.currentSlideIndex);
+        }
         updateSlideNav();
     }
 }
@@ -1995,6 +2117,7 @@ function nextSlide() {
 // ============ 타이핑 애니메이션 ============
 async function animateSlideGeneration() {
     _animationCancelled = false;
+    _isAnimating = true;
     switchPanelTab('slide');
 
     // 애니메이션 시작 시 썸네일/카운터 초기화 (슬라이드 완성 후 하나씩 추가)
@@ -2067,6 +2190,8 @@ async function animateSlideGeneration() {
         }
     }
 
+    _isAnimating = false;
+
     // 애니메이션 완료/취소 후 처리
     if (_animationCancelled) {
         // 취소 시: 아직 추가 안 된 썸네일을 모두 채우기
@@ -2094,6 +2219,812 @@ async function animateSlideGeneration() {
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ============ 슬라이드 편집 모드 ============
+
+let _editImageReplaceObjIdx = -1;
+
+function toggleEditMode() {
+    if (state.editMode) {
+        exitEditMode();
+    } else {
+        enterEditMode();
+    }
+}
+
+function enterEditMode() {
+    if (state.generatedSlides.length === 0) return;
+    state.editMode = true;
+    state.editTool = 'select';
+    $('#previewCanvas').addClass('edit-mode');
+    $('#btnEditToggle').addClass('active');
+    $('#btnEditSave').show();
+    // 하단 썸네일 숨기고 편집 도구 모음 표시
+    $('.slide-nav').hide();
+    $('#editBottomToolbar').show();
+    _updateEditSlideCounter();
+    _populateEditFontSelector();
+    renderSlideAtIndexEditable(state.currentSlideIndex);
+}
+
+function exitEditMode() {
+    collectEditedText();
+    if (state.editDirtySlides.size > 0) {
+        if (confirm(t('editUnsavedChanges'))) {
+            saveCurrentSlide();
+            return; // saveCurrentSlide이 _exitEditModeClean 호출
+        }
+    }
+    _exitEditModeClean();
+}
+
+function editGetScale() {
+    const canvas = document.getElementById('previewCanvas');
+    const rect = canvas.getBoundingClientRect();
+    return { x: rect.width / 960, y: rect.height / 540 };
+}
+
+function renderSlideAtIndexEditable(index) {
+    const slide = state.generatedSlides[index];
+    if (!slide) return;
+
+    const canvas = $('#previewCanvas');
+    canvas.find('.preview-obj').remove();
+
+    if (slide.background_image) {
+        $('#previewBg').css('background-image', `url(${slide.background_image})`);
+    } else {
+        $('#previewBg').css('background-image', 'none');
+    }
+
+    const canvasW = canvas.width();
+    const canvasH = canvas.height();
+    const scaleX = canvasW / 960;
+    const scaleY = canvasH / 540;
+
+    let descIndex = 0;
+    let subIndex = 0;
+    const items = slide.items || [];
+
+    (slide.objects || []).forEach((obj, objIdx) => {
+        const role = obj.role || obj._auto_role || '';
+        let currentItemIdx = -1;
+        let displayText = '';
+        let isHidden = false;
+
+        if (obj.obj_type === 'text') {
+            if (role === 'subtitle' && items.length > 0) {
+                if (subIndex < items.length) {
+                    displayText = items[subIndex].heading || '';
+                    currentItemIdx = subIndex;
+                    subIndex++;
+                } else {
+                    isHidden = true;
+                    subIndex++;
+                }
+            } else if (role === 'description' && items.length > 0) {
+                if (descIndex < items.length) {
+                    displayText = items[descIndex].detail || '';
+                    currentItemIdx = descIndex;
+                    descIndex++;
+                } else {
+                    isHidden = true;
+                    descIndex++;
+                }
+            } else {
+                displayText = obj.generated_text || obj.text_content || '';
+            }
+        }
+
+        if (isHidden) return;
+
+        const div = $('<div>').addClass('preview-obj').css({
+            position: 'absolute',
+            left: (obj.x * scaleX) + 'px',
+            top: (obj.y * scaleY) + 'px',
+            width: (obj.width * scaleX) + 'px',
+            height: (obj.height * scaleY) + 'px',
+            zIndex: 10,
+        });
+        div.attr('data-obj-idx', objIdx);
+        div.attr('data-obj-type', obj.obj_type);
+        div.attr('data-role', role);
+        if (currentItemIdx >= 0) div.attr('data-item-idx', currentItemIdx);
+
+        if (obj.obj_type === 'image' && obj.image_url) {
+            div.append(`<img src="${obj.image_url}" style="width:100%;height:100%;object-fit:contain;pointer-events:none;">`);
+            div.append(`<button class="edit-img-replace-btn" onclick="triggerEditImageReplace(${objIdx})">${t('editReplaceImage')}</button>`);
+        } else if (obj.obj_type === 'shape') {
+            const svg = _createEditShapeSVG(obj);
+            div.css('pointerEvents', 'all').html(svg);
+        } else if (obj.obj_type === 'text') {
+            const style = obj.text_style || {};
+            const scaledFontSize = (style.font_size || 16) * Math.min(scaleX, scaleY);
+            const decoParts = [];
+            if (style.underline) decoParts.push('underline');
+            if (style.strikethrough) decoParts.push('line-through');
+
+            const textDiv = $('<div>').addClass('edit-text-content').css({
+                fontFamily: style.font_family || 'Inter, Arial, sans-serif',
+                fontSize: scaledFontSize + 'px',
+                color: style.color || '#000',
+                fontWeight: style.bold ? 'bold' : 'normal',
+                fontStyle: style.italic ? 'italic' : 'normal',
+                textAlign: style.align || 'left',
+                textDecoration: decoParts.length ? decoParts.join(' ') : 'none',
+                padding: (8 * scaleX) + 'px',
+                whiteSpace: 'pre-wrap',
+                wordWrap: 'break-word',
+                outline: 'none',
+                width: '100%',
+                height: '100%',
+                boxSizing: 'border-box',
+            }).attr('contenteditable', 'true')
+              .text(displayText);
+
+            textDiv.on('input', function () {
+                markSlideDirty(index);
+            });
+
+            textDiv.on('mousedown', function (e) {
+                if (div.hasClass('edit-selected')) {
+                    e.stopPropagation();
+                }
+            });
+
+            div.append(textDiv);
+
+            if (role === 'description') {
+                div.css({ height: 'auto', minHeight: (obj.height * scaleY) + 'px', overflow: 'visible' });
+            }
+        }
+
+        // Resize handles + delete button
+        div.append('<div class="edit-resize-handle se"></div>');
+        div.append('<div class="edit-resize-handle sw"></div>');
+        div.append('<div class="edit-resize-handle ne"></div>');
+        div.append('<div class="edit-resize-handle nw"></div>');
+        div.append(`<button class="edit-obj-delete-btn" onclick="deleteEditSelectedObject()" title="Delete">×</button>`);
+
+        div.on('mousedown', function (e) {
+            if ($(e.target).hasClass('edit-resize-handle')) {
+                startEditResize(e, objIdx, e.target);
+            } else if ($(e.target).hasClass('edit-img-replace-btn')) {
+                // let button handler work
+            } else if ($(e.target).hasClass('edit-text-content')) {
+                editSelectObject(objIdx);
+            } else {
+                editSelectObject(objIdx);
+                startEditDrag(e, objIdx);
+            }
+        });
+
+        canvas.append(div);
+    });
+}
+
+// ---- Selection ----
+function editSelectObject(objIdx) {
+    const slide = state.generatedSlides[state.currentSlideIndex];
+    if (!slide) return;
+    state.editSelectedObj = { objIdx: objIdx, obj: slide.objects[objIdx] };
+    $('#previewCanvas .preview-obj').removeClass('edit-selected');
+    $(`#previewCanvas .preview-obj[data-obj-idx="${objIdx}"]`).addClass('edit-selected');
+
+    const obj = slide.objects[objIdx];
+    if (obj && obj.obj_type === 'text') {
+        showEditTextToolbar(objIdx);
+    } else {
+        $('#editTextToolbar').hide();
+    }
+}
+
+function editDeselectAll() {
+    state.editSelectedObj = null;
+    $('#previewCanvas .preview-obj').removeClass('edit-selected');
+    $('#editTextToolbar').hide();
+}
+
+// ---- Drag ----
+function startEditDrag(e, objIdx) {
+    state.editDragging = true;
+    const slide = state.generatedSlides[state.currentSlideIndex];
+    const obj = slide.objects[objIdx];
+    if (!obj) return;
+    const canvasRect = document.getElementById('previewCanvas').getBoundingClientRect();
+    const scale = editGetScale();
+    state.editDragOffset = {
+        x: ((e.clientX - canvasRect.left) / scale.x) - obj.x,
+        y: ((e.clientY - canvasRect.top) / scale.y) - obj.y,
+    };
+    e.preventDefault();
+}
+
+// ---- Resize ----
+function startEditResize(e, objIdx, handleEl) {
+    state.editResizing = true;
+    editSelectObject(objIdx);
+    const obj = state.editSelectedObj.obj;
+    const cls = handleEl.className;
+    if (cls.includes(' se')) state.editResizeDir = 'se';
+    else if (cls.includes(' sw')) state.editResizeDir = 'sw';
+    else if (cls.includes(' ne')) state.editResizeDir = 'ne';
+    else if (cls.includes(' nw')) state.editResizeDir = 'nw';
+    const scale = editGetScale();
+    state.editResizeStart = {
+        mouseX: e.clientX, mouseY: e.clientY,
+        w: obj.width, h: obj.height, ox: obj.x, oy: obj.y,
+        scaleX: scale.x, scaleY: scale.y,
+    };
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+function handleEditResize(e) {
+    const s = state.editResizeStart;
+    const obj = state.editSelectedObj.obj;
+    const dx = (e.clientX - s.mouseX) / s.scaleX;
+    const dy = (e.clientY - s.mouseY) / s.scaleY;
+    let newW = s.w, newH = s.h, newX = s.ox, newY = s.oy;
+    const minW = 50, minH = 30;
+    switch (state.editResizeDir) {
+        case 'se': newW = Math.max(minW, s.w + dx); newH = Math.max(minH, s.h + dy); break;
+        case 'sw': newW = Math.max(minW, s.w - dx); newH = Math.max(minH, s.h + dy); newX = s.ox + (s.w - newW); break;
+        case 'ne': newW = Math.max(minW, s.w + dx); newH = Math.max(minH, s.h - dy); newY = s.oy + (s.h - newH); break;
+        case 'nw': newW = Math.max(minW, s.w - dx); newH = Math.max(minH, s.h - dy); newX = s.ox + (s.w - newW); newY = s.oy + (s.h - newH); break;
+    }
+    // Boundary constraint
+    newX = Math.max(0, newX); newY = Math.max(0, newY);
+    if (newX + newW > 960) newW = 960 - newX;
+    if (newY + newH > 540) newH = 540 - newY;
+
+    obj.x = Math.round(newX); obj.y = Math.round(newY);
+    obj.width = Math.round(newW); obj.height = Math.round(newH);
+
+    const scale = editGetScale();
+    const el = $(`#previewCanvas .preview-obj[data-obj-idx="${state.editSelectedObj.objIdx}"]`);
+    el.css({
+        left: (newX * scale.x) + 'px', top: (newY * scale.y) + 'px',
+        width: (newW * scale.x) + 'px', height: (newH * scale.y) + 'px',
+    });
+    if (obj.obj_type === 'text') {
+        const style = obj.text_style || {};
+        el.find('.edit-text-content').css('fontSize', ((style.font_size || 16) * Math.min(scale.x, scale.y)) + 'px');
+    }
+    markSlideDirty(state.currentSlideIndex);
+}
+
+// ---- Global mouse handlers for edit mode ----
+$(document).on('mousemove', function (e) {
+    if (!state.editMode) return;
+    if (state.editDragging && state.editSelectedObj) {
+        const canvasRect = document.getElementById('previewCanvas').getBoundingClientRect();
+        const scale = editGetScale();
+        const obj = state.editSelectedObj.obj;
+        let x = ((e.clientX - canvasRect.left) / scale.x) - state.editDragOffset.x;
+        let y = ((e.clientY - canvasRect.top) / scale.y) - state.editDragOffset.y;
+        x = Math.max(0, Math.min(x, 960 - obj.width));
+        y = Math.max(0, Math.min(y, 540 - obj.height));
+        obj.x = Math.round(x); obj.y = Math.round(y);
+        const el = $(`#previewCanvas .preview-obj[data-obj-idx="${state.editSelectedObj.objIdx}"]`);
+        el.css({ left: (x * scale.x) + 'px', top: (y * scale.y) + 'px' });
+        markSlideDirty(state.currentSlideIndex);
+    }
+    if (state.editResizing && state.editSelectedObj) {
+        handleEditResize(e);
+    }
+});
+
+$(document).on('mouseup', function () {
+    if (!state.editMode) return;
+    state.editDragging = false;
+    state.editResizing = false;
+});
+
+// Canvas background click → deselect or insert text
+$('#previewCanvas').on('mousedown', function (e) {
+    if (!state.editMode) return;
+    if (e.target === this || e.target.id === 'previewBg') {
+        if (state.editTool === 'text') {
+            // 클릭 위치에 텍스트 오브젝트 삽입
+            const canvasRect = this.getBoundingClientRect();
+            const scale = editGetScale();
+            const x = Math.round((e.clientX - canvasRect.left) / scale.x);
+            const y = Math.round((e.clientY - canvasRect.top) / scale.y);
+            const slide = state.generatedSlides[state.currentSlideIndex];
+            if (slide) {
+                slide.objects.push({
+                    obj_id: 'obj_' + Date.now(),
+                    obj_type: 'text',
+                    x: Math.max(0, x - 150), y: Math.max(0, y - 25),
+                    width: 300, height: 50,
+                    text_content: '', generated_text: '',
+                    text_style: { font_family: 'Inter', font_size: 16, color: '#000000', bold: false, italic: false, align: 'left' },
+                });
+                markSlideDirty(state.currentSlideIndex);
+                renderSlideAtIndexEditable(state.currentSlideIndex);
+                setEditTool('select');
+            }
+        } else {
+            editDeselectAll();
+        }
+    }
+});
+
+// ESC → deselect or exit edit mode, Delete → 오브젝트 삭제
+$(document).on('keydown', function (e) {
+    if (!state.editMode) return;
+    if (e.key === 'Escape') {
+        if (state.editSelectedObj) {
+            editDeselectAll();
+        } else {
+            toggleEditMode();
+        }
+        e.preventDefault();
+    } else if (e.key === 'Delete' && state.editSelectedObj) {
+        // 텍스트 편집 중이면 삭제키는 텍스트 삭제로 동작
+        const active = document.activeElement;
+        if (active && active.getAttribute('contenteditable') === 'true') return;
+        deleteEditSelectedObject();
+        e.preventDefault();
+    }
+});
+
+// Window resize → re-render editable canvas
+$(window).on('resize', function () {
+    if (state.editMode) {
+        collectEditedText();
+        renderSlideAtIndexEditable(state.currentSlideIndex);
+    }
+});
+
+// ---- Text Toolbar ----
+function showEditTextToolbar(objIdx) {
+    const el = $(`#previewCanvas .preview-obj[data-obj-idx="${objIdx}"]`);
+    if (!el.length) return;
+    const rect = el[0].getBoundingClientRect();
+    const toolbar = $('#editTextToolbar');
+    const tbHeight = 40;
+    let top = rect.top - tbHeight - 8;
+    if (top < 4) top = rect.bottom + 4;
+    // 좌측 넘침 방지
+    let left = rect.left;
+    const tbWidth = toolbar.outerWidth() || 460;
+    if (left + tbWidth > window.innerWidth - 8) left = window.innerWidth - tbWidth - 8;
+    if (left < 4) left = 4;
+    toolbar.css({ left: left + 'px', top: top + 'px' }).show();
+
+    const obj = state.editSelectedObj.obj;
+    const style = obj.text_style || {};
+    // 폰트 색상
+    const color = style.color || '#000000';
+    $('#editColorBar').css('background', color);
+    $('#editFontColorPicker').val(color);
+    // 폰트 패밀리
+    $('#editFontFamily').val(style.font_family || 'Inter');
+    // 폰트 사이즈
+    $('#editFontSize').val(String(style.font_size || 16));
+    // 토글 버튼 상태
+    $('#editBoldBtn').toggleClass('active', !!style.bold);
+    $('#editItalicBtn').toggleClass('active', !!style.italic);
+    $('#editUnderlineBtn').toggleClass('active', !!style.underline);
+    $('#editStrikeBtn').toggleClass('active', !!style.strikethrough);
+    // 정렬
+    $('#editAlignLeftBtn').toggleClass('active', style.align === 'left' || !style.align);
+    $('#editAlignCenterBtn').toggleClass('active', style.align === 'center');
+    $('#editAlignRightBtn').toggleClass('active', style.align === 'right');
+}
+
+function _populateEditFontSelector() {
+    const sel = $('#editFontFamily');
+    sel.empty();
+    const defaults = [
+        { name: 'Inter', family: 'Inter' },
+        { name: 'Arial', family: 'Arial' },
+        { name: 'Georgia', family: 'Georgia' },
+        { name: 'Courier New', family: 'Courier New' },
+    ];
+    // 서버 폰트 + 기본 폰트
+    const allFonts = (state.fonts && state.fonts.length) ? state.fonts : defaults;
+    allFonts.forEach(f => {
+        sel.append($('<option>').val(f.family).text(f.name || f.family));
+    });
+}
+
+function _updateEditSlideCounter() {
+    $('#editSlideCounter').text(`${state.currentSlideIndex + 1} / ${state.generatedSlides.length}`);
+}
+
+// ---- Color Picker ----
+const _editColorPalette = [
+    '#000000','#434343','#666666','#999999','#b7b7b7','#cccccc','#d9d9d9','#ffffff',
+    '#980000','#ff0000','#ff9900','#ffff00','#00ff00','#00ffff','#4a86e8','#0000ff',
+    '#9900ff','#ff00ff','#e6b8af','#f4cccc','#fce5cd','#fff2cc','#d9ead3','#d0e0e3',
+    '#c9daf8','#cfe2f3','#d9d2e9','#ead1dc','#dd7e6b','#ea9999','#f9cb9c','#ffe599',
+    '#b6d7a8','#a2c4c9','#a4c2f4','#9fc5e8','#b4a7d6','#d5a6bd','#cc4125','#e06666',
+    '#f6b26b','#ffd966','#93c47d','#76a5af','#6d9eeb','#6fa8dc','#8e7cc3','#c27ba0',
+];
+
+function _initEditColorGrid() {
+    const grid = $('#editColorGrid');
+    if (grid.children().length > 0) return;
+    _editColorPalette.forEach(c => {
+        grid.append(
+            $('<div>').addClass('edit-color-swatch')
+                .css('background', c)
+                .attr('title', c)
+                .on('click', function () {
+                    setEditFontColor(c);
+                    $('#editColorPicker').hide();
+                })
+        );
+    });
+}
+
+function toggleEditColorPicker() {
+    const picker = $('#editColorPicker');
+    if (picker.is(':visible')) {
+        picker.hide();
+    } else {
+        _initEditColorGrid();
+        if (state.editSelectedObj) {
+            const style = state.editSelectedObj.obj.text_style || {};
+            $('#editColorCustomInput').val(style.color || '#000000');
+        }
+        picker.show();
+    }
+}
+
+// 팔레트 외부 클릭 시 닫기
+$(document).on('mousedown', function (e) {
+    if ($('#editColorPicker').is(':visible') && !$(e.target).closest('.edit-tb-color-wrap').length) {
+        $('#editColorPicker').hide();
+    }
+});
+
+// ---- Text Style Functions ----
+function setEditFontColor(color) {
+    if (!state.editSelectedObj || state.editSelectedObj.obj.obj_type !== 'text') return;
+    const obj = state.editSelectedObj.obj;
+    if (!obj.text_style) obj.text_style = {};
+    obj.text_style.color = color;
+    const el = $(`#previewCanvas .preview-obj[data-obj-idx="${state.editSelectedObj.objIdx}"] .edit-text-content`);
+    el.css('color', color);
+    $('#editColorBar').css('background', color);
+    markSlideDirty(state.currentSlideIndex);
+}
+
+function setEditFontFamily(family) {
+    if (!state.editSelectedObj || state.editSelectedObj.obj.obj_type !== 'text') return;
+    const obj = state.editSelectedObj.obj;
+    if (!obj.text_style) obj.text_style = {};
+    obj.text_style.font_family = family;
+    const el = $(`#previewCanvas .preview-obj[data-obj-idx="${state.editSelectedObj.objIdx}"] .edit-text-content`);
+    el.css('fontFamily', family);
+    markSlideDirty(state.currentSlideIndex);
+}
+
+function setEditFontSize(size) {
+    if (!state.editSelectedObj || state.editSelectedObj.obj.obj_type !== 'text') return;
+    const obj = state.editSelectedObj.obj;
+    if (!obj.text_style) obj.text_style = {};
+    obj.text_style.font_size = parseInt(size) || 16;
+    const scale = editGetScale();
+    const scaledSize = obj.text_style.font_size * Math.min(scale.x, scale.y);
+    const el = $(`#previewCanvas .preview-obj[data-obj-idx="${state.editSelectedObj.objIdx}"] .edit-text-content`);
+    el.css('fontSize', scaledSize + 'px');
+    markSlideDirty(state.currentSlideIndex);
+}
+
+function toggleEditBold() {
+    if (!state.editSelectedObj || state.editSelectedObj.obj.obj_type !== 'text') return;
+    const obj = state.editSelectedObj.obj;
+    if (!obj.text_style) obj.text_style = {};
+    obj.text_style.bold = !obj.text_style.bold;
+    const el = $(`#previewCanvas .preview-obj[data-obj-idx="${state.editSelectedObj.objIdx}"] .edit-text-content`);
+    el.css('fontWeight', obj.text_style.bold ? 'bold' : 'normal');
+    $('#editBoldBtn').toggleClass('active', obj.text_style.bold);
+    markSlideDirty(state.currentSlideIndex);
+}
+
+function toggleEditItalic() {
+    if (!state.editSelectedObj || state.editSelectedObj.obj.obj_type !== 'text') return;
+    const obj = state.editSelectedObj.obj;
+    if (!obj.text_style) obj.text_style = {};
+    obj.text_style.italic = !obj.text_style.italic;
+    const el = $(`#previewCanvas .preview-obj[data-obj-idx="${state.editSelectedObj.objIdx}"] .edit-text-content`);
+    el.css('fontStyle', obj.text_style.italic ? 'italic' : 'normal');
+    $('#editItalicBtn').toggleClass('active', obj.text_style.italic);
+    markSlideDirty(state.currentSlideIndex);
+}
+
+function toggleEditUnderline() {
+    if (!state.editSelectedObj || state.editSelectedObj.obj.obj_type !== 'text') return;
+    const obj = state.editSelectedObj.obj;
+    if (!obj.text_style) obj.text_style = {};
+    obj.text_style.underline = !obj.text_style.underline;
+    const el = $(`#previewCanvas .preview-obj[data-obj-idx="${state.editSelectedObj.objIdx}"] .edit-text-content`);
+    _applyTextDecoration(el, obj.text_style);
+    $('#editUnderlineBtn').toggleClass('active', obj.text_style.underline);
+    markSlideDirty(state.currentSlideIndex);
+}
+
+function toggleEditStrikethrough() {
+    if (!state.editSelectedObj || state.editSelectedObj.obj.obj_type !== 'text') return;
+    const obj = state.editSelectedObj.obj;
+    if (!obj.text_style) obj.text_style = {};
+    obj.text_style.strikethrough = !obj.text_style.strikethrough;
+    const el = $(`#previewCanvas .preview-obj[data-obj-idx="${state.editSelectedObj.objIdx}"] .edit-text-content`);
+    _applyTextDecoration(el, obj.text_style);
+    $('#editStrikeBtn').toggleClass('active', obj.text_style.strikethrough);
+    markSlideDirty(state.currentSlideIndex);
+}
+
+function _applyTextDecoration(el, style) {
+    const parts = [];
+    if (style.underline) parts.push('underline');
+    if (style.strikethrough) parts.push('line-through');
+    el.css('textDecoration', parts.length ? parts.join(' ') : 'none');
+}
+
+function setEditAlign(align) {
+    if (!state.editSelectedObj || state.editSelectedObj.obj.obj_type !== 'text') return;
+    const obj = state.editSelectedObj.obj;
+    if (!obj.text_style) obj.text_style = {};
+    obj.text_style.align = align;
+    const el = $(`#previewCanvas .preview-obj[data-obj-idx="${state.editSelectedObj.objIdx}"] .edit-text-content`);
+    el.css('textAlign', align);
+    $('#editAlignLeftBtn').toggleClass('active', align === 'left');
+    $('#editAlignCenterBtn').toggleClass('active', align === 'center');
+    $('#editAlignRightBtn').toggleClass('active', align === 'right');
+    markSlideDirty(state.currentSlideIndex);
+}
+
+// ---- Bottom Toolbar Functions ----
+function setEditTool(tool) {
+    state.editTool = tool;
+    $('.edit-bt-btn').removeClass('active');
+    $(`#editTool${tool.charAt(0).toUpperCase() + tool.slice(1)}`).addClass('active');
+    $('#editShapeMenu').hide();
+    if (tool === 'select') {
+        $('#previewCanvas').css('cursor', 'default');
+    } else if (tool === 'text') {
+        $('#previewCanvas').css('cursor', 'crosshair');
+    }
+}
+
+function toggleEditShapeMenu() {
+    $('#editShapeMenu').toggle();
+}
+
+function insertEditShape(shapeType) {
+    $('#editShapeMenu').hide();
+    const slide = state.generatedSlides[state.currentSlideIndex];
+    if (!slide) return;
+    const newObj = {
+        obj_id: 'obj_' + Date.now(),
+        obj_type: 'shape',
+        x: 330, y: 180, width: 300, height: 180,
+        shape_style: {
+            shape_type: shapeType,
+            fill_color: '#4A90D9',
+            fill_opacity: 0.2,
+            stroke_color: '#2d5a8e',
+            stroke_width: 2,
+            stroke_dash: 'solid',
+            border_radius: shapeType === 'rounded_rectangle' ? 12 : 0,
+            arrow_head: shapeType === 'arrow' ? 'end' : 'none',
+        },
+    };
+    if (shapeType === 'line' || shapeType === 'arrow') {
+        newObj.height = 4;
+        newObj.width = 300;
+        newObj.y = 270;
+    }
+    slide.objects.push(newObj);
+    markSlideDirty(state.currentSlideIndex);
+    renderSlideAtIndexEditable(state.currentSlideIndex);
+    setEditTool('select');
+}
+
+async function handleEditInsertImage(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const slide = state.generatedSlides[state.currentSlideIndex];
+    if (!slide) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+        const resp = await fetch(`/${state.jwtToken}/api/generate/upload-image`, {
+            method: 'POST', body: formData,
+        });
+        const data = await resp.json();
+        if (data.image_url) {
+            slide.objects.push({
+                obj_id: 'obj_' + Date.now(),
+                obj_type: 'image',
+                x: 330, y: 150, width: 300, height: 240,
+                image_url: data.image_url,
+            });
+            markSlideDirty(state.currentSlideIndex);
+            renderSlideAtIndexEditable(state.currentSlideIndex);
+        }
+    } catch (e) {
+        showToast('Image upload failed', 'error');
+    }
+    event.target.value = '';
+}
+
+// ---- Shape SVG Helper ----
+function _createEditShapeSVG(obj) {
+    const s = obj.shape_style || {};
+    const w = obj.width, h = obj.height;
+    const sw = s.stroke_width || 2;
+    const fill = s.fill_color || '#4A90D9';
+    const opacity = s.fill_opacity !== undefined ? s.fill_opacity : 0.2;
+    const stroke = s.stroke_color || '#2d5a8e';
+    const dash = s.stroke_dash === 'dashed' ? `stroke-dasharray="${sw * 3} ${sw * 2}"` : (s.stroke_dash === 'dotted' ? `stroke-dasharray="${sw} ${sw}"` : '');
+    const half = sw / 2;
+    const st = s.shape_type || 'rectangle';
+    let inner = '';
+    if (st === 'ellipse') {
+        inner = `<ellipse cx="${w / 2}" cy="${h / 2}" rx="${w / 2 - half}" ry="${h / 2 - half}" fill="${fill}" fill-opacity="${opacity}" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+    } else if (st === 'rounded_rectangle') {
+        const r = s.border_radius || 12;
+        inner = `<rect x="${half}" y="${half}" width="${w - sw}" height="${h - sw}" rx="${r}" fill="${fill}" fill-opacity="${opacity}" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+    } else if (st === 'line' || st === 'arrow') {
+        const mid = h / 2;
+        let marker = '';
+        if (st === 'arrow') {
+            marker = `<defs><marker id="ah_${obj.obj_id}" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="${stroke}"/></marker></defs>`;
+            inner = `${marker}<line x1="${half}" y1="${mid}" x2="${w - half}" y2="${mid}" stroke="${stroke}" stroke-width="${sw}" ${dash} marker-end="url(#ah_${obj.obj_id})"/>`;
+        } else {
+            inner = `<line x1="${half}" y1="${mid}" x2="${w - half}" y2="${mid}" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+        }
+    } else {
+        inner = `<rect x="${half}" y="${half}" width="${w - sw}" height="${h - sw}" fill="${fill}" fill-opacity="${opacity}" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+    }
+    return `<svg width="100%" height="100%" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="pointer-events:none;">${inner}</svg>`;
+}
+
+// ---- Image Replace ----
+function triggerEditImageReplace(objIdx) {
+    _editImageReplaceObjIdx = objIdx;
+    $('#editImageInput').click();
+}
+
+async function handleEditImageReplace(event) {
+    const file = event.target.files[0];
+    if (!file || _editImageReplaceObjIdx < 0) return;
+    const slide = state.generatedSlides[state.currentSlideIndex];
+    const obj = slide.objects[_editImageReplaceObjIdx];
+    if (!obj || obj.obj_type !== 'image') return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+        const resp = await fetch(`/${state.jwtToken}/api/generate/upload-image`, {
+            method: 'POST',
+            body: formData,
+        });
+        const data = await resp.json();
+        if (data.image_url) {
+            obj.image_url = data.image_url;
+            $(`#previewCanvas .preview-obj[data-obj-idx="${_editImageReplaceObjIdx}"] img`).attr('src', data.image_url);
+            markSlideDirty(state.currentSlideIndex);
+        }
+    } catch (e) {
+        showToast('Image upload failed', 'error');
+    }
+    event.target.value = '';
+    _editImageReplaceObjIdx = -1;
+}
+
+// ---- Delete Object ----
+function deleteEditSelectedObject() {
+    if (!state.editSelectedObj) return;
+    const slide = state.generatedSlides[state.currentSlideIndex];
+    if (!slide) return;
+    const objIdx = state.editSelectedObj.objIdx;
+    slide.objects.splice(objIdx, 1);
+    state.editSelectedObj = null;
+    $('#editTextToolbar').hide();
+    markSlideDirty(state.currentSlideIndex);
+    renderSlideAtIndexEditable(state.currentSlideIndex);
+}
+
+// ---- Save ----
+function markSlideDirty(index) {
+    const slide = state.generatedSlides[index];
+    if (slide && slide._id) {
+        state.editDirtySlides.add(slide._id);
+    }
+}
+
+function collectEditedText() {
+    const slide = state.generatedSlides[state.currentSlideIndex];
+    if (!slide) return;
+    $('#previewCanvas .preview-obj').each(function () {
+        const el = $(this);
+        const objIdx = parseInt(el.attr('data-obj-idx'));
+        const objType = el.attr('data-obj-type');
+        const role = el.attr('data-role');
+        const itemIdx = parseInt(el.attr('data-item-idx'));
+
+        if (objType === 'text') {
+            const textEl = el.find('.edit-text-content');
+            if (!textEl.length) return;
+            const newText = textEl.text();
+            if (role === 'subtitle' && !isNaN(itemIdx) && slide.items && slide.items[itemIdx]) {
+                slide.items[itemIdx].heading = newText;
+            } else if (role === 'description' && !isNaN(itemIdx) && slide.items && slide.items[itemIdx]) {
+                slide.items[itemIdx].detail = newText;
+            } else if (!isNaN(objIdx) && slide.objects[objIdx]) {
+                slide.objects[objIdx].generated_text = newText;
+            }
+        }
+    });
+}
+
+async function saveCurrentSlide() {
+    collectEditedText();
+
+    // 현재 슬라이드도 dirty에 추가
+    const curSlide = state.generatedSlides[state.currentSlideIndex];
+    if (curSlide && curSlide._id) {
+        state.editDirtySlides.add(curSlide._id);
+    }
+
+    // 모든 dirty 슬라이드 저장
+    const dirtyIds = [...state.editDirtySlides];
+    if (dirtyIds.length === 0) {
+        // 변경 없어도 편집 모드 종료
+        _exitEditModeClean();
+        return;
+    }
+
+    let failCount = 0;
+    for (const slideId of dirtyIds) {
+        const slide = state.generatedSlides.find(s => s._id === slideId);
+        if (!slide) continue;
+        try {
+            const resp = await fetch(`/${state.jwtToken}/api/generate/slides/${slideId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ objects: slide.objects, items: slide.items || [] }),
+            });
+            if (!resp.ok) throw new Error();
+            state.editDirtySlides.delete(slideId);
+        } catch (e) {
+            failCount++;
+        }
+    }
+
+    if (failCount > 0) {
+        showToast(`${failCount}개 슬라이드 저장 실패`, 'error');
+    } else {
+        showToast(t('editSaved'), 'success');
+    }
+
+    // 저장 완료 후 조회 모드로 전환
+    _exitEditModeClean();
+}
+
+function _exitEditModeClean() {
+    state.editMode = false;
+    state.editSelectedObj = null;
+    state.editDirtySlides.clear();
+    $('#previewCanvas').removeClass('edit-mode');
+    $('#btnEditToggle').removeClass('active');
+    $('#btnEditSave').hide();
+    $('#editTextToolbar').hide();
+    $('#editBottomToolbar').hide();
+    $('#editShapeMenu').hide();
+    $('.slide-nav').show();
+    renderSlideAtIndex(state.currentSlideIndex);
+    renderSlideThumbnails();
+    renderSlideThumbList();
 }
 
 // ============ 프레젠테이션 모드 ============
