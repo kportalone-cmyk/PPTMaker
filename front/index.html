@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PPTMaker</title>
+    <link rel="icon" href="/front/img/favicon.ico" type="image/x-icon">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/front/css/app.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- ============ 로그인 화면 ============ -->
+    <div id="loginView" class="login-container">
+        <div class="login-card">
+            <div class="login-logo">
+                <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                    <rect width="40" height="40" rx="10" fill="url(#g1)"/>
+                    <path d="M12 14h16v2H12zM12 19h12v2H12zM12 24h14v2H12z" fill="white" opacity="0.9"/>
+                    <defs><linearGradient id="g1" x1="0" y1="0" x2="40" y2="40"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs>
+                </svg>
+                <h1>PPTMaker</h1>
+            </div>
+            <p class="login-subtitle subtitle">기업용 파워포인트 자동 생성 솔루션</p>
+
+            <div class="login-form">
+                <div class="form-field user-search-wrapper">
+                    <label for="loginUserSearch">사용자 검색</label>
+                    <input type="text" id="loginUserSearch" placeholder="이름을 입력하세요" autocomplete="off">
+                    <div id="userSearchDropdown" class="search-dropdown" style="display:none;"></div>
+                    <input type="hidden" id="loginUserKey" value="">
+                </div>
+                <div class="form-field" id="selectedUserInfo" style="display:none;">
+                    <div class="selected-user-chip">
+                        <span id="selectedUserName"></span>
+                        <span id="selectedUserDept" class="dept-label"></span>
+                    </div>
+                </div>
+                <div class="form-field">
+                    <label for="loginPassword">비밀번호</label>
+                    <input type="password" id="loginPassword" placeholder="비밀번호를 입력하세요"
+                           onkeydown="if(event.key==='Enter')doLogin()">
+                </div>
+                <button class="btn-login" onclick="doLogin()">로그인</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ 메인 앱 ============ -->
+    <div id="appView" style="display:none;" class="app-layout">
+
+        <!-- 사이드바 -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo">
+                    <svg width="28" height="28" viewBox="0 0 40 40" fill="none">
+                        <rect width="40" height="40" rx="10" fill="url(#g2)"/>
+                        <path d="M12 14h16v2H12zM12 19h12v2H12zM12 24h14v2H12z" fill="white" opacity="0.9"/>
+                        <defs><linearGradient id="g2" x1="0" y1="0" x2="40" y2="40"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs>
+                    </svg>
+                    <span>PPTMaker</span>
+                </div>
+                <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h12M3 12h12"/></svg>
+                </button>
+            </div>
+
+            <button class="btn-new-project" onclick="showNewProjectModal()">
+                <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v12M2 8h12"/></svg>
+                <span class="i18n-newProject">새 프로젝트 생성</span>
+            </button>
+
+            <div class="sidebar-section-label i18n-myProjects">내 프로젝트</div>
+            <div class="project-list" id="projectList">
+                <!-- 프로젝트 목록 동적 생성 -->
+            </div>
+
+            <!-- 관리자 버튼 -->
+            <div id="btnAdminPage" class="sidebar-admin" style="display:none;">
+                <button class="btn-admin" onclick="goToAdmin()">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.9 4.1a2.5 2.5 0 00-3.5 0L3.1 10.4a1 1 0 00-.3.5l-.7 2.8a.5.5 0 00.6.6l2.8-.7a1 1 0 00.5-.3l6.3-6.3a2.5 2.5 0 000-3.5z"/><path d="M10 5.5l1.5 1.5"/></svg>
+                    <span class="i18n-adminPage">관리자 페이지</span>
+                </button>
+            </div>
+
+            <div class="sidebar-footer">
+                <div class="user-profile" id="sidebarUserInfo">
+                    <div class="user-avatar" id="userAvatar">U</div>
+                    <div class="user-details">
+                        <div class="user-name" id="sidebarUserName"></div>
+                        <div class="user-dept" id="sidebarUserDept"></div>
+                    </div>
+                </div>
+                <button class="btn-logout" onclick="logout()" title="Logout">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2H3a1 1 0 00-1 1v10a1 1 0 001 1h3M10 11l3-3-3-3M5 8h8"/></svg>
+                </button>
+            </div>
+        </aside>
+
+        <!-- 사이드바 열기 버튼 (collapsed 시 표시) -->
+        <button class="sidebar-open-btn" id="sidebarOpenBtn" onclick="toggleSidebar()" title="Open sidebar" style="display:none;">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h14M3 12h14M3 18h14"/></svg>
+        </button>
+
+        <!-- 메인 워크스페이스 -->
+        <main class="workspace" id="workspace">
+
+            <!-- 빈 상태: 프로젝트 미선택 -->
+            <div id="emptyState" class="empty-state">
+                <div class="empty-hero">
+                    <svg width="80" height="80" viewBox="0 0 80 80" fill="none">
+                        <rect x="10" y="10" width="60" height="60" rx="14" fill="#EEF2FF" stroke="#C7D2FE" stroke-width="2"/>
+                        <path d="M28 32h24v3H28zM28 39h18v3H28zM28 46h20v3H28z" fill="#818CF8"/>
+                        <circle cx="58" cy="58" r="14" fill="#6366F1"/>
+                        <path d="M58 52v12M52 58h12" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+                    </svg>
+                    <h2 class="i18n-welcomeTitle">무엇을 만들어볼까요?</h2>
+                    <p class="i18n-welcomeDesc">프로젝트를 선택하거나 새로 만들어 AI 프레젠테이션을 시작하세요</p>
+                </div>
+
+                <!-- 최근 프로젝트 그리드 -->
+                <div class="recent-projects" id="recentProjectsGrid">
+                    <!-- 동적 생성 -->
+                </div>
+            </div>
+
+            <!-- 프로젝트 워크스페이스 -->
+            <div id="projectWorkspace" style="display:none;" class="project-workspace">
+
+                <!-- 상단: 프로젝트 정보 + 액션 -->
+                <div class="workspace-header">
+                    <div class="ws-header-left">
+                        <h2 id="wsProjectTitle" class="ws-title"></h2>
+                        <span id="wsProjectStatus" class="ws-status"></span>
+                    </div>
+                    <div class="ws-header-actions">
+                        <!-- 슬라이드 도구 버튼들 (생성 후 표시) -->
+                        <div id="wsSlideTools" class="ws-slide-tools" style="display:none;">
+                            <button class="slide-tool-btn" onclick="startPresentation()" title="Presentation">
+                                <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polygon points="4,2 14,8 4,14"/></svg>
+                                <span class="i18n-presentationView">프레젠테이션</span>
+                            </button>
+                            <button class="slide-tool-btn" onclick="downloadPPTX()">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 1v8M3 9l4 4 4-4"/><path d="M1 11v2h12v-2"/></svg>
+                                PPTX
+                            </button>
+                            <button class="slide-tool-btn" onclick="downloadPDF()">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 1v8M3 9l4 4 4-4"/><path d="M1 11v2h12v-2"/></svg>
+                                PDF
+                            </button>
+                            <button class="slide-tool-btn" onclick="copyShareLink()">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a3 3 0 004.25.46l1.38-1.38a3 3 0 00-4.24-4.24L6.18 4.06"/><path d="M8 6a3 3 0 00-4.25-.46L2.37 6.92a3 3 0 004.24 4.24l1.22-1.22"/></svg>
+                                <span class="i18n-copyShareLink">공유</span>
+                            </button>
+                        </div>
+                        <button class="ws-action-btn" onclick="showResetConfirm()" title="초기화">
+                            <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M1.5 2v4.5H6"/><path d="M2.8 9.5a5.5 5.5 0 109.2-4"/><path d="M2 6.5A5.5 5.5 0 0112 2.8"/></svg>
+                        </button>
+                        <button class="ws-action-btn" onclick="showEditProjectModal()" title="Edit">
+                            <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 1.5l2.5 2.5L5 12.5H2.5V10z"/></svg>
+                        </button>
+                        <button class="ws-action-btn danger" onclick="deleteProject()" title="Delete">
+                            <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 4h11M5 4V2.5h5V4M4 4v8.5a1 1 0 001 1h5a1 1 0 001-1V4"/></svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 리소스 스트립 -->
+                <div class="resource-strip" id="resourceStrip">
+                    <div class="resource-chips" id="resourceChips">
+                        <!-- 리소스 칩 동적 생성 -->
+                    </div>
+                    <div class="resource-add-btns">
+                        <button class="chip-btn" onclick="triggerFileUpload()" title="파일 첨부">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 1v8M3 5l4-4 4 4"/><path d="M1 9v3a1 1 0 001 1h10a1 1 0 001-1V9"/></svg>
+                            <span class="i18n-uploadFile">파일</span>
+                        </button>
+                        <button class="chip-btn" onclick="showTextResourceModal()" title="텍스트 추가">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 2h10v10H2zM5 5h4M5 7h3"/></svg>
+                            <span class="i18n-addText">텍스트</span>
+                        </button>
+                        <button class="chip-btn" onclick="showWebSearchModal()" title="웹 검색">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="4"/><path d="M13 13l-3.5-3.5"/></svg>
+                            <span class="i18n-webSearch">검색</span>
+                        </button>
+                    </div>
+                    <input type="file" id="fileUploadInput" style="display:none;"
+                           accept=".docx,.doc,.xlsx,.xls,.pptx,.ppt,.pdf,.txt,.csv"
+                           onchange="handleFileUpload(event)">
+                </div>
+
+                <!-- 슬라이드 프리뷰 영역 -->
+                <div class="slide-area" id="slideArea">
+                    <!-- 슬라이드 미생성 상태 -->
+                    <div id="slideEmpty" class="slide-empty">
+                        <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+                            <rect x="8" y="12" width="48" height="36" rx="4" fill="#F3F4F6" stroke="#D1D5DB" stroke-width="2"/>
+                            <path d="M24 28h16v2H24zM28 33h8v2H28z" fill="#9CA3AF"/>
+                        </svg>
+                        <p class="i18n-noSlides">아래에서 지침을 입력하고 생성 버튼을 눌러주세요</p>
+                    </div>
+
+                    <!-- 슬라이드 프리뷰 -->
+                    <div id="slidePreview" style="display:none;" class="slide-preview-wrapper">
+                        <div class="slide-main-layout">
+                            <!-- 좌측: 슬라이드/아웃라인 패널 -->
+                            <div class="slide-text-panel" id="slideTextPanel">
+                                <!-- 탭 헤더 -->
+                                <div class="slide-panel-tabs">
+                                    <button class="panel-tab active" data-tab="slide" onclick="switchPanelTab('slide')">
+                                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="2" width="12" height="9" rx="1.5"/><path d="M4 13h6"/></svg>
+                                        Slide
+                                    </button>
+                                    <button class="panel-tab" data-tab="outline" onclick="switchPanelTab('outline')">
+                                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3h8M3 6h6M3 9h7M3 12h5"/></svg>
+                                        Outline
+                                    </button>
+                                </div>
+                                <!-- 슬라이드 탭: 썸네일 리스트 -->
+                                <div class="panel-tab-content active" id="panelTabSlide">
+                                    <div class="slide-panel-toolbar">
+                                        <button class="grid-toggle-btn" onclick="toggleGridView()" title="펼쳐보기">
+                                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>
+                                        </button>
+                                        <span class="slide-counter-inline" id="slideCounterInline">0 / 0</span>
+                                    </div>
+                                    <div class="slide-thumb-list" id="slideThumbList">
+                                        <!-- 세로 썸네일 리스트 동적 생성 -->
+                                    </div>
+                                </div>
+                                <!-- 아웃라인 탭: 구조화된 내용 -->
+                                <div class="panel-tab-content" id="panelTabOutline">
+                                    <div class="slide-text-list" id="slideTextList">
+                                        <!-- 아웃라인 동적 생성 -->
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 우측: 슬라이드 캔버스 -->
+                            <div class="slide-canvas-area">
+                                <div class="slide-canvas-wrapper">
+                                    <div class="slide-canvas" id="previewCanvas">
+                                        <div class="canvas-bg" id="previewBg"></div>
+                                    </div>
+                                </div>
+
+                                <div class="slide-nav">
+                                    <button class="nav-arrow" id="btnPrevSlide" onclick="prevSlide()" disabled>
+                                        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 2L4 8l6 6"/></svg>
+                                    </button>
+
+                                    <div class="slide-thumbnails" id="slideThumbnails">
+                                        <!-- 하단 썸네일 동적 생성 -->
+                                    </div>
+
+                                    <button class="nav-arrow" id="btnNextSlide" onclick="nextSlide()" disabled>
+                                        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2l6 6-6 6"/></svg>
+                                    </button>
+
+                                    <span class="slide-counter" id="slideCounter">0 / 0</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 그리드 뷰 오버레이 -->
+                        <div class="grid-overlay" id="gridOverlay" style="display:none;">
+                            <div class="grid-overlay-header">
+                                <span class="grid-overlay-title" id="gridSlideCount">0 / 0</span>
+                                <button class="grid-close-btn" onclick="toggleGridView()">
+                                    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l10 10M14 4L4 14"/></svg>
+                                </button>
+                            </div>
+                            <div class="grid-container" id="gridContainer">
+                                <!-- 그리드 썸네일 동적 생성 -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 하단: 입력 바 (Kimi 스타일) -->
+                <div class="input-bar" id="inputBar">
+                    <div class="input-bar-inner">
+                        <div class="input-row">
+                            <textarea id="instructionsInput" class="prompt-input"
+                                      placeholder="프레젠테이션에 대한 지침을 입력하세요..."
+                                      rows="1"
+                                      oninput="autoResizeTextarea(this)"></textarea>
+                        </div>
+                        <div class="input-actions">
+                            <div class="input-actions-left">
+                                <select id="templateSelect" class="template-selector">
+                                    <option value="">템플릿 선택</option>
+                                </select>
+                                <select id="langSelect" class="lang-selector">
+                                    <option value="">기본 언어</option>
+                                </select>
+                                <select id="slideCountSelect" class="slide-count-selector">
+                                    <option value="auto" class="i18n-slideCountAuto">자동</option>
+                                    <option value="5">5</option>
+                                    <option value="10">10</option>
+                                    <option value="15">15</option>
+                                    <option value="20">20</option>
+                                    <option value="25">25</option>
+                                    <option value="30">30</option>
+                                </select>
+                            </div>
+                            <button class="btn-generate" id="btnGenerate" onclick="generatePPT()">
+                                <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 3L5 8.5l8 5.5V3z"/></svg>
+                                <span class="i18n-generateBtn">생성</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- ============ 모달들 ============ -->
+
+    <!-- 새 프로젝트 모달 -->
+    <div class="modal-overlay" id="newProjectModal" style="display:none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 class="i18n-newProjectTitle">새 프로젝트</h3>
+                <button class="modal-close" onclick="closeModal('newProjectModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-field">
+                    <label class="i18n-projectName">프로젝트 이름</label>
+                    <input type="text" id="newProjectName" placeholder="프로젝트 이름을 입력하세요">
+                </div>
+                <div class="form-field">
+                    <label class="i18n-description">설명</label>
+                    <textarea id="newProjectDesc" placeholder="프로젝트 설명을 입력하세요" rows="3"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeModal('newProjectModal')"><span class="i18n-cancel">취소</span></button>
+                <button class="btn-primary" onclick="createProject()"><span class="i18n-create">생성</span></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 프로젝트 수정 모달 -->
+    <div class="modal-overlay" id="editProjectModal" style="display:none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 class="i18n-editProject">프로젝트 수정</h3>
+                <button class="modal-close" onclick="closeModal('editProjectModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-field">
+                    <label class="i18n-projectName">프로젝트 이름</label>
+                    <input type="text" id="editProjectName">
+                </div>
+                <div class="form-field">
+                    <label class="i18n-description">설명</label>
+                    <textarea id="editProjectDesc" rows="3"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeModal('editProjectModal')"><span class="i18n-cancel">취소</span></button>
+                <button class="btn-primary" onclick="updateProject()"><span class="i18n-save">저장</span></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 텍스트 리소스 모달 -->
+    <div class="modal-overlay" id="textResourceModal" style="display:none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 class="i18n-textResourceTitle">텍스트 리소스 추가</h3>
+                <button class="modal-close" onclick="closeModal('textResourceModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-field">
+                    <label class="i18n-textResTitle">제목</label>
+                    <input type="text" id="textResTitle" placeholder="리소스 제목">
+                </div>
+                <div class="form-field">
+                    <label class="i18n-textResContent">내용</label>
+                    <textarea id="textResContent" placeholder="텍스트를 붙여넣으세요..." rows="8"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeModal('textResourceModal')"><span class="i18n-cancel">취소</span></button>
+                <button class="btn-primary" onclick="addTextResource()"><span class="i18n-add">추가</span></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 웹 검색 모달 -->
+    <div class="modal-overlay" id="webSearchModal" style="display:none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 class="i18n-webSearchTitle">웹 검색</h3>
+                <button class="modal-close" onclick="closeModal('webSearchModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-field">
+                    <label class="i18n-searchQuery">검색어</label>
+                    <div class="search-input-row">
+                        <input type="text" id="webSearchQuery" placeholder="검색할 내용을 입력하세요"
+                               onkeydown="if(event.key==='Enter')doWebSearch()">
+                        <button class="btn-primary" id="btnWebSearch" onclick="doWebSearch()">
+                            <span class="i18n-searchBtn">검색</span>
+                        </button>
+                    </div>
+                </div>
+                <div id="webSearchResult" style="display:none;" class="search-result-box">
+                    <label class="i18n-searchResult">검색 결과</label>
+                    <div class="search-result-content" id="webSearchResultContent"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeModal('webSearchModal')"><span class="i18n-close">닫기</span></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 리소스 내용 보기 모달 -->
+    <div class="modal-overlay" id="resourceContentModal" style="display:none;">
+        <div class="modal-card" style="max-width:720px;">
+            <div class="modal-header">
+                <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+                    <span id="resourceContentIcon" class="chip-icon" style="flex-shrink:0;"></span>
+                    <h3 id="resourceContentTitle" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></h3>
+                </div>
+                <button class="modal-close" onclick="closeModal('resourceContentModal')">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:16px 24px;">
+                <div id="resourceContentBody" class="resource-content-viewer"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeModal('resourceContentModal')"><span class="i18n-close">닫기</span></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 프로젝트 초기화 확인 모달 -->
+    <div class="modal-overlay" id="resetConfirmModal" style="display:none;">
+        <div class="confirm-dialog">
+            <div class="confirm-icon-area">
+                <div class="confirm-icon-circle">
+                    <svg width="32" height="32" fill="none" stroke="#dc3545" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M16 8v8M16 20h.01"/>
+                        <circle cx="16" cy="16" r="13"/>
+                    </svg>
+                </div>
+            </div>
+            <h3 class="confirm-title">프로젝트 초기화</h3>
+            <p class="confirm-message">
+                <strong>생성된 슬라이드</strong>와 <strong>입력된 지침</strong>이 삭제됩니다.<br>
+                등록된 리소스는 유지됩니다.<br>
+                <span class="confirm-warning">이 작업은 되돌릴 수 없습니다.</span>
+            </p>
+            <div class="confirm-actions">
+                <button class="confirm-btn-cancel" onclick="closeModal('resetConfirmModal')">취소</button>
+                <button class="confirm-btn-danger" onclick="executeProjectReset()">초기화</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 프레젠테이션 모드 -->
+    <div id="presentationMode" class="presentation-overlay" style="display:none;">
+        <button class="presentation-close" onclick="exitPresentation()">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l12 12M16 4L4 16"/></svg>
+        </button>
+        <div class="presentation-slide" id="presentationSlide">
+            <div class="canvas-bg" id="presentationBg"></div>
+        </div>
+    </div>
+
+    <!-- 토스트 컨테이너 -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <!-- 로딩 -->
+    <div id="loadingOverlay" class="loading-overlay" style="display:none;">
+        <div class="loading-card">
+            <div class="loading-spinner"></div>
+            <p id="loadingText">처리 중...</p>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="/front/js/app.js"></script>
+</body>
+</html>
