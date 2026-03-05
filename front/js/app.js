@@ -134,6 +134,10 @@ const I18N = {
         msgConfirmDeleteRes: '이 리소스를 삭제하시겠습니까?',
         searching: '검색 중...',
         adminPage: '관리자 페이지',
+        authChecking: '접속정보 확인중입니다',
+        authCheckingSub: '잠시만 기다려주세요...',
+        authErrorTitle: '인증정보가 올바르지 않습니다',
+        authErrorDesc: '접속 링크가 만료되었거나 잘못된 인증정보입니다.\n관리자에게 문의하거나 다시 시도해주세요.',
     },
     en: {
         appTitle: 'PPTMaker',
@@ -229,6 +233,10 @@ const I18N = {
         msgConfirmDeleteRes: 'Delete this resource?',
         searching: 'Searching...',
         adminPage: 'Admin',
+        authChecking: 'Verifying access...',
+        authCheckingSub: 'Please wait a moment...',
+        authErrorTitle: 'Invalid authentication',
+        authErrorDesc: 'The access link has expired or is invalid.\nPlease contact your administrator or try again.',
     },
     ja: {
         appTitle: 'PPTMaker',
@@ -324,6 +332,10 @@ const I18N = {
         msgConfirmDeleteRes: 'このリソースを削除しますか？',
         searching: '検索中...',
         adminPage: '管理者ページ',
+        authChecking: 'アクセス情報を確認中です',
+        authCheckingSub: 'しばらくお待ちください...',
+        authErrorTitle: '認証情報が正しくありません',
+        authErrorDesc: 'アクセスリンクの有効期限が切れているか、無効です。\n管理者にお問い合わせください。',
     },
     zh: {
         appTitle: 'PPTMaker',
@@ -419,6 +431,10 @@ const I18N = {
         msgConfirmDeleteRes: '确定删除此资源？',
         searching: '搜索中...',
         adminPage: '管理后台',
+        authChecking: '正在验证访问信息',
+        authCheckingSub: '请稍候...',
+        authErrorTitle: '认证信息无效',
+        authErrorDesc: '访问链接已过期或无效。\n请联系管理员或重试。',
     },
 };
 
@@ -449,6 +465,12 @@ function applyI18n() {
     $('label[for="loginPassword"]').text(t('password'));
     $('#loginPassword').attr('placeholder', t('passwordPlaceholder'));
     $('.btn-login').text(t('login'));
+
+    // 인증 화면
+    $('.i18n-authChecking').text(t('authChecking'));
+    $('.i18n-authCheckingSub').text(t('authCheckingSub'));
+    $('.i18n-authErrorTitle').text(t('authErrorTitle'));
+    $('.i18n-authErrorDesc').html(t('authErrorDesc').replace(/\n/g, '<br>'));
 
     // 사이드바
     $('.i18n-newProject').text(t('newProject'));
@@ -524,14 +546,31 @@ $(document).ready(function () {
     initUserSearch();
 });
 
-function showLogin() {
-    $('#loginView').show();
+function hideAllViews() {
+    $('#loginView').hide();
     $('#appView').hide();
+    $('#authCheckingView').hide();
+    $('#authErrorView').hide();
+}
+
+function showLogin() {
+    hideAllViews();
+    $('#loginView').css('display', 'flex');
 }
 
 function showApp() {
-    $('#loginView').hide();
+    hideAllViews();
     $('#appView').css('display', 'flex');
+}
+
+function showAuthChecking() {
+    hideAllViews();
+    $('#authCheckingView').css('display', 'flex');
+}
+
+function showAuthError() {
+    hideAllViews();
+    $('#authErrorView').css('display', 'flex');
 }
 
 // ============ 사용자 검색 ============
@@ -665,6 +704,7 @@ async function doLogin() {
 }
 
 async function verifyAndInit() {
+    showAuthChecking();
     try {
         const res = await fetch('/api/auth/verify/' + state.jwtToken);
         if (!res.ok) throw new Error('Token expired');
@@ -674,7 +714,7 @@ async function verifyAndInit() {
         showApp();
         initApp();
     } catch (e) {
-        showLogin();
+        showAuthError();
     }
 }
 
@@ -695,9 +735,11 @@ async function initApp() {
 
     // 관리자 버튼 표시/숨김
     if (state.isAdmin) {
-        $('#btnAdminPage').show();
+        $('#btnAdminHeader').show();
+        $('#btnAdminMain').show();
     } else {
-        $('#btnAdminPage').hide();
+        $('#btnAdminHeader').hide();
+        $('#btnAdminMain').hide();
     }
 
     applyI18n();
@@ -820,6 +862,7 @@ function toggleSidebar() {
 function showEmptyState() {
     $('#emptyState').show();
     $('#projectWorkspace').hide();
+    if (state.isAdmin) $('#btnAdminMain').show();
     renderRecentProjects();
 }
 
@@ -932,6 +975,7 @@ async function openProject(projectId) {
 
 function renderProjectWorkspace() {
     $('#emptyState').hide();
+    $('#btnAdminMain').hide();
     $('#projectWorkspace').css('display', 'flex');
 
     // 헤더
@@ -3029,6 +3073,7 @@ function _exitEditModeClean() {
 
 // ============ 프레젠테이션 모드 ============
 let presentationIndex = 0;
+let _presActivePanel = 'A'; // 'A' 또는 'B' - 현재 활성 패널
 
 function startPresentation() {
     if (state.generatedSlides.length === 0) {
@@ -3036,21 +3081,24 @@ function startPresentation() {
         return;
     }
     presentationIndex = 0;
+    _presActivePanel = 'A';
+    $('#presentationSlideA').addClass('active');
+    $('#presentationSlideB').removeClass('active');
     $('#presentationMode').show();
-    renderPresentationSlide(0);
+    renderPresentationSlide(0, 'A');
 
     $(document).on('keydown.presentation', function (e) {
         if (e.key === 'ArrowRight' || e.key === ' ') {
             e.preventDefault();
             if (presentationIndex < state.generatedSlides.length - 1) {
                 presentationIndex++;
-                renderPresentationSlide(presentationIndex);
+                transitionPresentationSlide(presentationIndex);
             }
         } else if (e.key === 'ArrowLeft') {
             e.preventDefault();
             if (presentationIndex > 0) {
                 presentationIndex--;
-                renderPresentationSlide(presentationIndex);
+                transitionPresentationSlide(presentationIndex);
             }
         } else if (e.key === 'Escape') {
             exitPresentation();
@@ -3058,17 +3106,35 @@ function startPresentation() {
     });
 }
 
-function renderPresentationSlide(index) {
+let _presTransitioning = false;
+
+function transitionPresentationSlide(index) {
+    if (_presTransitioning) return;
+    _presTransitioning = true;
+
+    // 다음 패널에 새 슬라이드를 미리 렌더링한 뒤 크로스페이드
+    const nextPanel = _presActivePanel === 'A' ? 'B' : 'A';
+    renderPresentationSlide(index, nextPanel);
+
+    // 크로스페이드: 새 패널 활성화, 기존 패널 비활성화
+    $(`#presentationSlide${nextPanel}`).addClass('active');
+    $(`#presentationSlide${_presActivePanel}`).removeClass('active');
+    _presActivePanel = nextPanel;
+
+    setTimeout(() => { _presTransitioning = false; }, 350);
+}
+
+function renderPresentationSlide(index, panel) {
     const slide = state.generatedSlides[index];
     if (!slide) return;
 
-    const container = $('#presentationSlide');
+    const container = $(`#presentationSlide${panel}`);
     container.find('.preview-obj').remove();
 
     if (slide.background_image) {
-        $('#presentationBg').css('background-image', `url(${slide.background_image})`);
+        $(`#presentationBg${panel}`).css({ 'background-image': `url(${slide.background_image})`, 'background': '' });
     } else {
-        $('#presentationBg').css({ 'background-image': 'none', 'background': 'white' });
+        $(`#presentationBg${panel}`).css({ 'background-image': 'none', 'background': 'white' });
     }
 
     const containerW = container.width();

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PPTMaker</title>
+    <title>K-Portal PPTMaker</title>
     <link rel="icon" href="/front/img/favicon.ico" type="image/x-icon">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="/front/css/app.css">
@@ -12,7 +12,7 @@
 </head>
 <body>
     <!-- ============ 로그인 화면 ============ -->
-    <div id="loginView" class="login-container">
+    <div id="loginView" class="login-container" style="display:none;">
         <div class="login-card">
             <div class="login-logo">
                 <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
@@ -20,7 +20,7 @@
                     <path d="M12 14h16v2H12zM12 19h12v2H12zM12 24h14v2H12z" fill="white" opacity="0.9"/>
                     <defs><linearGradient id="g1" x1="0" y1="0" x2="40" y2="40"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs>
                 </svg>
-                <h1>PPTMaker</h1>
+                <h1>K-Portal PPTMaker</h1>
             </div>
             <p class="login-subtitle subtitle">기업용 파워포인트 자동 생성 솔루션</p>
 
@@ -47,6 +47,32 @@
         </div>
     </div>
 
+    <!-- ============ 인증 확인 중 ============ -->
+    <div id="authCheckingView" class="auth-screen" style="display:none;">
+        <div class="auth-screen-card">
+            <div class="auth-spinner-wrap">
+                <div class="auth-spinner"></div>
+            </div>
+            <h2 class="i18n-authChecking">접속정보 확인중입니다</h2>
+            <p class="i18n-authCheckingSub">잠시만 기다려주세요...</p>
+        </div>
+    </div>
+
+    <!-- ============ 인증 실패 ============ -->
+    <div id="authErrorView" class="auth-screen" style="display:none;">
+        <div class="auth-screen-card">
+            <div class="auth-error-icon">
+                <svg width="56" height="56" viewBox="0 0 56 56" fill="none">
+                    <circle cx="28" cy="28" r="28" fill="#FEF2F2"/>
+                    <circle cx="28" cy="28" r="20" fill="#FEE2E2"/>
+                    <path d="M28 18v12M28 34v2" stroke="#EF4444" stroke-width="3" stroke-linecap="round"/>
+                </svg>
+            </div>
+            <h2 class="i18n-authErrorTitle">인증정보가 올바르지 않습니다</h2>
+            <p class="i18n-authErrorDesc">접속 링크가 만료되었거나 잘못된 인증정보입니다.<br>관리자에게 문의하거나 다시 시도해주세요.</p>
+        </div>
+    </div>
+
     <!-- ============ 메인 앱 ============ -->
     <div id="appView" style="display:none;" class="app-layout">
 
@@ -59,7 +85,7 @@
                         <path d="M12 14h16v2H12zM12 19h12v2H12zM12 24h14v2H12z" fill="white" opacity="0.9"/>
                         <defs><linearGradient id="g2" x1="0" y1="0" x2="40" y2="40"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs>
                     </svg>
-                    <span>PPTMaker</span>
+                    <span>K-Portal PPTMaker</span>
                 </div>
                 <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">
                     <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h12M3 12h12"/></svg>
@@ -76,14 +102,6 @@
                 <!-- 프로젝트 목록 동적 생성 -->
             </div>
 
-            <!-- 관리자 버튼 -->
-            <div id="btnAdminPage" class="sidebar-admin" style="display:none;">
-                <button class="btn-admin" onclick="goToAdmin()">
-                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.9 4.1a2.5 2.5 0 00-3.5 0L3.1 10.4a1 1 0 00-.3.5l-.7 2.8a.5.5 0 00.6.6l2.8-.7a1 1 0 00.5-.3l6.3-6.3a2.5 2.5 0 000-3.5z"/><path d="M10 5.5l1.5 1.5"/></svg>
-                    <span class="i18n-adminPage">관리자 페이지</span>
-                </button>
-            </div>
-
             <div class="sidebar-footer">
                 <div class="user-profile" id="sidebarUserInfo">
                     <div class="user-avatar" id="userAvatar">U</div>
@@ -92,7 +110,7 @@
                         <div class="user-dept" id="sidebarUserDept"></div>
                     </div>
                 </div>
-                <button class="btn-logout" onclick="logout()" title="Logout">
+                <button class="btn-logout" onclick="logout()" title="Logout" style="display:none;">
                     <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2H3a1 1 0 00-1 1v10a1 1 0 001 1h3M10 11l3-3-3-3M5 8h8"/></svg>
                 </button>
             </div>
@@ -105,6 +123,12 @@
 
         <!-- 메인 워크스페이스 -->
         <main class="workspace" id="workspace">
+
+            <!-- 관리자 페이지 버튼 (메인 우측 상단) -->
+            <button id="btnAdminMain" class="ws-admin-main-btn" onclick="goToAdmin()" style="display:none;">
+                <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.5 2.5a2.1 2.1 0 00-3 0L4.3 7.7c-.2.2-.3.4-.4.6l-.8 3a.5.5 0 00.6.6l3-.8c.2-.1.5-.2.6-.4l5.2-5.2a2.1 2.1 0 000-3z"/><path d="M2 13h11"/></svg>
+                <span class="i18n-adminPage">관리자 페이지</span>
+            </button>
 
             <!-- 빈 상태: 프로젝트 미선택 -->
             <div id="emptyState" class="empty-state">
@@ -167,6 +191,10 @@
                         </button>
                         <button class="ws-action-btn danger" onclick="deleteProject()" title="Delete">
                             <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 4h11M5 4V2.5h5V4M4 4v8.5a1 1 0 001 1h5a1 1 0 001-1V4"/></svg>
+                        </button>
+                        <button id="btnAdminHeader" class="ws-action-btn ws-admin-btn" onclick="goToAdmin()" title="관리자 페이지" style="display:none;">
+                            <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.5 2.5a2.1 2.1 0 00-3 0L4.3 7.7c-.2.2-.3.4-.4.6l-.8 3a.5.5 0 00.6.6l3-.8c.2-.1.5-.2.6-.4l5.2-5.2a2.1 2.1 0 000-3z"/><path d="M2 13h11"/></svg>
+                            <span class="i18n-adminPage" style="margin-left:4px;font-size:12px;">관리자 페이지</span>
                         </button>
                     </div>
                 </div>
@@ -518,8 +546,13 @@
         <button class="presentation-close" onclick="exitPresentation()">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l12 12M16 4L4 16"/></svg>
         </button>
-        <div class="presentation-slide" id="presentationSlide">
-            <div class="canvas-bg" id="presentationBg"></div>
+        <div class="presentation-stage">
+            <div class="presentation-slide active" id="presentationSlideA">
+                <div class="canvas-bg" id="presentationBgA"></div>
+            </div>
+            <div class="presentation-slide" id="presentationSlideB">
+                <div class="canvas-bg" id="presentationBgB"></div>
+            </div>
         </div>
     </div>
 
