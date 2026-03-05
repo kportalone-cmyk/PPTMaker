@@ -916,6 +916,15 @@ function createObjectElement(obj) {
         if ($(e.target).hasClass('resize-handle')) {
             startResize(e, obj.obj_id, e.target);
         } else if (!$(e.target).hasClass('delete-btn')) {
+            // Ctrl+클릭: 오브젝트 복사 후 복사본 드래그
+            if ((e.ctrlKey || e.metaKey) && (obj.obj_type !== 'text' || !$(e.target).hasClass('text-content'))) {
+                const clonedId = duplicateObject(obj.obj_id);
+                if (clonedId) {
+                    selectObject(clonedId);
+                    startDrag(e, clonedId);
+                    return;
+                }
+            }
             selectObject(obj.obj_id);
             if (obj.obj_type !== 'text' || !$(e.target).hasClass('text-content')) {
                 startDrag(e, obj.obj_id);
@@ -928,6 +937,19 @@ function createObjectElement(obj) {
 
 function generateObjId() {
     return 'obj_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+}
+
+function duplicateObject(objId) {
+    const src = state.objects.find(o => o.obj_id === objId);
+    if (!src) return null;
+
+    const clone = JSON.parse(JSON.stringify(src));
+    clone.obj_id = generateObjId();
+
+    state.objects.push(clone);
+    const el = createObjectElement(clone);
+    $('#canvas').append(el);
+    return clone.obj_id;
 }
 
 function addTextObject() {

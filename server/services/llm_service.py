@@ -386,6 +386,8 @@ def _parse_rich_schema(response_text: str, slides_meta: list[dict]) -> dict | No
             if "type" in schema_slides[0]:
                 # content 슬라이드의 items 최소 개수 보장
                 _ensure_minimum_items(schema_slides, slides_meta)
+                # 목차(toc) items를 section 제목으로 보정
+                _ensure_toc_items(schema_slides)
                 mapped = _map_rich_schema_to_contents(schema_slides, slides_meta)
                 return {
                     "slides": mapped,
@@ -470,6 +472,54 @@ def _ensure_minimum_items(schema_slides: list[dict], slides_meta: list[dict]):
 
         elif len(items) == 0:
             print(f"[LLM] Warning: content slide has no items")
+
+
+def _ensure_toc_items(schema_slides: list[dict]):
+    """목차(toc) 슬라이드의 items를 section 슬라이드 제목으로 보정
+
+    LLM이 toc items의 text를 비워두거나 toc 자체에 items가 없는 경우,
+    뒤따르는 section 슬라이드들의 section_title을 수집하여 목차를 채웁니다.
+    toc가 없고 section이 있으면 toc가 필요한 상황이므로 별도 처리하지 않습니다.
+    """
+    # section 슬라이드 제목 수집
+    sections = []
+    for slide in schema_slides:
+        if slide.get("type") == "section":
+            title = slide.get("section_title", "").strip()
+            num = slide.get("section_num", "").strip()
+            if title:
+                sections.append({"num": num or f"{len(sections)+1:02d}", "text": title})
+
+    if not sections:
+        return
+
+    for slide in schema_slides:
+        if slide.get("type") != "toc":
+            continue
+
+        items = slide.get("items", [])
+
+        # case 1: items가 없으면 section에서 생성
+        if not items:
+            slide["items"] = [{"num": s["num"], "text": s["text"]} for s in sections]
+            print(f"[LLM] TOC: items 없음 → section {len(sections)}개에서 생성")
+            continue
+
+        # case 2: items가 있지만 text가 비어있으면 section에서 채우기
+        needs_fix = any(not item.get("text", "").strip() for item in items)
+        if needs_fix:
+            if len(items) == len(sections):
+                # 개수 동일 → 1:1 매핑
+                for i, item in enumerate(items):
+                    if not item.get("text", "").strip():
+                        item["text"] = sections[i]["text"]
+                        if not item.get("num", "").strip():
+                            item["num"] = sections[i]["num"]
+                print(f"[LLM] TOC: 빈 text를 section 제목으로 보정 ({len(items)}개)")
+            else:
+                # 개수 불일치 → section 기준으로 재생성
+                slide["items"] = [{"num": s["num"], "text": s["text"]} for s in sections]
+                print(f"[LLM] TOC: items {len(items)}개 ≠ section {len(sections)}개 → 재생성")
 
 
 # ============ 리치 스키마 → placeholder 매핑 ============
