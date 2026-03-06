@@ -10,10 +10,22 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+from starlette.middleware.base import BaseHTTPMiddleware
 from config import settings
 from services.mongo_service import init_indexes, close_connection
-from routers import auth, template, project, resource, generate, font
+from routers import auth, template, project, resource, generate, font, prompt
 from utils.versioning import get_file_version
+
+
+class StaticCacheMiddleware(BaseHTTPMiddleware):
+    """업로드 이미지에 브라우저 캐시 헤더 추가"""
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path.startswith("/uploads/"):
+            # 배경/이미지: 7일 캐시 (파일명이 UUID라 변경 시 URL 자체가 바뀜)
+            response.headers["Cache-Control"] = "public, max-age=604800, immutable"
+        return response
 
 
 @asynccontextmanager
@@ -22,6 +34,11 @@ async def lifespan(app: FastAPI):
     # 시작 시 인덱스 초기화
     await init_indexes()
     print("MongoDB 인덱스 초기화 완료")
+
+    # 기본 프롬프트 초기화
+    from routers.prompt import ensure_default_prompts
+    await ensure_default_prompts()
+    print("기본 프롬프트 초기화 완료")
 
     # 업로드 디렉토리 생성
     for sub in ["backgrounds", "images", "resources", "generated"]:
@@ -45,6 +62,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# 업로드 파일 캐시 헤더
+app.add_middleware(StaticCacheMiddleware)
+
 # CORS 설정 (.env CORS_ORIGINS 기반)
 app.add_middleware(
     CORSMiddleware,
@@ -61,6 +81,7 @@ app.include_router(project.router)
 app.include_router(resource.router)
 app.include_router(generate.router)
 app.include_router(font.router)
+app.include_router(prompt.router)
 
 # 정적 파일 서빙
 project_root = Path(__file__).resolve().parent.parent

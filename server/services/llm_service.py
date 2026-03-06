@@ -10,6 +10,7 @@ import re
 import random
 import httpx
 from config import settings
+from routers.prompt import get_prompt_content
 
 
 # ============ 슬라이드 타입 ↔ content_type 매핑 ============
@@ -49,160 +50,30 @@ async def generate_slide_content(
             "sources": [],
         }
 
-    # 슬라이드 카탈로그 설명 생성
-    slides_description = _build_slides_description(slides_meta)
-
-    # 슬라이드 수 지침
-    if slide_count and slide_count != "auto":
-        slide_count_instruction = f"\n11. **[필수] 전체 슬라이드 수를 정확히 {slide_count}장으로 생성하세요.** title, toc, section, content, closing 모두 포함하여 총 {slide_count}장이어야 합니다."
-    else:
-        slide_count_instruction = ""
-
-    # 언어별 프롬프트 분기
-    output_lang = lang or (settings.SUPPORTED_LANGS[0] if settings.SUPPORTED_LANGS else "ko")
-    lang_instruction = {
-        "ko": "모든 콘텐츠를 한국어로 작성하세요.",
-        "en": "Write all content in English.",
-        "ja": "すべてのコンテンツを日本語で作成してください。",
-        "zh": "请用中文撰写所有内容。",
-    }.get(output_lang, "모든 콘텐츠를 한국어로 작성하세요.")
-
-    system_prompt = f"""당신은 기업용 프레젠테이션 구조 설계 및 콘텐츠 전문가입니다.
-주어진 리소스 자료를 분석하여 전문적인 프레젠테이션을 설계합니다.
-
-## 슬라이드 타입
-1. **title** - 타이틀 슬라이드 (프레젠테이션 시작)
-   필드: title, subtitle, meta_line
-2. **toc** - 목차 슬라이드
-   필드: title, items[] (각 항목: num, text)
-3. **section** - 섹션 구분 간지
-   필드: section_num, section_title, section_subtitle
-4. **content** - 본문 콘텐츠 슬라이드
-   필드: title(제목), governance(거버넌스/섹션태그), items[] (heading=부제목 + detail=설명, 순서대로 매핑), sources[]
-5. **closing** - 마무리 슬라이드
-   필드: title, message, contact
-
-## 콘텐츠 작성 규칙
-1. 제목(title)은 간결하고 임팩트 있게 작성합니다 (최대 30자).
-2. **governance는 해당 슬라이드의 부제목과 설명 내용을 전체적으로 요약한 문장을 작성합니다 (20~50자).** 단순한 섹션 이름이 아니라, 슬라이드 전체 내용의 핵심을 한 문장으로 압축하세요.
-3. **[필수] 본문(content) 슬라이드의 구조**:
-   - 본문 슬라이드는 반드시 title(제목), governance(거버넌스), items[](부제목+설명 쌍) 를 생성합니다.
-   - 각 item은 heading(부제목, 키워드 1~5단어) + detail(설명, 1~3문장) 구조입니다.
-   - heading은 템플릿의 "부제목" 필드에, detail은 "설명" 필드에 순서대로 매핑됩니다.
-   - **카탈로그의 "items를 정확히 N개 생성하세요" 안내를 반드시 따르세요.** 부제목과 설명 필드 수 중 작은 값이 표현 가능한 최대 items 수입니다.
-   - 최소 3개, 최대 4개의 items를 생성하세요. items를 1개만 작성하면 안 됩니다.
-   - 각 item의 heading은 서로 다른 관점/주제를 다뤄야 합니다.
-4. 예시 - subtitle_count=3, description_count=3인 content 슬라이드:
-   {{"type":"content","template_index":3,"title":"디지털 전환 핵심 전략","governance":"클라우드 전환, 데이터 분석, 업무 자동화를 통한 디지털 혁신 추진",
-     "items":[
-       {{"heading":"클라우드 마이그레이션","detail":"기존 온프레미스 인프라를 클라우드로 전환하여 운영 비용을 30% 절감하고 확장성을 확보합니다."}},
-       {{"heading":"데이터 기반 의사결정","detail":"빅데이터 분석 플랫폼을 구축하여 실시간 시장 동향 파악과 고객 행동 예측이 가능해집니다."}},
-       {{"heading":"업무 자동화 도입","detail":"RPA와 AI를 활용한 반복 업무 자동화로 직원 생산성을 40% 이상 향상시킬 수 있습니다."}}
-     ]}}
-5. sources가 있으면 출처를 명시합니다.
-
-## 구조 설계 규칙
-1. 권장 순서: title → toc → (section → content 슬라이드들)... → closing
-2. 각 섹션마다 section(간지) 슬라이드 + 1~3개의 content 슬라이드를 배치합니다.
-   **[필수] 목차(toc) 슬라이드의 items 텍스트는 반드시 section 슬라이드의 section_title과 정확히 일치해야 합니다.** 예: section이 3개면 toc items도 3개이며, 각 text가 해당 section_title과 동일합니다.
-3. **[필수] 전체 슬라이드가 8장 이하일 경우, 목차(toc)와 섹션 간지(section)는 생략하세요.** 구성: title → content 슬라이드들 → closing. 9장 이상일 때만 toc와 section을 포함합니다.
-4. 리소스 내용의 양과 복잡도에 맞게 슬라이드 수를 자유롭게 결정합니다.
-5. template_index는 사용 가능한 템플릿 슬라이드 번호입니다 (카탈로그 참조).
-6. 같은 template_index를 여러 번 사용할 수 있지만, **같은 타입의 템플릿이 여러 개 있으면 돌아가며 다양하게 사용하세요.** 예를 들어 본문 템플릿 3,4,5번이 모두 content 타입이면 3→4→5→3 순으로 번갈아 사용합니다.
-7. 콘텐츠에 맞지 않는 템플릿은 사용하지 않아도 됩니다.
-8. **[필수] 카탈로그의 "템플릿 타입 현황"을 반드시 확인하세요. 미등록(✗) 타입은 절대 생성하지 마세요.**
-9. {lang_instruction}
-10. 반드시 JSON 형식으로만 응답합니다.{slide_count_instruction}"""
-
-    user_prompt = f"""아래 리소스 자료를 분석하여 프레젠테이션을 설계하고 콘텐츠를 생성해주세요.
-
-## 출력 언어
-{lang_instruction}
-
-## 사용자 지침
-{instructions if instructions else "특별한 지침 없음 - 리소스 내용을 보고서 형태로 정리해주세요."}
-
-## 리소스 자료
-{resources_text[:12000]}
-
-## 사용 가능한 템플릿 슬라이드 카탈로그
-{slides_description}
-
-## 응답 형식
-반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요.
-
-```json
-{{
-    "meta": {{
-        "title": "프레젠테이션 제목",
-        "subtitle": "부제목",
-        "author": "작성자/부서",
-        "date": "날짜"
-    }},
-    "slides": [
-        {{
-            "type": "title",
-            "template_index": 0,
-            "title": "프레젠테이션 제목",
-            "subtitle": "부제목",
-            "meta_line": "작성자 | 날짜"
-        }},
-        {{
-            "type": "toc",
-            "template_index": 1,
-            "title": "목차",
-            "items": [
-                {{"num": "01", "text": "섹션 제목"}},
-                {{"num": "02", "text": "섹션 제목"}}
-            ]
-        }},
-        {{
-            "type": "section",
-            "template_index": 2,
-            "section_num": "01",
-            "section_title": "섹션 제목",
-            "section_subtitle": "섹션 부제목"
-        }},
-        {{
-            "type": "content",
-            "template_index": 3,
-            "title": "슬라이드 제목",
-            "governance": "핵심 포인트들의 내용을 종합적으로 요약한 문장 (20~50자)",
-            "items": [
-                {{"heading": "첫 번째 핵심 포인트", "detail": "첫 번째 포인트에 대한 상세 설명. 구체적인 수치나 사례를 포함하여 1~3문장으로 작성합니다."}},
-                {{"heading": "두 번째 핵심 포인트", "detail": "두 번째 포인트에 대한 상세 설명. 논리적 근거와 함께 1~3문장으로 작성합니다."}},
-                {{"heading": "세 번째 핵심 포인트", "detail": "세 번째 포인트에 대한 상세 설명. 결론이나 시사점을 1~3문장으로 작성합니다."}}
-            ],
-            "sources": ["출처1"]
-        }},
-        {{
-            "type": "closing",
-            "template_index": 4,
-            "title": "감사합니다",
-            "message": "마무리 메시지",
-            "contact": "팀명 | 이메일"
-        }}
-    ],
-    "sources": [
-        {{"ref": "source_id", "title": "출처 제목"}}
-    ]
-}}
-```"""
+    # DB에서 프롬프트 로드 및 변수 바인딩
+    system_prompt, user_prompt = await _build_generation_prompts(
+        resources_text, instructions, slides_meta, lang, slide_count=slide_count,
+    )
 
     try:
-        result = await _call_claude_api(system_prompt, user_prompt)
+        result = await _call_claude_api(system_prompt, user_prompt, model=settings.ANTHROPIC_OUTLINE_MODEL)
+        print(f"[LLM] API 응답 길이: {len(result)} chars (model: {settings.ANTHROPIC_OUTLINE_MODEL})")
         parsed = _parse_rich_schema(result, slides_meta)
         if parsed:
+            print(f"[LLM] 파싱 성공 - slides: {len(parsed.get('slides', []))}개")
             return parsed
+        print(f"[LLM] 파싱 실패 → 폴백 콘텐츠 사용")
         fallback = _fallback_content(resources_text, slides_meta)
         return {"slides": fallback, "meta": {}, "sources": []}
     except Exception as e:
+        import traceback
         print(f"[LLM] Claude API 호출 실패: {e}")
+        traceback.print_exc()
         fallback = _fallback_content(resources_text, slides_meta)
         return {"slides": fallback, "meta": {}, "sources": []}
 
 
-async def _call_claude_api(system_prompt: str, user_prompt: str) -> str:
+async def _call_claude_api(system_prompt: str, user_prompt: str, model: str = "") -> str:
     """Claude API 호출 (httpx 비동기)"""
     url = "https://api.anthropic.com/v1/messages"
     headers = {
@@ -211,13 +82,18 @@ async def _call_claude_api(system_prompt: str, user_prompt: str) -> str:
         "content-type": "application/json",
     }
     payload = {
-        "model": settings.ANTHROPIC_MODEL,
-        "max_tokens": settings.ANTHROPIC_MAX_TOKENS,
+        "model": model or settings.ANTHROPIC_MODEL,
         "system": system_prompt,
         "messages": [
             {"role": "user", "content": user_prompt}
         ],
     }
+    # 모델별 max_tokens 적용
+    effective_model = model or settings.ANTHROPIC_MODEL
+    if effective_model == settings.ANTHROPIC_OUTLINE_MODEL and settings.ANTHROPIC_OUTLINE_MAX_TOKENS > 0:
+        payload["max_tokens"] = settings.ANTHROPIC_OUTLINE_MAX_TOKENS
+    elif settings.ANTHROPIC_MAX_TOKENS > 0:
+        payload["max_tokens"] = settings.ANTHROPIC_MAX_TOKENS
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(url, json=payload, headers=headers)
@@ -316,6 +192,7 @@ def _build_slides_description(slides_meta: list[dict]) -> str:
                 "governance": "거버넌스 → governance/section_num 매핑",
                 "body": "본문 → message/body_text 매핑",
                 "description": "설명 → items[].detail 매핑 (순서대로)",
+                "number": "번호 → items 순서 번호 자동 매핑 (LLM이 생성하지 않음)",
             }.get(role, role or "텍스트")
             ph_desc.append(f'    - placeholder: "{name}" (역할: {role_label})')
 
@@ -332,8 +209,11 @@ def _build_slides_description(slides_meta: list[dict]) -> str:
         effective_items = min(effective_items, 4)  # 슬라이드당 최대 4개 항목 제한
 
         lines.append(f"  특성: has_title={has_title}, has_governance={has_governance}, subtitle_count={ph_sub_actual}, description_count={ph_desc_actual}")
-        if content_type == "body" and effective_items > 0:
-            lines.append(f"  ※ 본문 슬라이드: items를 정확히 {effective_items}개 생성하세요 (부제목 {ph_sub_actual}개, 설명 {ph_desc_actual}개 필드가 있으므로 {effective_items}개까지 표현 가능)")
+        if content_type == "body":
+            # 슬라이드에 표시되는 placeholder 수와 관계없이 아웃라인용으로 최소 3개 항목 요청
+            min_items = max(effective_items, 3)
+            max_items = max(effective_items, 4)
+            lines.append(f"  ※ 본문 슬라이드: items를 최소 {min_items}개~최대 {max_items}개 생성하세요. 슬라이드에는 {effective_items}개까지 표시되며 나머지는 아웃라인에 표시됩니다. 절대 1개만 생성하지 마세요.")
         lines.append(f"  placeholder 목록:")
         if ph_desc:
             lines.extend(ph_desc)
@@ -349,16 +229,25 @@ def _build_slides_description(slides_meta: list[dict]) -> str:
 def _parse_rich_schema(response_text: str, slides_meta: list[dict]) -> dict | None:
     """LLM 응답에서 리치 스키마 JSON을 파싱하고 placeholder 매핑으로 변환"""
     text = response_text.strip()
+    print(f"[LLM] 응답 길이: {len(text)} chars")
 
     # ```json ... ``` 블록 추출
     if "```json" in text:
         start = text.index("```json") + 7
-        end = text.index("```", start)
-        text = text[start:end].strip()
+        try:
+            end = text.index("```", start)
+            text = text[start:end].strip()
+        except ValueError:
+            # 닫는 ``` 없음 - max_tokens 초과로 잘린 응답
+            text = text[start:].strip()
+            print(f"[LLM] Warning: JSON 블록이 닫히지 않음 (max_tokens 초과 가능성)")
     elif "```" in text:
         start = text.index("```") + 3
-        end = text.index("```", start)
-        text = text[start:end].strip()
+        try:
+            end = text.index("```", start)
+            text = text[start:end].strip()
+        except ValueError:
+            text = text[start:].strip()
 
     parsed = None
 
@@ -375,8 +264,17 @@ def _parse_rich_schema(response_text: str, slides_meta: list[dict]) -> dict | No
                 except (json.JSONDecodeError, ValueError):
                     continue
 
+    # JSON 파싱 실패 시 잘린 JSON 복구 시도
     if parsed is None:
-        return None
+        print(f"[LLM] JSON 파싱 실패 - 잘린 JSON 복구 시도")
+        repaired = _try_repair_truncated_json(text)
+        if repaired is not None:
+            parsed = repaired
+            print(f"[LLM] 잘린 JSON 복구 성공")
+        else:
+            print(f"[LLM] JSON 복구 실패 - 응답 앞 500자: {text[:500]}")
+            print(f"[LLM] 응답 뒤 300자: {text[-300:]}")
+            return None
 
     # 리치 스키마 형식: {"meta": {...}, "slides": [...], "sources": [...]}
     if isinstance(parsed, dict) and "slides" in parsed:
@@ -419,6 +317,92 @@ def _parse_rich_schema(response_text: str, slides_meta: list[dict]) -> dict | No
     return None
 
 
+def _try_repair_truncated_json(text: str) -> dict | None:
+    """max_tokens 초과로 잘린 JSON 복구 시도
+
+    슬라이드 배열이 중간에 잘린 경우, 완성된 슬라이드까지만 추출합니다.
+    """
+    # "slides" 배열 시작점 찾기
+    if '"slides"' not in text:
+        return None
+
+    try:
+        # { 부터 시작하는 JSON 찾기
+        brace_start = text.index("{")
+        partial = text[brace_start:]
+
+        # slides 배열 내에서 완성된 마지막 슬라이드 객체 찾기
+        # 패턴: }, { 또는 } ] 로 끝나는 슬라이드 경계
+        # 역방향으로 완전한 } 찾기
+        depth = 0
+        last_valid_end = -1
+        in_string = False
+        escape_next = False
+
+        for i, ch in enumerate(partial):
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == '\\':
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    # 최상위 객체가 닫힘 - 완전한 JSON
+                    try:
+                        return json.loads(partial[:i+1])
+                    except json.JSONDecodeError:
+                        pass
+
+        # 최상위가 닫히지 않은 경우: slides 배열에서 마지막 완전한 슬라이드까지 추출
+        # "slides": [ ... 에서 마지막 완성된 객체까지 잘라서 닫기
+        slides_match = re.search(r'"slides"\s*:\s*\[', partial)
+        if not slides_match:
+            return None
+
+        arr_start = slides_match.end()
+        # 역방향으로 마지막 완전한 } 찾기 (배열 원소 경계)
+        last_complete = partial.rfind('}')
+        if last_complete <= arr_start:
+            return None
+
+        # slides 배열을 잘라서 닫기
+        truncated_slides_str = partial[arr_start:last_complete + 1]
+        # 마지막에 쉼표 제거
+        truncated_slides_str = truncated_slides_str.rstrip().rstrip(',')
+
+        # meta 추출 시도
+        meta_match = re.search(r'"meta"\s*:\s*(\{[^}]*\})', partial)
+        meta = {}
+        if meta_match:
+            try:
+                meta = json.loads(meta_match.group(1))
+            except json.JSONDecodeError:
+                pass
+
+        # slides 배열 파싱
+        try:
+            slides = json.loads(f"[{truncated_slides_str}]")
+            if isinstance(slides, list) and len(slides) > 0:
+                print(f"[LLM] 잘린 JSON에서 {len(slides)}개 슬라이드 복구")
+                return {"meta": meta, "slides": slides, "sources": []}
+        except json.JSONDecodeError:
+            pass
+
+    except (ValueError, IndexError):
+        pass
+
+    return None
+
+
 def _ensure_minimum_items(schema_slides: list[dict], slides_meta: list[dict]):
     """content 슬라이드의 items가 부족한 경우 detail을 분할하여 보충
 
@@ -435,10 +419,10 @@ def _ensure_minimum_items(schema_slides: list[dict], slides_meta: list[dict]):
             continue
 
         items = slide.get("items", [])
-        if len(items) >= 2:
+        if len(items) >= 3:
             continue  # 이미 충분
 
-        # 목표 items 수 결정
+        # 목표 items 수 결정 (최소 3개)
         template_idx = slide.get("template_index", 0)
         meta = meta_lookup.get(template_idx, {})
         target_count = max(meta.get("description_count", 3), 3)
@@ -449,8 +433,8 @@ def _ensure_minimum_items(schema_slides: list[dict], slides_meta: list[dict]):
             detail = item.get("detail", "")
             heading = item.get("heading", "")
 
-            # 문장 분할 (. 기준)
-            sentences = [s.strip() for s in re.split(r'(?<=[.!?。])\s+', detail) if s.strip()]
+            # 문장 분할 (다양한 한국어/영어 문장 종결 패턴)
+            sentences = [s.strip() for s in re.split(r'(?<=[.!?。])\s+', detail) if s.strip() and len(s.strip()) > 5]
 
             if len(sentences) >= target_count:
                 # 문장을 target_count 그룹으로 분배하여 새 items 생성
@@ -467,8 +451,42 @@ def _ensure_minimum_items(schema_slides: list[dict], slides_meta: list[dict]):
                     idx += count
                 slide["items"] = new_items
             else:
-                # 문장이 부족하면 원본 유지 (LLM이 생성한 것 그대로)
-                print(f"[LLM] Warning: content slide items={len(items)}, target={target_count}")
+                # 문장이 부족하면 detail을 줄바꿈/콤마 기준으로 분할 시도
+                parts = [p.strip() for p in re.split(r'[\n,;·•\-]', detail) if p.strip() and len(p.strip()) > 5]
+                if len(parts) >= target_count:
+                    new_items = []
+                    per_group = len(parts) // target_count
+                    remainder = len(parts) % target_count
+                    idx = 0
+                    for i in range(target_count):
+                        count = per_group + (1 if i < remainder else 0)
+                        group = parts[idx:idx + count]
+                        new_detail = ". ".join(group)
+                        new_heading = group[0][:30].rstrip('.!?。 ') if group else f"포인트 {i+1}"
+                        new_items.append({"heading": new_heading, "detail": new_detail})
+                        idx += count
+                    slide["items"] = new_items
+                else:
+                    print(f"[LLM] Warning: content slide items=1, target={target_count}, cannot split detail")
+
+        elif len(items) == 2:
+            # 2개인 경우에도 최소 3개까지 보충 시도 (긴 detail이 있으면 분할)
+            longest_idx = 0 if len(items[0].get("detail", "")) >= len(items[1].get("detail", "")) else 1
+            longest_detail = items[longest_idx].get("detail", "")
+            sentences = [s.strip() for s in re.split(r'(?<=[.!?。])\s+', longest_detail) if s.strip() and len(s.strip()) > 5]
+            if len(sentences) >= 2:
+                # 가장 긴 item을 2개로 분할
+                mid = len(sentences) // 2
+                first_half = " ".join(sentences[:mid])
+                second_half = " ".join(sentences[mid:])
+                original_heading = items[longest_idx].get("heading", "")
+                items[longest_idx]["detail"] = first_half
+                new_item = {
+                    "heading": sentences[mid][:30].rstrip('.!?。 '),
+                    "detail": second_half,
+                }
+                items.insert(longest_idx + 1, new_item)
+                slide["items"] = items
 
         elif len(items) == 0:
             print(f"[LLM] Warning: content slide has no items")
@@ -644,6 +662,7 @@ def _map_slide_content_to_placeholders(slide: dict, template_meta: dict) -> dict
     role_map = {}  # role → placeholder_name (단일)
     desc_placeholders = []  # description 역할은 여러 개 가능
     subtitle_placeholders = []  # subtitle 역할도 여러 개 가능
+    number_placeholders = []  # number 역할은 여러 개 가능 (순서 번호 자동 매핑)
 
     for ph in placeholders:
         role = ph.get("role", "")
@@ -654,6 +673,8 @@ def _map_slide_content_to_placeholders(slide: dict, template_meta: dict) -> dict
             desc_placeholders.append(name)
         elif role == "subtitle":
             subtitle_placeholders.append(name)
+        elif role == "number":
+            number_placeholders.append(name)
         elif role not in role_map:
             role_map[role] = name
 
@@ -671,6 +692,11 @@ def _map_slide_content_to_placeholders(slide: dict, template_meta: dict) -> dict
     elif slide_type == "toc":
         _map_if("title", role_map, contents, slide.get("title", "목차"))
         items = slide.get("items", [])
+
+        # number placeholder에 순서 번호 자동 매핑
+        for i, item in enumerate(items):
+            if i < len(number_placeholders):
+                contents[number_placeholders[i]] = str(i + 1)
 
         if subtitle_placeholders and desc_placeholders and items:
             # subtitle에 번호, description에 항목 텍스트 분리 배치
@@ -712,6 +738,9 @@ def _map_slide_content_to_placeholders(slide: dict, template_meta: dict) -> dict
             contents[subtitle_placeholders[0]] = slide["section_subtitle"]
         _map_if("governance", role_map, contents, slide.get("section_num", ""))
         _map_if("body", role_map, contents, slide.get("section_subtitle", ""))
+        # number placeholder에 section_num 매핑
+        if number_placeholders and slide.get("section_num"):
+            contents[number_placeholders[0]] = slide["section_num"]
 
     elif slide_type == "content":
         # 제목, 거버넌스는 무조건 매핑 (필드가 있으면)
@@ -719,6 +748,11 @@ def _map_slide_content_to_placeholders(slide: dict, template_meta: dict) -> dict
         _map_if("governance", role_map, contents, slide.get("governance", ""))
 
         items = slide.get("items", [])
+
+        # number placeholder에 순서 번호 자동 매핑 (1, 2, 3, ...)
+        for i in range(len(items)):
+            if i < len(number_placeholders):
+                contents[number_placeholders[i]] = str(i + 1)
 
         # 부제목/설명을 순서대로 1:1 매핑
         # items[i].heading → subtitle_placeholders[i]
@@ -768,9 +802,11 @@ def _map_slide_content_to_placeholders(slide: dict, template_meta: dict) -> dict
             contents[desc_placeholders[0]] = slide["contact"]
 
     # 빈 placeholder에 대한 처리: 매핑되지 않은 placeholder는 빈 문자열
+    # (number 역할은 매핑 안 된 경우 제거 대상이므로 제외)
     for ph in placeholders:
         name = ph.get("placeholder", "")
-        if name and name not in contents:
+        role = ph.get("role", "")
+        if name and name not in contents and role != "number":
             contents[name] = ""
 
     return contents
@@ -985,11 +1021,11 @@ def _distribute_paragraphs(paragraphs: list[str], num_slides: int) -> list[str]:
 
 # ============ 스트리밍 생성 ============
 
-def _build_generation_prompts(
+async def _build_generation_prompts(
     resources_text: str, instructions: str, slides_meta: list[dict], lang: str = "",
     slide_count: str = "auto",
 ) -> tuple[str, str]:
-    """generate_slide_content와 동일한 시스템/유저 프롬프트 생성 (스트리밍용)"""
+    """DB에서 프롬프트 템플릿을 로드하여 변수를 바인딩한 시스템/유저 프롬프트 생성"""
     slides_description = _build_slides_description(slides_meta)
 
     # 슬라이드 수 지침
@@ -1006,102 +1042,27 @@ def _build_generation_prompts(
         "zh": "请用中文撰写所有内容。",
     }.get(output_lang, "모든 콘텐츠를 한국어로 작성하세요.")
 
-    system_prompt = f"""당신은 기업용 프레젠테이션 구조 설계 및 콘텐츠 전문가입니다.
-주어진 리소스 자료를 분석하여 전문적인 프레젠테이션을 설계합니다.
+    # DB에서 프롬프트 템플릿 로드
+    system_template = await get_prompt_content("slide_generation_system")
+    user_template = await get_prompt_content("slide_generation_user")
 
-## 슬라이드 타입
-1. **title** - 타이틀 슬라이드 (프레젠테이션 시작)
-   필드: title, subtitle, meta_line
-2. **toc** - 목차 슬라이드
-   필드: title, items[] (각 항목: num, text)
-3. **section** - 섹션 구분 간지
-   필드: section_num, section_title, section_subtitle
-4. **content** - 본문 콘텐츠 슬라이드
-   필드: title(제목), governance(거버넌스/섹션태그), items[] (heading=부제목 + detail=설명, 순서대로 매핑), sources[]
-5. **closing** - 마무리 슬라이드
-   필드: title, message, contact
+    # 변수 바인딩
+    system_prompt = system_template.format(
+        lang_instruction=lang_instruction,
+        slide_count_instruction=slide_count_instruction,
+    )
 
-## 콘텐츠 작성 규칙
-1. 제목(title)은 간결하고 임팩트 있게 작성합니다 (최대 30자).
-2. **governance는 해당 슬라이드의 부제목과 설명 내용을 전체적으로 요약한 문장을 작성합니다 (20~50자).** 단순한 섹션 이름이 아니라, 슬라이드 전체 내용의 핵심을 한 문장으로 압축하세요.
-3. **[필수] 본문(content) 슬라이드의 구조**:
-   - 본문 슬라이드는 반드시 title(제목), governance(거버넌스), items[](부제목+설명 쌍) 를 생성합니다.
-   - 각 item은 heading(부제목, 키워드 1~5단어) + detail(설명, 1~3문장) 구조입니다.
-   - heading은 템플릿의 "부제목" 필드에, detail은 "설명" 필드에 순서대로 매핑됩니다.
-   - **카탈로그의 "items를 정확히 N개 생성하세요" 안내를 반드시 따르세요.** 부제목과 설명 필드 수 중 작은 값이 표현 가능한 최대 items 수입니다.
-   - 최소 3개, 최대 4개의 items를 생성하세요. items를 1개만 작성하면 안 됩니다.
-   - 각 item의 heading은 서로 다른 관점/주제를 다뤄야 합니다.
-4. 예시 - subtitle_count=3, description_count=3인 content 슬라이드:
-   {{"type":"content","template_index":3,"title":"디지털 전환 핵심 전략","governance":"클라우드 전환, 데이터 분석, 업무 자동화를 통한 디지털 혁신 추진",
-     "items":[
-       {{"heading":"클라우드 마이그레이션","detail":"기존 온프레미스 인프라를 클라우드로 전환하여 운영 비용을 30% 절감하고 확장성을 확보합니다."}},
-       {{"heading":"데이터 기반 의사결정","detail":"빅데이터 분석 플랫폼을 구축하여 실시간 시장 동향 파악과 고객 행동 예측이 가능해집니다."}},
-       {{"heading":"업무 자동화 도입","detail":"RPA와 AI를 활용한 반복 업무 자동화로 직원 생산성을 40% 이상 향상시킬 수 있습니다."}}
-     ]}}
-5. sources가 있으면 출처를 명시합니다.
-
-## 구조 설계 규칙
-1. 권장 순서: title → toc → (section → content 슬라이드들)... → closing
-2. 각 섹션마다 section(간지) 슬라이드 + 1~3개의 content 슬라이드를 배치합니다.
-   **[필수] 목차(toc) 슬라이드의 items 텍스트는 반드시 section 슬라이드의 section_title과 정확히 일치해야 합니다.** 예: section이 3개면 toc items도 3개이며, 각 text가 해당 section_title과 동일합니다.
-3. **[필수] 전체 슬라이드가 8장 이하일 경우, 목차(toc)와 섹션 간지(section)는 생략하세요.** 구성: title → content 슬라이드들 → closing. 9장 이상일 때만 toc와 section을 포함합니다.
-4. 리소스 내용의 양과 복잡도에 맞게 슬라이드 수를 자유롭게 결정합니다.
-5. template_index는 사용 가능한 템플릿 슬라이드 번호입니다 (카탈로그 참조).
-6. 같은 template_index를 여러 번 사용할 수 있지만, **같은 타입의 템플릿이 여러 개 있으면 돌아가며 다양하게 사용하세요.** 예를 들어 본문 템플릿 3,4,5번이 모두 content 타입이면 3→4→5→3 순으로 번갈아 사용합니다.
-7. 콘텐츠에 맞지 않는 템플릿은 사용하지 않아도 됩니다.
-8. **[필수] 카탈로그의 "템플릿 타입 현황"을 반드시 확인하세요. 미등록(✗) 타입은 절대 생성하지 마세요.**
-9. {lang_instruction}
-10. 반드시 JSON 형식으로만 응답합니다.{slide_count_instruction}"""
-
-    user_prompt = f"""아래 리소스 자료를 분석하여 프레젠테이션을 설계하고 콘텐츠를 생성해주세요.
-
-## 출력 언어
-{lang_instruction}
-
-## 사용자 지침
-{instructions if instructions else "특별한 지침 없음 - 리소스 내용을 보고서 형태로 정리해주세요."}
-
-## 리소스 자료
-{resources_text[:12000]}
-
-## 사용 가능한 템플릿 슬라이드 카탈로그
-{slides_description}
-
-## 응답 형식
-반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요.
-
-```json
-{{
-    "meta": {{
-        "title": "프레젠테이션 제목",
-        "subtitle": "부제목",
-        "author": "작성자/부서",
-        "date": "날짜"
-    }},
-    "slides": [
-        {{
-            "type": "content",
-            "template_index": 3,
-            "title": "슬라이드 제목",
-            "governance": "핵심 포인트들의 내용을 종합적으로 요약한 문장 (20~50자)",
-            "items": [
-                {{"heading": "첫 번째 핵심 포인트", "detail": "상세 설명 1~3문장."}},
-                {{"heading": "두 번째 핵심 포인트", "detail": "상세 설명 1~3문장."}},
-                {{"heading": "세 번째 핵심 포인트", "detail": "상세 설명 1~3문장."}}
-            ],
-            "sources": ["출처1"]
-        }}
-    ],
-    "sources": [
-        {{"ref": "source_id", "title": "출처 제목"}}
-    ]
-}}
-```"""
+    user_prompt = user_template.format(
+        lang_instruction=lang_instruction,
+        instructions=instructions if instructions else "특별한 지침 없음 - 리소스 내용을 보고서 형태로 정리해주세요.",
+        resources_text=resources_text[:12000],
+        slides_description=slides_description,
+    )
 
     return system_prompt, user_prompt
 
 
-async def _stream_claude_api(system_prompt: str, user_prompt: str):
+async def _stream_claude_api(system_prompt: str, user_prompt: str, model: str = ""):
     """Claude API 스트리밍 호출 - text delta를 async yield"""
     url = "https://api.anthropic.com/v1/messages"
     headers = {
@@ -1110,12 +1071,17 @@ async def _stream_claude_api(system_prompt: str, user_prompt: str):
         "content-type": "application/json",
     }
     payload = {
-        "model": settings.ANTHROPIC_MODEL,
-        "max_tokens": settings.ANTHROPIC_MAX_TOKENS,
+        "model": model or settings.ANTHROPIC_MODEL,
         "system": system_prompt,
         "messages": [{"role": "user", "content": user_prompt}],
         "stream": True,
     }
+    # 모델별 max_tokens 적용
+    effective_model = model or settings.ANTHROPIC_MODEL
+    if effective_model == settings.ANTHROPIC_OUTLINE_MODEL and settings.ANTHROPIC_OUTLINE_MAX_TOKENS > 0:
+        payload["max_tokens"] = settings.ANTHROPIC_OUTLINE_MAX_TOKENS
+    elif settings.ANTHROPIC_MAX_TOKENS > 0:
+        payload["max_tokens"] = settings.ANTHROPIC_MAX_TOKENS
 
     async with httpx.AsyncClient(timeout=180.0) as client:
         async with client.stream("POST", url, json=payload, headers=headers) as response:
@@ -1159,28 +1125,35 @@ async def generate_slide_content_stream(
         })
         return
 
-    system_prompt, user_prompt = _build_generation_prompts(
+    system_prompt, user_prompt = await _build_generation_prompts(
         resources_text, instructions, slides_meta, lang,
         slide_count=slide_count,
     )
 
     try:
         full_text = ""
-        async for delta in _stream_claude_api(system_prompt, user_prompt):
+        async for delta in _stream_claude_api(system_prompt, user_prompt, model=settings.ANTHROPIC_OUTLINE_MODEL):
             full_text += delta
             yield ("delta", delta)
 
+        print(f"[LLM] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {settings.ANTHROPIC_OUTLINE_MODEL})")
         parsed = _parse_rich_schema(full_text, slides_meta)
         if parsed:
+            slide_count_result = len(parsed.get("slides", []))
+            raw_count = len(parsed.get("raw_slides", []))
+            print(f"[LLM] 파싱 성공 - slides: {slide_count_result}개, raw_slides: {raw_count}개")
             yield ("result", parsed)
         else:
+            print(f"[LLM] 파싱 실패 → 폴백 콘텐츠 사용")
             yield ("result", {
                 "slides": _fallback_content(resources_text, slides_meta),
                 "meta": {},
                 "sources": [],
             })
     except Exception as e:
+        import traceback
         print(f"[LLM] Streaming 호출 실패: {e}")
+        traceback.print_exc()
         yield ("result", {
             "slides": _fallback_content(resources_text, slides_meta),
             "meta": {},

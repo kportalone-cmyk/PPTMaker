@@ -3,7 +3,7 @@ from bson import ObjectId
 from datetime import datetime
 from models.resource import ResourceCreate, WebSearchRequest
 from services.mongo_service import get_db
-from services.auth_service import decode_jwt_token
+from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible
 from services.search_service import search_web
 from services.file_service import extract_text_from_file
 from config import settings
@@ -14,17 +14,24 @@ import uuid
 router = APIRouter(tags=["resources"])
 
 
-def get_user_key(jwt_token: str) -> str:
+async def get_user_key(jwt_token: str) -> str:
+    """JWT에서 user_key 추출 (내부/외부 JWT 모두 지원)"""
     payload = decode_jwt_token(jwt_token)
     if not payload:
         raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다")
-    return payload.get("user_key", "")
+    user_key = extract_user_key(payload)
+    if user_key:
+        return user_key
+    user = await get_user_flexible(payload)
+    if user:
+        return user.get("ky", "")
+    raise HTTPException(status_code=401, detail="사용자를 확인할 수 없습니다")
 
 
 @router.get("/{jwt_token}/api/resources/content/{resource_id}")
 async def get_resource_content(jwt_token: str, resource_id: str):
     """리소스 내용 조회"""
-    get_user_key(jwt_token)
+    await get_user_key(jwt_token)
     db = get_db()
     resource = await db.resources.find_one({"_id": ObjectId(resource_id)})
     if not resource:
@@ -41,7 +48,7 @@ async def get_resource_content(jwt_token: str, resource_id: str):
 @router.get("/{jwt_token}/api/resources/{project_id}")
 async def list_resources(jwt_token: str, project_id: str):
     """프로젝트 리소스 목록"""
-    get_user_key(jwt_token)
+    await get_user_key(jwt_token)
     db = get_db()
     cursor = db.resources.find({"project_id": project_id}).sort("created_at", -1)
     resources = []
@@ -54,7 +61,7 @@ async def list_resources(jwt_token: str, project_id: str):
 @router.post("/{jwt_token}/api/resources/text")
 async def add_text_resource(jwt_token: str, data: ResourceCreate):
     """텍스트 리소스 추가 (복사 붙여넣기) - 원본 그대로 저장"""
-    get_user_key(jwt_token)
+    await get_user_key(jwt_token)
     db = get_db()
     doc = {
         "project_id": data.project_id,
@@ -78,7 +85,7 @@ async def upload_file_resource(
     file: UploadFile = File(...)
 ):
     """파일 리소스 업로드 - 텍스트 추출 후 마크다운 형식으로 저장"""
-    get_user_key(jwt_token)
+    await get_user_key(jwt_token)
 
     # 허용 확장자 확인
     allowed_ext = {".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".pdf", ".txt", ".csv"}
@@ -116,7 +123,7 @@ async def upload_file_resource(
 @router.post("/{jwt_token}/api/resources/web-search")
 async def add_web_search_resource(jwt_token: str, data: WebSearchRequest):
     """웹 검색 후 각 출처 페이지의 원본 콘텐츠를 개별 리소스로 저장"""
-    get_user_key(jwt_token)
+    await get_user_key(jwt_token)
 
     search_result = await search_web(data.query)
 
@@ -151,7 +158,7 @@ async def add_web_search_resource(jwt_token: str, data: WebSearchRequest):
 @router.delete("/{jwt_token}/api/resources/{resource_id}")
 async def delete_resource(jwt_token: str, resource_id: str):
     """리소스 삭제"""
-    get_user_key(jwt_token)
+    await get_user_key(jwt_token)
     db = get_db()
     resource = await db.resources.find_one({"_id": ObjectId(resource_id)})
     if resource and resource.get("file_path"):

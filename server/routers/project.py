@@ -4,24 +4,31 @@ from bson import ObjectId
 from datetime import datetime
 from models.project import ProjectCreate, ProjectUpdate
 from services.mongo_service import get_db
-from services.auth_service import decode_jwt_token
+from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible
 
 router = APIRouter(tags=["projects"])
 
 
-def get_user_key(jwt_token: str) -> str:
-    """JWT에서 user_key 추출"""
-    from services.auth_service import decode_jwt_token
+async def get_user_key(jwt_token: str) -> str:
+    """JWT에서 user_key 추출 (내부/외부 JWT 모두 지원)"""
     payload = decode_jwt_token(jwt_token)
     if not payload:
         raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다")
-    return payload.get("user_key", "")
+    # extract_user_key로 user_key 또는 email 추출
+    user_key = extract_user_key(payload)
+    if user_key:
+        return user_key
+    # userid → em 매칭으로 사용자 조회 후 ky 반환
+    user = await get_user_flexible(payload)
+    if user:
+        return user.get("ky", "")
+    raise HTTPException(status_code=401, detail="사용자를 확인할 수 없습니다")
 
 
 @router.get("/{jwt_token}/api/projects")
 async def list_projects(jwt_token: str):
     """사용자 프로젝트 목록 조회"""
-    user_key = get_user_key(jwt_token)
+    user_key = await get_user_key(jwt_token)
     db = get_db()
     cursor = db.projects.find({"user_key": user_key}).sort("created_at", -1)
     projects = []
@@ -34,7 +41,7 @@ async def list_projects(jwt_token: str):
 @router.post("/{jwt_token}/api/projects")
 async def create_project(jwt_token: str, data: ProjectCreate):
     """프로젝트 생성"""
-    user_key = get_user_key(jwt_token)
+    user_key = await get_user_key(jwt_token)
     db = get_db()
     doc = {
         "name": data.name,
@@ -54,7 +61,7 @@ async def create_project(jwt_token: str, data: ProjectCreate):
 @router.get("/{jwt_token}/api/projects/{project_id}")
 async def get_project(jwt_token: str, project_id: str):
     """프로젝트 상세 조회"""
-    user_key = get_user_key(jwt_token)
+    user_key = await get_user_key(jwt_token)
     db = get_db()
     project = await db.projects.find_one({
         "_id": ObjectId(project_id),
@@ -88,7 +95,7 @@ async def get_project(jwt_token: str, project_id: str):
 @router.put("/{jwt_token}/api/projects/{project_id}")
 async def update_project(jwt_token: str, project_id: str, data: ProjectUpdate):
     """프로젝트 수정"""
-    user_key = get_user_key(jwt_token)
+    user_key = await get_user_key(jwt_token)
     db = get_db()
     update_data = {k: v for k, v in data.dict().items() if v is not None}
     update_data["updated_at"] = datetime.utcnow()
@@ -104,7 +111,7 @@ async def update_project(jwt_token: str, project_id: str, data: ProjectUpdate):
 @router.post("/{jwt_token}/api/projects/{project_id}/reset")
 async def reset_project(jwt_token: str, project_id: str):
     """프로젝트 초기화 (생성 슬라이드 삭제 + 상태 초기화, 리소스 유지)"""
-    user_key = get_user_key(jwt_token)
+    user_key = await get_user_key(jwt_token)
     db = get_db()
 
     project = await db.projects.find_one({
@@ -133,7 +140,7 @@ async def reset_project(jwt_token: str, project_id: str):
 @router.delete("/{jwt_token}/api/projects/{project_id}")
 async def delete_project(jwt_token: str, project_id: str):
     """프로젝트 삭제 (리소스, 생성된 슬라이드도 삭제)"""
-    user_key = get_user_key(jwt_token)
+    user_key = await get_user_key(jwt_token)
     db = get_db()
     result = await db.projects.delete_one({
         "_id": ObjectId(project_id),

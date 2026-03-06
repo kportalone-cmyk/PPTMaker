@@ -189,11 +189,7 @@ function loadWebFonts(fonts) {
         if (document.getElementById(linkId)) return;
 
         if (font.url.includes('fonts.googleapis.com') || font.url.endsWith('.css')) {
-            const link = document.createElement('link');
-            link.id = linkId;
-            link.rel = 'stylesheet';
-            link.href = font.url;
-            document.head.appendChild(link);
+            _loadFontCSS(linkId, font.url, font.family);
         } else {
             const fontFace = new FontFace(font.family, 'url(' + font.url + ')');
             fontFace.load().then(function(loaded) {
@@ -203,6 +199,23 @@ function loadWebFonts(fonts) {
             });
         }
     });
+}
+
+function _loadFontCSS(linkId, url, family, retries) {
+    if (retries === undefined) retries = 2;
+    const link = document.createElement('link');
+    link.id = linkId;
+    link.rel = 'stylesheet';
+    link.href = url;
+    link.crossOrigin = 'anonymous';
+    link.onerror = function() {
+        console.warn('Font CSS load failed:', family, '(retries left:', retries, ')');
+        link.remove();
+        if (retries > 0) {
+            setTimeout(function() { _loadFontCSS(linkId, url, family, retries - 1); }, 2000);
+        }
+    };
+    document.head.appendChild(link);
 }
 
 function removeWebFont(family) {
@@ -336,6 +349,98 @@ async function deleteFontItem(fontId, fontName, fontFamily) {
         showToast('삭제 실패: ' + e.message, 'error');
     }
 }
+
+// ============ 프롬프트 관리 모달 ============
+let _promptList = [];
+let _editingPromptId = null;
+
+async function showPromptManageModal() {
+    await loadPromptList();
+    showPromptList();
+    $('#promptManageModal').show();
+}
+
+async function loadPromptList() {
+    try {
+        const res = await apiGet('/api/admin/prompts');
+        _promptList = res.prompts || [];
+        renderPromptList();
+    } catch (e) {
+        showToast('프롬프트 로드 실패: ' + e.message, 'error');
+    }
+}
+
+function renderPromptList() {
+    const container = $('#promptListContainer');
+    container.empty();
+
+    if (_promptList.length === 0) {
+        container.html('<div style="padding:16px;text-align:center;color:#999;font-size:13px;">등록된 프롬프트가 없습니다</div>');
+        return;
+    }
+
+    _promptList.forEach(function(p) {
+        const updatedAt = p.updated_at ? new Date(p.updated_at).toLocaleString('ko-KR') : '';
+        container.append(`
+            <div class="prompt-list-item" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #f0f0f0;cursor:pointer;" onclick="editPrompt('${p._id}')">
+                <div>
+                    <div style="font-size:14px;font-weight:500;color:#333;">${escapeHtml(p.name)}</div>
+                    <div style="font-size:11px;color:#999;margin-top:2px;">${escapeHtml(p.description || '')}</div>
+                    <div style="font-size:11px;color:#bbb;margin-top:2px;">Key: ${escapeHtml(p.key)} | 수정: ${updatedAt}</div>
+                </div>
+                <div style="color:#2d5a8e;font-size:12px;white-space:nowrap;margin-left:12px;">편집 →</div>
+            </div>
+        `);
+    });
+}
+
+function showPromptList() {
+    $('#promptListView').show();
+    $('#promptEditView').hide().css('display', 'none');
+    _editingPromptId = null;
+}
+
+function editPrompt(promptId) {
+    const p = _promptList.find(item => item._id === promptId);
+    if (!p) return;
+
+    _editingPromptId = promptId;
+    $('#promptEditName').text(p.name);
+    $('#promptEditDesc').text(p.description || '');
+    $('#promptEditContent').val(p.content);
+
+    $('#promptListView').hide();
+    $('#promptEditView').css('display', 'flex').show();
+}
+
+async function savePrompt() {
+    if (!_editingPromptId) return;
+    const content = $('#promptEditContent').val();
+
+    try {
+        await apiPut('/api/admin/prompts/' + _editingPromptId, { content });
+        showToast('프롬프트가 저장되었습니다', 'success');
+        await loadPromptList();
+        showPromptList();
+    } catch (e) {
+        showToast('저장 실패: ' + e.message, 'error');
+    }
+}
+
+async function resetPrompt() {
+    if (!_editingPromptId) return;
+    if (!confirm('프롬프트를 기본값으로 복원하시겠습니까? 현재 수정 내용이 사라집니다.')) return;
+
+    try {
+        const res = await apiPost('/api/admin/prompts/' + _editingPromptId + '/reset', {});
+        $('#promptEditContent').val(res.content);
+        showToast('기본값으로 복원되었습니다', 'success');
+        await loadPromptList();
+    } catch (e) {
+        showToast('복원 실패: ' + e.message, 'error');
+    }
+}
+
 
 // ============ 템플릿 관리 ============
 async function loadTemplates() {

@@ -31,6 +31,9 @@ const state = {
 
 let _animationCancelled = false;
 let _isAnimating = false;
+let _isGenerating = false;
+let _abortController = null;
+let _streamReader = null;
 
 // 탭 전환 시 애니메이션 즉시 완료 처리
 document.addEventListener('visibilitychange', () => {
@@ -134,6 +137,9 @@ const I18N = {
         msgConfirmDelete: '이 프로젝트를 삭제하시겠습니까?',
         msgConfirmDeleteRes: '이 리소스를 삭제하시겠습니까?',
         searching: '검색 중...',
+        stopBtn: '중단',
+        restartBtn: '재생성',
+        msgStopped: '생성이 중단되었습니다',
         adminPage: '관리자 페이지',
         authChecking: '접속정보 확인중입니다',
         authCheckingSub: '잠시만 기다려주세요...',
@@ -233,6 +239,9 @@ const I18N = {
         msgConfirmDelete: 'Delete this project?',
         msgConfirmDeleteRes: 'Delete this resource?',
         searching: 'Searching...',
+        stopBtn: 'Stop',
+        restartBtn: 'Regenerate',
+        msgStopped: 'Generation stopped',
         adminPage: 'Admin',
         authChecking: 'Verifying access...',
         authCheckingSub: 'Please wait a moment...',
@@ -332,6 +341,9 @@ const I18N = {
         msgConfirmDelete: 'このプロジェクトを削除しますか？',
         msgConfirmDeleteRes: 'このリソースを削除しますか？',
         searching: '検索中...',
+        stopBtn: '中断',
+        restartBtn: '再生成',
+        msgStopped: '生成が中断されました',
         adminPage: '管理者ページ',
         authChecking: 'アクセス情報を確認中です',
         authCheckingSub: 'しばらくお待ちください...',
@@ -431,6 +443,9 @@ const I18N = {
         msgConfirmDelete: '确定删除此项目？',
         msgConfirmDeleteRes: '确定删除此资源？',
         searching: '搜索中...',
+        stopBtn: '停止',
+        restartBtn: '重新生成',
+        msgStopped: '生成已停止',
         adminPage: '管理后台',
         authChecking: '正在验证访问信息',
         authCheckingSub: '请稍候...',
@@ -491,7 +506,14 @@ function applyI18n() {
     $('.i18n-noSlides').text(t('noSlides'));
     $('.i18n-presentationView').text(t('presentationView'));
     $('.i18n-copyShareLink').text(t('copyShareLink'));
-    $('.i18n-generateBtn').text(t('generateBtn'));
+    // 버튼 상태에 따라 텍스트 변경
+    if (_isGenerating) {
+        // 생성 중이면 중단 버튼 유지
+    } else if (state.generatedSlides.length > 0) {
+        $('.i18n-generateBtn').text(t('restartBtn'));
+    } else {
+        $('.i18n-generateBtn').text(t('generateBtn'));
+    }
     $('.i18n-slideCountAuto').text(t('slideCountAuto'));
     $('#instructionsInput').attr('placeholder', t('instructionsPlaceholder'));
 
@@ -769,11 +791,7 @@ function loadWebFonts(fonts) {
         if (document.getElementById(linkId)) return;
 
         if (font.url.includes('fonts.googleapis.com') || font.url.endsWith('.css')) {
-            const link = document.createElement('link');
-            link.id = linkId;
-            link.rel = 'stylesheet';
-            link.href = font.url;
-            document.head.appendChild(link);
+            _loadFontCSS(linkId, font.url, font.family);
         } else {
             const fontFace = new FontFace(font.family, 'url(' + font.url + ')');
             fontFace.load().then(function(loaded) {
@@ -783,6 +801,23 @@ function loadWebFonts(fonts) {
             });
         }
     });
+}
+
+function _loadFontCSS(linkId, url, family, retries) {
+    if (retries === undefined) retries = 2;
+    const link = document.createElement('link');
+    link.id = linkId;
+    link.rel = 'stylesheet';
+    link.href = url;
+    link.crossOrigin = 'anonymous';
+    link.onerror = function() {
+        console.warn('Font CSS load failed:', family, '(retries left:', retries, ')');
+        link.remove();
+        if (retries > 0) {
+            setTimeout(function() { _loadFontCSS(linkId, url, family, retries - 1); }, 2000);
+        }
+    };
+    document.head.appendChild(link);
 }
 
 async function loadAndApplyWebFonts() {
@@ -968,6 +1003,9 @@ async function openProject(projectId) {
         hideLoading();
         renderProjectWorkspace();
         renderProjectList(); // 사이드바 활성 상태 업데이트
+
+        // 배경/오브젝트 이미지 백그라운드 프리로드
+        _preloadSlideImages(state.generatedSlides);
     } catch (e) {
         hideLoading();
         showToast(t('msgLoadingProject'), 'error');
@@ -1447,10 +1485,13 @@ async function generatePPT() {
     if (!templateId) { showToast(t('msgSelectTemplate'), 'error'); return; }
     if (state.resources.length === 0) { showToast(t('msgAddResources'), 'error'); return; }
 
-    $('#btnGenerate').prop('disabled', true);
+    _isGenerating = true;
     _animationCancelled = true;
     state.generatedSlides = [];
     state.currentSlideIndex = 0;
+
+    // 생성 중 → 중단 버튼으로 전환
+    _showStopButton();
 
     // 로딩 오버레이 대신 슬라이드 프리뷰 영역 표시 + 아웃라인 탭
     $('#slideEmpty').hide();
@@ -1494,6 +1535,8 @@ async function generatePPT() {
         </div>
     `);
 
+    _abortController = new AbortController();
+
     try {
         const response = await fetch(`/${state.jwtToken}/api/generate/stream`, {
             method: 'POST',
@@ -1505,6 +1548,7 @@ async function generatePPT() {
                 lang: lang,
                 slide_count: slideCount,
             }),
+            signal: _abortController.signal,
         });
 
         if (!response.ok) {
@@ -1513,12 +1557,12 @@ async function generatePPT() {
             throw new Error(errMsg);
         }
 
-        const reader = response.body.getReader();
+        _streamReader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
 
         while (true) {
-            const { done, value } = await reader.read();
+            const { done, value } = await _streamReader.read();
             if (done) break;
 
             buffer += decoder.decode(value, { stream: true });
@@ -1538,18 +1582,26 @@ async function generatePPT() {
             }
         }
     } catch (e) {
-        showToast(e.message || '슬라이드 생성 중 오류가 발생했습니다.', 'error');
-        console.error('Generate stream error:', e);
+        if (e.name === 'AbortError') {
+            // 사용자가 중단한 경우 - 정상 처리
+            console.log('Generation aborted by user');
+        } else {
+            showToast(e.message || '슬라이드 생성 중 오류가 발생했습니다.', 'error');
+            console.error('Generate stream error:', e);
+        }
         if (state.generatedSlides.length === 0) {
             $('#slideEmpty').show();
             $('#slidePreview').hide();
             $('#wsSlideTools').hide();
         }
     } finally {
+        _isGenerating = false;
+        _streamReader = null;
+        _abortController = null;
         $('#canvasLoadingOverlay').remove();
-        $('#btnGenerate').prop('disabled', false);
         $('#streamingProgress').remove();
         $('#slideTextList').removeClass('streaming-active');
+        _showGenerateOrRestartButton();
     }
 }
 
@@ -1652,8 +1704,22 @@ function _handleStreamEvent(data) {
             $('#slidePreview').css('display', 'flex');
             $('#wsSlideTools').css('display', 'flex');
             renderSlideTextPanel();
+            // 배경/오브젝트 이미지 프리로드 (프레젠테이션 대비)
+            _preloadSlideImages(state.generatedSlides);
             // Slide 탭으로 전환 후 타이핑 애니메이션 시작
             animateSlideGeneration();
+            break;
+
+        case 'stopped':
+            showToast(data.message || t('msgStopped'), 'info');
+            if (state.generatedSlides.length > 0) {
+                state.currentSlideIndex = 0;
+                renderSlideAtIndex(0);
+                renderSlideThumbnails();
+                renderSlideThumbList();
+                updateSlideNav();
+                renderSlideTextPanel();
+            }
             break;
 
         case 'error':
@@ -1661,6 +1727,69 @@ function _handleStreamEvent(data) {
             break;
     }
 }
+
+
+async function stopGeneration() {
+    if (!_isGenerating) return;
+
+    // 중복 클릭 방지
+    $('#btnStop').prop('disabled', true);
+
+    try {
+        // 1. 서버에 중단 요청 (MongoDB 상태 변경)
+        await fetch(`/${state.jwtToken}/api/generate/stop/${state.currentProject._id}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+    } catch (e) {
+        console.warn('Stop request failed:', e);
+    }
+
+    // 2. 프론트엔드 연결 즉시 끊기
+    if (_abortController) {
+        _abortController.abort();
+    }
+    if (_streamReader) {
+        try { await _streamReader.cancel(); } catch (_) {}
+    }
+}
+
+
+function _showStopButton() {
+    const $btn = $('#btnGenerate');
+    $btn.attr('id', 'btnStop')
+        .attr('onclick', 'stopGeneration()')
+        .removeClass('btn-generate')
+        .addClass('btn-stop')
+        .prop('disabled', false)
+        .html(`
+            <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                <rect x="3" y="3" width="10" height="10" rx="1.5"/>
+            </svg>
+            <span>${t('stopBtn')}</span>
+        `);
+}
+
+
+function _showGenerateOrRestartButton() {
+    const $btn = $('#btnStop').length ? $('#btnStop') : $('#btnGenerate');
+    const hasSlides = state.generatedSlides.length > 0;
+
+    $btn.attr('id', 'btnGenerate')
+        .attr('onclick', 'generatePPT()')
+        .removeClass('btn-stop')
+        .addClass('btn-generate')
+        .prop('disabled', false)
+        .html(hasSlides
+            ? `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+               </svg>
+               <span class="i18n-generateBtn">${t('restartBtn')}</span>`
+            : `<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 3L5 8.5l8 5.5V3z"/></svg>
+               <span class="i18n-generateBtn">${t('generateBtn')}</span>`
+        );
+}
+
 
 function _appendSlideOutline(slide, index) {
     const typeLabels = {
@@ -2233,6 +2362,15 @@ async function animateSlideGeneration() {
 
         state.currentSlideIndex = i;
         renderSlideAtIndex(i);
+
+        // 배경 + 오브젝트 이미지 로드 완료까지 대기
+        const slide = state.generatedSlides[i];
+        const imgWaits = [];
+        if (slide?.background_image) imgWaits.push(_waitForImage(slide.background_image));
+        (slide?.objects || []).forEach(obj => {
+            if (obj.obj_type === 'image' && obj.image_url) imgWaits.push(_waitForImage(obj.image_url));
+        });
+        if (imgWaits.length > 0) await Promise.all(imgWaits);
 
         // 텍스트가 있는 모든 프리뷰 오브젝트 수집
         const textEls = [];
@@ -3134,11 +3272,25 @@ function _exitEditModeClean() {
 let presentationIndex = 0;
 let _presActivePanel = 'A'; // 'A' 또는 'B' - 현재 활성 패널
 
-function startPresentation() {
+async function startPresentation() {
     if (state.generatedSlides.length === 0) {
         showToast(t('noSlides'), 'error');
         return;
     }
+
+    // 모든 배경 이미지 + 오브젝트 이미지를 사전 로딩
+    const imageUrls = new Set();
+    state.generatedSlides.forEach(slide => {
+        if (slide.background_image) imageUrls.add(slide.background_image);
+        (slide.objects || []).forEach(obj => {
+            if (obj.obj_type === 'image' && obj.image_url) imageUrls.add(obj.image_url);
+        });
+    });
+
+    if (imageUrls.size > 0) {
+        await _preloadImages([...imageUrls]);
+    }
+
     presentationIndex = 0;
     _presActivePanel = 'A';
     $('#presentationSlideA').addClass('active');
@@ -3163,6 +3315,47 @@ function startPresentation() {
             exitPresentation();
         }
     });
+}
+
+
+function _preloadImages(urls) {
+    return Promise.all(urls.map(url =>
+        new Promise(resolve => {
+            const img = new Image();
+            img.onload = resolve;
+            img.onerror = resolve; // 실패해도 계속 진행
+            img.src = url;
+            // 10초 타임아웃
+            setTimeout(resolve, 10000);
+        })
+    ));
+}
+
+
+function _waitForImage(url) {
+    return new Promise(resolve => {
+        const img = new Image();
+        img.onload = resolve;
+        img.onerror = resolve;
+        img.src = url;
+        // 이미 캐시되어 있으면 즉시 resolve
+        if (img.complete) { resolve(); return; }
+        // 5초 타임아웃
+        setTimeout(resolve, 5000);
+    });
+}
+
+
+function _preloadSlideImages(slides) {
+    if (!slides || slides.length === 0) return;
+    const urls = new Set();
+    slides.forEach(slide => {
+        if (slide.background_image) urls.add(slide.background_image);
+        (slide.objects || []).forEach(obj => {
+            if (obj.obj_type === 'image' && obj.image_url) urls.add(obj.image_url);
+        });
+    });
+    if (urls.size > 0) _preloadImages([...urls]);
 }
 
 let _presTransitioning = false;

@@ -67,6 +67,9 @@ body {
 .font-badge.web { background: #d4edda; color: #155724; }
 .font-badge.system { background: #e9ecef; color: #6c757d; }
 
+.prompt-list-item:hover { background: #f8f9fa; }
+.prompt-list-item:last-child { border-bottom: none !important; }
+
 /* 메인 컨테이너 */
 .main-container {
     margin-top: 56px;

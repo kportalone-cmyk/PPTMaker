@@ -1759,6 +1759,25 @@ body {
 .btn-generate:active { transform: scale(0.97); }
 .btn-generate:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.btn-stop {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 20px;
+    background: #ef4444;
+    color: white;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background var(--transition), transform var(--transition);
+}
+.btn-stop:hover { background: #dc2626; }
+.btn-stop:active { transform: scale(0.97); }
+.btn-stop:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* ============ 모달 ============ */
 .modal-overlay {
     position: fixed;

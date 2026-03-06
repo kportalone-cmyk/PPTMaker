@@ -47,6 +47,9 @@ async def init_indexes():
     # fonts 컬렉션
     await db.fonts.create_index("name", unique=True)
 
+    # prompts 컬렉션
+    await db.prompts.create_index("key", unique=True)
+
     # 조직도 인덱스
     org_db = get_org_db()
     org_col = org_db[settings.ORG_COLLECTION]
