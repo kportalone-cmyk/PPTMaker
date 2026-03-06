@@ -67,7 +67,7 @@ async def recommend_slide(template_id: str, content_meta: dict) -> dict | None:
 
 
 async def get_all_templates_summary() -> list:
-    """모든 템플릿의 요약 정보 (사용자 선택용)"""
+    """모든 템플릿의 요약 정보 (사용자 선택용) - 첫 슬라이드 포함"""
     db = get_db()
     cursor = db.templates.find().sort("name", 1)
     templates = []
@@ -76,5 +76,15 @@ async def get_all_templates_summary() -> list:
         # 슬라이드 수 포함
         slide_count = await db.slides.count_documents({"template_id": str(t["_id"])})
         t["slide_count"] = slide_count
+        # 첫 번째 슬라이드 (썸네일 미리보기용)
+        first_slide = await db.slides.find_one(
+            {"template_id": str(t["_id"])},
+            sort=[("order", 1)]
+        )
+        if first_slide:
+            first_slide["_id"] = str(first_slide["_id"])
+            t["first_slide"] = first_slide
+        else:
+            t["first_slide"] = None
         templates.append(t)
     return templates

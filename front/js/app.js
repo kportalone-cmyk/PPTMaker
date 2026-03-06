@@ -14,6 +14,7 @@ const state = {
     generatedSlides: [],
     currentSlideIndex: 0,
     templates: [],
+    selectedTemplateId: null,
     searchResults: [],
     searchHighlightIndex: -1,
     lastWebSearchResult: null,
@@ -998,9 +999,8 @@ function renderProjectWorkspace() {
     }
 
     // 템플릿 선택 복원
-    if (state.currentProject.template_id) {
-        $('#templateSelect').val(state.currentProject.template_id);
-    }
+    state.selectedTemplateId = state.currentProject.template_id || null;
+    updateTemplateButtonLabel();
 }
 
 function showEditProjectModal() {
@@ -1055,6 +1055,8 @@ async function executeProjectReset() {
         state.generatedSlides = [];
         state.currentProject.status = 'draft';
         state.currentProject.template_id = null;
+        state.selectedTemplateId = null;
+        updateTemplateButtonLabel();
         hideLoading();
         renderProjectWorkspace();
         showToast(t('msgResetDone') || '프로젝트가 초기화되었습니다', 'success');
@@ -1355,14 +1357,68 @@ async function loadTemplates() {
     try {
         const res = await apiGet('/api/templates');
         state.templates = res.templates || [];
-        const select = $('#templateSelect');
-        select.empty().append(`<option value="">${t('selectTemplatePlaceholder')}</option>`);
-        state.templates.forEach(tmpl => {
-            select.append(`<option value="${tmpl._id}">${escapeHtml(tmpl.name)} (${tmpl.slide_count || 0})</option>`);
-        });
+        updateTemplateButtonLabel();
     } catch (e) {
         console.error('Template load failed:', e);
     }
+}
+
+function updateTemplateButtonLabel() {
+    if (state.selectedTemplateId) {
+        const tmpl = state.templates.find(t => t._id === state.selectedTemplateId);
+        if (tmpl) {
+            $('#templateSelectLabel').text(tmpl.name);
+            $('#templateSelectBtn').addClass('has-value');
+            return;
+        }
+    }
+    $('#templateSelectLabel').text(t('selectTemplatePlaceholder') || '템플릿을 선택하세요');
+    $('#templateSelectBtn').removeClass('has-value');
+}
+
+function openTemplatePickerModal() {
+    const grid = $('#templatePickerGrid');
+    grid.empty();
+
+    if (state.templates.length === 0) {
+        grid.append('<div style="text-align:center;padding:40px;color:var(--text-muted);">등록된 템플릿이 없습니다</div>');
+        $('#templatePickerModal').show();
+        return;
+    }
+
+    state.templates.forEach(tmpl => {
+        const isActive = state.selectedTemplateId === tmpl._id;
+        const card = $(`
+            <div class="template-picker-card ${isActive ? 'active' : ''}" onclick="selectTemplateFromPicker('${tmpl._id}')">
+                <div class="template-picker-thumb"></div>
+                <div class="template-picker-info">
+                    <div class="template-picker-name">${escapeHtml(tmpl.name)}</div>
+                    <div class="template-picker-count">${tmpl.slide_count || 0}개 슬라이드</div>
+                </div>
+            </div>
+        `);
+
+        // 첫 번째 슬라이드 썸네일 렌더링
+        const thumbContainer = card.find('.template-picker-thumb');
+        if (tmpl.first_slide) {
+            const slideData = { ...tmpl.first_slide };
+            // 슬라이드 배경이 없으면 템플릿 배경 사용
+            if (!slideData.background_image && tmpl.background_image) {
+                slideData.background_image = tmpl.background_image;
+            }
+            renderSlideToContainer(thumbContainer, slideData, 240, 135);
+        }
+
+        grid.append(card);
+    });
+
+    $('#templatePickerModal').show();
+}
+
+function selectTemplateFromPicker(templateId) {
+    state.selectedTemplateId = templateId;
+    updateTemplateButtonLabel();
+    closeModal('templatePickerModal');
 }
 
 async function loadSupportedLangs() {
@@ -1383,7 +1439,7 @@ async function loadSupportedLangs() {
 
 // ============ PPT 생성 ============
 async function generatePPT() {
-    const templateId = $('#templateSelect').val();
+    const templateId = state.selectedTemplateId;
     const instructions = $('#instructionsInput').val().trim();
     const lang = $('#langSelect').val();
     const slideCount = $('#slideCountSelect').val();

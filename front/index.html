@@ -368,9 +368,10 @@
                         </div>
                         <div class="input-actions">
                             <div class="input-actions-left">
-                                <select id="templateSelect" class="template-selector">
-                                    <option value="">템플릿 선택</option>
-                                </select>
+                                <button id="templateSelectBtn" class="template-selector" onclick="openTemplatePickerModal()">
+                                    <span id="templateSelectLabel">템플릿을 선택하세요</span>
+                                    <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" style="flex-shrink:0;opacity:0.5;"><path d="M2.5 4.5L6 8l3.5-3.5"/></svg>
+                                </button>
                                 <select id="langSelect" class="lang-selector">
                                     <option value="">기본 언어</option>
                                 </select>
@@ -537,6 +538,19 @@
             <div class="confirm-actions">
                 <button class="confirm-btn-cancel" onclick="closeModal('resetConfirmModal')">취소</button>
                 <button class="confirm-btn-danger" onclick="executeProjectReset()">초기화</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 템플릿 선택 모달 -->
+    <div class="modal-overlay" id="templatePickerModal" style="display:none;">
+        <div class="modal-card" style="max-width:720px;">
+            <div class="modal-header">
+                <h3>템플릿을 선택하세요</h3>
+                <button class="modal-close" onclick="closeModal('templatePickerModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="templatePickerGrid" class="template-picker-grid"></div>
             </div>
         </div>
     </div>
