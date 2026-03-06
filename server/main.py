@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from config import settings
-from services.mongo_service import init_indexes, close_connection
+from services.mongo_service import init_indexes, close_connection, close_connection_sync
 from routers import auth, template, project, resource, generate, font, prompt
 from utils.versioning import get_file_version
 
@@ -31,6 +31,8 @@ class StaticCacheMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """서버 시작/종료 이벤트"""
+    import asyncio
+
     # 시작 시 인덱스 초기화
     await init_indexes()
     print("MongoDB 인덱스 초기화 완료")
@@ -46,10 +48,12 @@ async def lifespan(app: FastAPI):
 
     try:
         yield
+    except asyncio.CancelledError:
+        pass
     finally:
         # 종료 시 연결 해제 (CancelledError 포함 모든 상황에서 정리)
         try:
-            await close_connection()
+            close_connection_sync()
             print("MongoDB 연결 해제")
         except Exception:
             pass
@@ -241,8 +245,24 @@ async def list_templates_for_user(jwt_token: str):
 
 
 if __name__ == "__main__":
+    import signal
     import uvicorn
     import platform
+
+    # Windows에서 Ctrl+C 시 깔끔하게 종료되도록 시그널 핸들러 설정
+    def _force_exit(signum, frame):
+        """Ctrl+C 시 MongoDB 연결 정리 후 강제 종료"""
+        try:
+            close_connection_sync()
+            print("\nMongoDB 연결 해제")
+        except Exception:
+            pass
+        print("서버 종료")
+        os._exit(0)
+
+    signal.signal(signal.SIGINT, _force_exit)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _force_exit)
 
     # 콘솔 타이틀 설정
     _proto = "HTTPS" if (settings.SSL_CERTFILE and settings.SSL_KEYFILE) else "HTTP"

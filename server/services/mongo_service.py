@@ -63,3 +63,11 @@ async def close_connection():
     if _client:
         _client.close()
         _client = None
+
+
+def close_connection_sync():
+    """동기 버전 - 서버 종료 시 CancelledError 상황에서 사용"""
+    global _client
+    if _client:
+        _client.close()
+        _client = None

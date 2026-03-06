@@ -27,7 +27,9 @@ DEFAULT_PROMPTS = [
 2. **toc** - 목차 슬라이드
    필드: title, items[] (각 항목: num, text)
 3. **section** - 섹션 구분 간지
-   필드: section_num, section_title, section_subtitle
+   필수 필드: section_title (제목은 항상 생성해야 합니다)
+   선택 필드: section_subtitle (카탈로그에서 해당 간지 템플릿에 "부제목 있음"으로 표시된 경우에만 생성. 없으면 section_subtitle 필드를 생략하세요)
+   기타 필드: section_num
 4. **content** - 본문 콘텐츠 슬라이드
    필드: title(제목), governance(거버넌스/섹션태그), items[] (heading=부제목 + detail=설명, 순서대로 매핑), sources[]
 5. **closing** - 마무리 슬라이드

@@ -299,6 +299,29 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
             template_lookup = {idx: slide for idx, slide in enumerate(slides)}
             generated = []
 
+            # ── Phase 1: 스켈레톤 전송 (배경 + 빈 텍스트) ──
+            skeleton_slides = []
+            for output_order, item in enumerate(llm_slides):
+                template_idx = item.get("template_index", 0)
+                if template_idx not in template_lookup:
+                    template_idx = _find_fallback_template(slides)
+
+                template_slide = template_lookup[template_idx]
+                contents = item.get("contents", {})
+                skeleton_objects = _build_skeleton_objects(template_slide, contents)
+
+                slide_bg = template_slide.get("background_image") or bg_image
+
+                skeleton_slides.append({
+                    "order": output_order + 1,
+                    "objects": skeleton_objects,
+                    "items": [],
+                    "background_image": slide_bg,
+                })
+
+            yield _sse("slides_skeleton", {"slides": skeleton_slides})
+
+            # ── Phase 2: 슬라이드별 콘텐츠 전송 + DB 저장 ──
             for output_order, item in enumerate(llm_slides):
                 # 각 슬라이드 저장 전 취소 체크
                 if await _check_cancelled(db, data.project_id, generation_id):
@@ -314,7 +337,6 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
                 contents = item.get("contents", {})
                 gen_objects = _build_gen_objects(template_slide, contents)
 
-                # 배경이미지: 슬라이드별 배경 > 템플릿 전체 배경
                 slide_bg = template_slide.get("background_image") or bg_image
 
                 gen_slide = {
@@ -330,7 +352,7 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
                 gen_slide["_id"] = str(result.inserted_id)
                 generated.append(gen_slide)
 
-                yield _sse("slide", {"slide": gen_slide})
+                yield _sse("slide_content", {"index": output_order, "slide": gen_slide})
 
             # 프로젝트 업데이트
             update_fields = {
@@ -606,22 +628,62 @@ def _analyze_template_slides(slides: list) -> list[dict]:
 def _build_gen_objects(template_slide: dict, contents: dict) -> list:
     """템플릿 슬라이드에서 generated objects 생성"""
     gen_objects = []
+    number_counter = 0  # number role 오브젝트에 순서 번호 직접 부여용
     for obj in template_slide.get("objects", []):
         gen_obj = obj.copy()
         if obj.get("obj_type") == "text":
-            placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
-            if placeholder_name:
-                generated_text = contents.get(placeholder_name)
-                if generated_text is None:
-                    # 내용이 매핑되지 않은 subtitle/description/number 오브젝트 제거
-                    role = obj.get("role") or obj.get("_auto_role", "")
-                    if role in ("subtitle", "description", "number"):
-                        continue
-                    generated_text = obj.get("text_content", "")
-                elif not generated_text:
-                    generated_text = ""
-                gen_obj["generated_text"] = generated_text
+            role = obj.get("role") or obj.get("_auto_role", "")
+
+            # number role: placeholder 매핑 대신 등장 순서대로 1, 2, 3... 직접 부여
+            # (동일 placeholder 이름으로 인한 덮어쓰기 문제 방지)
+            if role == "number":
+                number_counter += 1
+                gen_obj["generated_text"] = str(number_counter)
+            else:
+                placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
+                if placeholder_name:
+                    generated_text = contents.get(placeholder_name)
+                    if generated_text is None:
+                        # 내용이 매핑되지 않은 subtitle/description 오브젝트 제거
+                        if role in ("subtitle", "description"):
+                            continue
+                        generated_text = obj.get("text_content", "")
+                    elif not generated_text:
+                        generated_text = ""
+                    gen_obj["generated_text"] = generated_text
+
             # _auto_role을 role에 보존 (관리자가 명시적 role 미설정 시)
+            if not gen_obj.get("role") and gen_obj.get("_auto_role"):
+                gen_obj["role"] = gen_obj["_auto_role"]
+            gen_obj.pop("_auto_placeholder", None)
+            gen_obj.pop("_auto_role", None)
+        gen_objects.append(gen_obj)
+    return gen_objects
+
+
+def _build_skeleton_objects(template_slide: dict, contents: dict) -> list:
+    """스켈레톤 오브젝트 생성 - 텍스트는 빈값, 이미지/위치/스타일은 유지"""
+    gen_objects = []
+    number_counter = 0
+    for obj in template_slide.get("objects", []):
+        gen_obj = obj.copy()
+        if obj.get("obj_type") == "text":
+            role = obj.get("role") or obj.get("_auto_role", "")
+
+            # number role: 스켈레톤에서도 순서 번호 직접 부여
+            if role == "number":
+                number_counter += 1
+                gen_obj["generated_text"] = str(number_counter)
+            else:
+                placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
+                if placeholder_name:
+                    generated_text = contents.get(placeholder_name)
+                    if generated_text is None:
+                        if role in ("subtitle", "description"):
+                            continue
+                    # 스켈레톤: 텍스트를 빈 문자열로 설정
+                    gen_obj["generated_text"] = ""
+
             if not gen_obj.get("role") and gen_obj.get("_auto_role"):
                 gen_obj["role"] = gen_obj["_auto_role"]
             gen_obj.pop("_auto_placeholder", None)

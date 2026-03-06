@@ -428,7 +428,9 @@ body {
 
 .proj-status-dot.draft { background: var(--warning); }
 .proj-status-dot.preparing { background: #3b82f6; }
+.proj-status-dot.generating { background: #7c3aed; }
 .proj-status-dot.generated { background: var(--success); }
+.proj-status-dot.stop_requested, .proj-status-dot.stopped { background: #dc2626; }
 
 /* 관리자 버튼 */
 .sidebar-admin {
@@ -626,7 +628,9 @@ body {
 
 .rc-status.draft { background: #fef3c7; color: #b45309; }
 .rc-status.preparing { background: #dbeafe; color: #2563eb; }
+.rc-status.generating { background: #ede9fe; color: #7c3aed; }
 .rc-status.generated { background: #d1fae5; color: #059669; }
+.rc-status.stop_requested, .rc-status.stopped { background: #fee2e2; color: #dc2626; }
 
 /* ============ 프로젝트 워크스페이스 ============ */
 .project-workspace {
@@ -673,7 +677,9 @@ body {
 
 .ws-status.draft { background: #fef3c7; color: #b45309; }
 .ws-status.preparing { background: #dbeafe; color: #2563eb; }
+.ws-status.generating { background: #ede9fe; color: #7c3aed; }
 .ws-status.generated { background: #d1fae5; color: #059669; }
+.ws-status.stop_requested, .ws-status.stopped { background: #fee2e2; color: #dc2626; }
 
 .ws-header-actions { display: flex; align-items: center; gap: 6px; }
 
@@ -1347,9 +1353,15 @@ body {
     transition: all var(--transition);
 }
 
-.slide-tool-btn:hover {
+.slide-tool-btn:hover:not(:disabled) {
     background: var(--surface-3);
     border-color: var(--text-tertiary);
+}
+
+.slide-tool-btn:disabled, .slide-tool-btn.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
 }
 
 .slide-tool-divider {

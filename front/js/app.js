@@ -106,7 +106,9 @@ const I18N = {
         sharedPresentation: '공유 프레젠테이션',
         statusDraft: '초안',
         statusPreparing: '준비 중',
+        statusGenerating: '생성 중',
         statusGenerated: '생성 완료',
+        statusStopped: '중단됨',
         noDesc: '설명 없음',
         typeFile: '파일',
         typeText: '텍스트',
@@ -208,7 +210,9 @@ const I18N = {
         sharedPresentation: 'Shared Presentation',
         statusDraft: 'Draft',
         statusPreparing: 'Preparing',
+        statusGenerating: 'Generating',
         statusGenerated: 'Generated',
+        statusStopped: 'Stopped',
         noDesc: 'No description',
         typeFile: 'File',
         typeText: 'Text',
@@ -310,7 +314,9 @@ const I18N = {
         sharedPresentation: '共有プレゼン',
         statusDraft: '下書き',
         statusPreparing: '準備中',
+        statusGenerating: '生成中',
         statusGenerated: '完了',
+        statusStopped: '中断',
         noDesc: '説明なし',
         typeFile: 'ファイル',
         typeText: 'テキスト',
@@ -412,7 +418,9 @@ const I18N = {
         sharedPresentation: '共享演示',
         statusDraft: '草稿',
         statusPreparing: '准备中',
+        statusGenerating: '生成中',
         statusGenerated: '已完成',
+        statusStopped: '已停止',
         noDesc: '无描述',
         typeFile: '文件',
         typeText: '文本',
@@ -804,12 +812,11 @@ function loadWebFonts(fonts) {
 }
 
 function _loadFontCSS(linkId, url, family, retries) {
-    if (retries === undefined) retries = 2;
+    if (retries === undefined) retries = 1;
     const link = document.createElement('link');
     link.id = linkId;
     link.rel = 'stylesheet';
     link.href = url;
-    link.crossOrigin = 'anonymous';
     link.onerror = function() {
         console.warn('Font CSS load failed:', family, '(retries left:', retries, ')');
         link.remove();
@@ -909,7 +916,7 @@ function renderRecentProjects() {
     if (recent.length === 0) return;
 
     recent.forEach(p => {
-        const statusLabel = { draft: t('statusDraft'), preparing: t('statusPreparing'), generated: t('statusGenerated') }[p.status] || t('statusDraft');
+        const statusLabel = { draft: t('statusDraft'), preparing: t('statusPreparing'), generating: t('statusGenerating'), generated: t('statusGenerated'), stop_requested: t('statusStopped'), stopped: t('statusStopped') }[p.status] || t('statusDraft');
         const date = p.created_at ? new Date(p.created_at).toLocaleDateString() : '';
         grid.append(`
             <div class="recent-card" onclick="openProject('${p._id}')">
@@ -1019,7 +1026,7 @@ function renderProjectWorkspace() {
 
     // 헤더
     $('#wsProjectTitle').text(state.currentProject.name);
-    const statusLabel = { draft: t('statusDraft'), preparing: t('statusPreparing'), generated: t('statusGenerated') }[state.currentProject.status] || t('statusDraft');
+    const statusLabel = { draft: t('statusDraft'), preparing: t('statusPreparing'), generating: t('statusGenerating'), generated: t('statusGenerated'), stop_requested: t('statusStopped'), stopped: t('statusStopped') }[state.currentProject.status] || t('statusDraft');
     $('#wsProjectStatus').text(statusLabel).attr('class', 'ws-status ' + (state.currentProject.status || 'draft'));
 
     // 리소스 칩
@@ -1489,6 +1496,8 @@ async function generatePPT() {
     _animationCancelled = true;
     state.generatedSlides = [];
     state.currentSlideIndex = 0;
+    state._contentQueue = [];
+    state._generationComplete = false;
 
     // 생성 중 → 중단 버튼으로 전환
     _showStopButton();
@@ -1497,6 +1506,9 @@ async function generatePPT() {
     $('#slideEmpty').hide();
     $('#slidePreview').css('display', 'flex');
     $('#wsSlideTools').css('display', 'flex');
+
+    // 생성 중 슬라이드 도구 버튼 비활성화
+    _setSlideToolsDisabled(true);
     switchPanelTab('outline');
 
     // 스트리밍 프로그레스 UI 표시 (내부 스크롤 모드)
@@ -1602,6 +1614,8 @@ async function generatePPT() {
         $('#streamingProgress').remove();
         $('#slideTextList').removeClass('streaming-active');
         _showGenerateOrRestartButton();
+        // 생성 완료 → 슬라이드 도구 버튼 활성화
+        _setSlideToolsDisabled(false);
     }
 }
 
@@ -1680,34 +1694,67 @@ function _handleStreamEvent(data) {
             break;
         }
 
-        case 'slide': {
-            // 첫 슬라이드 도착 시 로딩 오버레이 제거
+        case 'slides_skeleton': {
+            // 모든 슬라이드를 배경+빈 텍스트로 즉시 렌더링
+            const skeletonSlides = data.slides || [];
+            state.generatedSlides = skeletonSlides;
+            state.currentSlideIndex = 0;
+
+            // 로딩 오버레이 제거
             $('#canvasLoadingOverlay').remove();
 
-            const slide = data.slide;
-            state.generatedSlides.push(slide);
-            const idx = state.generatedSlides.length - 1;
-            state.currentSlideIndex = idx;
+            // 슬라이드 프리뷰 영역 표시
+            $('#slideEmpty').hide();
+            $('#slidePreview').css('display', 'flex');
+            $('#wsSlideTools').css('display', 'flex');
 
-            // 캔버스에 현재 슬라이드 렌더링
-            renderSlideAtIndex(idx);
+            // 첫 슬라이드 캔버스 렌더링 (배경만 보임)
+            renderSlideAtIndex(0);
             renderSlideThumbnails();
             renderSlideThumbList();
             updateSlideNav();
+
+            // 모든 배경 이미지 프리로드 시작
+            _preloadSlideImages(skeletonSlides);
+
+            $('#slideCounter').text(`1 / ${skeletonSlides.length}`);
+            $('#slideCounterInline').text(`1 / ${skeletonSlides.length}`);
+            break;
+        }
+
+        case 'slide_content': {
+            const idx = data.index;
+            const fullSlide = data.slide;
+
+            // 해당 슬라이드를 완전한 데이터로 교체
+            state.generatedSlides[idx] = fullSlide;
+
+            // 콘텐츠 큐에 추가
+            if (!state._contentQueue) state._contentQueue = [];
+            state._contentQueue.push(idx);
+
+            // 첫 번째 콘텐츠 도착 시 타이핑 시작
+            if (!_isAnimating && state._contentQueue.length === 1) {
+                _processContentQueue();
+            }
             break;
         }
 
         case 'complete':
-            state.currentSlideIndex = 0;
-            // 슬라이드 프리뷰 영역만 표시 (썸네일은 애니메이션에서 하나씩 추가)
-            $('#slideEmpty').hide();
-            $('#slidePreview').css('display', 'flex');
-            $('#wsSlideTools').css('display', 'flex');
             renderSlideTextPanel();
-            // 배경/오브젝트 이미지 프리로드 (프레젠테이션 대비)
-            _preloadSlideImages(state.generatedSlides);
-            // Slide 탭으로 전환 후 타이핑 애니메이션 시작
-            animateSlideGeneration();
+            if (!_isAnimating) {
+                // 타이핑이 이미 끝난 경우 최종 처리
+                state.currentSlideIndex = 0;
+                renderSlideAtIndex(0);
+                renderSlideThumbnails();
+                renderSlideThumbList();
+                updateSlideNav();
+                _preloadSlideImages(state.generatedSlides);
+                showToast(t('msgAllComplete'), 'success');
+            } else {
+                // 아직 타이핑 중이면 완료 플래그 설정
+                state._generationComplete = true;
+            }
             break;
 
         case 'stopped':
@@ -1751,6 +1798,16 @@ async function stopGeneration() {
     }
     if (_streamReader) {
         try { await _streamReader.cancel(); } catch (_) {}
+    }
+}
+
+
+function _setSlideToolsDisabled(disabled) {
+    $('#wsSlideTools .slide-tool-btn').prop('disabled', disabled);
+    if (disabled) {
+        $('#wsSlideTools .slide-tool-btn').addClass('disabled');
+    } else {
+        $('#wsSlideTools .slide-tool-btn').removeClass('disabled');
     }
 }
 
@@ -1932,6 +1989,7 @@ function renderSlideAtIndex(index) {
                 fontStyle: style.italic ? 'italic' : 'normal',
                 textAlign: style.align || 'left',
                 padding: (8 * scaleX) + 'px',
+                boxSizing: 'border-box',
                 overflow: 'hidden',
                 wordWrap: 'break-word',
             });
@@ -1950,18 +2008,16 @@ function renderSlideAtIndex(index) {
                 div.css('whiteSpace', 'pre-wrap');
                 div.text(detailText);
                 descIndex++;
-                // 텍스트가 넘칠 경우 높이 자동 확장
-                div.css({ height: 'auto', minHeight: (obj.height * scaleY) + 'px', overflow: 'visible' });
             } else if ((role === 'subtitle' || role === 'description') && items.length > 0) {
                 // items 소진된 초과 subtitle/description 오브젝트는 렌더링하지 않음
                 return;
             } else {
                 div.css('whiteSpace', 'pre-wrap');
                 div.text(text);
-                // description 역할은 텍스트 넘침 시 높이 자동 확장
-                if (role === 'description') {
-                    div.css({ height: 'auto', minHeight: (obj.height * scaleY) + 'px', overflow: 'visible' });
-                }
+            }
+            // 텍스트가 넘칠 경우 높이 자동 확장 (number/governance 제외)
+            if (role !== 'number' && role !== 'governance') {
+                div.css({ height: 'auto', minHeight: (obj.height * scaleY) + 'px', overflow: 'visible' });
             }
         }
 
@@ -2056,7 +2112,7 @@ function renderSlideThumbList() {
     state.generatedSlides.forEach((slide, i) => {
         const isActive = i === state.currentSlideIndex;
         const thumbEl = $(`
-            <div class="slide-thumb-v ${isActive ? 'active' : ''}" draggable="true" onclick="goToSlide(${i})" data-slide-idx="${i}">
+            <div class="slide-thumb-v ${isActive ? 'active' : ''}" draggable="true" tabindex="0" onclick="goToSlide(${i})" data-slide-idx="${i}">
                 <div class="slide-thumb-v-num">${i + 1}</div>
                 <div class="slide-thumb-v-inner"></div>
             </div>
@@ -2090,7 +2146,7 @@ function _appendSingleThumbV(i) {
     // 이전 active 해제
     list.find('.slide-thumb-v').removeClass('active');
     const thumbEl = $(`
-        <div class="slide-thumb-v active" onclick="goToSlide(${i})" data-slide-idx="${i}">
+        <div class="slide-thumb-v active" tabindex="0" onclick="goToSlide(${i})" data-slide-idx="${i}">
             <div class="slide-thumb-v-num">${i + 1}</div>
             <div class="slide-thumb-v-inner"></div>
         </div>
@@ -2121,7 +2177,7 @@ function renderSlideTextPanel() {
         let titleText = '';
         const sections = [];
 
-        // 먼저 title 텍스트 추출
+        // 먼저 title 텍스트 추출 (number/governance 역할은 제외)
         textObjs.forEach(obj => {
             let text = (obj.generated_text || '').trim();
             if (!text) {
@@ -2132,8 +2188,9 @@ function renderSlideTextPanel() {
             }
             if (!text) return;
             const role = obj.role || obj._auto_role || '';
+            if (role === 'number' || role === 'governance') return;
             const fontSize = (obj.text_style || {}).font_size || 16;
-            if (!titleText && (role === 'title' || fontSize >= 24)) {
+            if (!titleText && (role === 'title' || role === 'subtitle' || fontSize >= 24)) {
                 titleText = text;
             }
         });
@@ -2161,10 +2218,10 @@ function renderSlideTextPanel() {
                 const role = obj.role || obj._auto_role || '';
                 const fontSize = (obj.text_style || {}).font_size || 16;
 
-                if (role === 'title' || fontSize >= 24) {
-                    // 이미 추출됨
-                } else if (role === 'governance') {
-                    // 거버넌스 텍스트는 생략
+                if (role === 'governance' || role === 'number') {
+                    // 거버넌스/번호 텍스트는 생략
+                } else if (role === 'title' || (!role && fontSize >= 24)) {
+                    // 이미 추출됨 (명시적 subtitle 역할은 제외)
                 } else if (role === 'subtitle' || (fontSize >= 16 && fontSize < 24 && (obj.text_style || {}).bold)) {
                     sections.push({ header: text, body: '' });
                 } else {
@@ -2345,7 +2402,138 @@ function nextSlide() {
     }
 }
 
-// ============ 타이핑 애니메이션 ============
+// ============ 콘텐츠 큐 처리 (스켈레톤 → 텍스트 타이핑) ============
+async function _processContentQueue() {
+    _isAnimating = true;
+    _animationCancelled = false;
+    switchPanelTab('slide');
+
+    while (state._contentQueue && state._contentQueue.length > 0) {
+        if (_animationCancelled) break;
+
+        const idx = state._contentQueue.shift();
+        const slide = state.generatedSlides[idx];
+        if (!slide) continue;
+
+        state.currentSlideIndex = idx;
+        updateSlideNav();
+
+        // 배경 이미지는 스켈레톤 단계에서 이미 프리로드됨 (캐시 히트)
+        const imgWaits = [];
+        if (slide.background_image) imgWaits.push(_waitForImage(slide.background_image));
+        (slide.objects || []).forEach(obj => {
+            if (obj.obj_type === 'image' && obj.image_url) imgWaits.push(_waitForImage(obj.image_url));
+        });
+        if (imgWaits.length > 0) await Promise.all(imgWaits);
+
+        // 슬라이드 렌더링 (텍스트 포함)
+        renderSlideAtIndex(idx);
+
+        // 텍스트가 있는 모든 프리뷰 오브젝트 수집
+        const textEls = [];
+        $('#previewCanvas .preview-obj').each(function () {
+            const $el = $(this);
+            const plainText = $el.text().trim();
+            if (plainText) {
+                textEls.push({
+                    $el: $el,
+                    savedHtml: $el.html(),
+                    plainText: plainText,
+                });
+            }
+        });
+
+        // 모든 텍스트 요소 비우기
+        textEls.forEach(item => item.$el.empty());
+
+        // 각 텍스트 요소를 하나씩 타이핑
+        for (const item of textEls) {
+            if (_animationCancelled) break;
+
+            const $el = item.$el;
+            const cursor = $('<span class="typing-cursor"></span>');
+            $el.append(cursor);
+
+            const text = item.plainText;
+            for (let k = 0; k < text.length; k++) {
+                if (_animationCancelled) break;
+                const ch = text[k];
+                if (ch === '\n') {
+                    cursor.before($('<br>')[0]);
+                } else {
+                    cursor.before(document.createTextNode(ch));
+                }
+                if (k % 2 === 0) await sleep(30);
+            }
+            cursor.remove();
+
+            if (!_animationCancelled) {
+                $el.html(item.savedHtml);
+            }
+        }
+
+        // 썸네일을 텍스트 포함 버전으로 업데이트
+        if (!_animationCancelled) {
+            _updateThumbnailAtIndex(idx);
+            $('#slideCounter').text(`${idx + 1} / ${state.generatedSlides.length}`);
+            $('#slideCounterInline').text(`${idx + 1} / ${state.generatedSlides.length}`);
+        }
+
+        // 슬라이드 간 전환 딜레이
+        if (!_animationCancelled && state._contentQueue.length > 0) {
+            await sleep(600);
+        }
+    }
+
+    _isAnimating = false;
+
+    // 애니메이션 취소 시 모든 썸네일 갱신
+    if (_animationCancelled) {
+        renderSlideThumbnails();
+        renderSlideThumbList();
+        updateSlideNav();
+    }
+
+    // 생성 완료 후 최종 처리
+    if (state._generationComplete) {
+        state._generationComplete = false;
+        state.currentSlideIndex = 0;
+        renderSlideAtIndex(0);
+        renderSlideThumbnails();
+        renderSlideThumbList();
+        updateSlideNav();
+        renderSlideTextPanel();
+        requestAnimationFrame(() => {
+            $('#slideThumbList').scrollTop(0);
+            $('#slideArea').scrollTop(0);
+            $('.slide-canvas-area').scrollTop(0);
+        });
+        showToast(t('msgAllComplete'), 'success');
+    }
+}
+
+function _updateThumbnailAtIndex(idx) {
+    const slide = state.generatedSlides[idx];
+    if (!slide) return;
+
+    // 하단 가로 썸네일 업데이트
+    const thumbs = $('#slideThumbnails .slide-thumb');
+    if (thumbs.length > idx) {
+        const $inner = $(thumbs[idx]).find('.slide-thumb-inner');
+        $inner.empty().removeAttr('style');
+        renderSlideToContainer($inner, slide, 64, 36);
+    }
+
+    // 좌측 세로 썸네일 업데이트
+    const $thumbV = $(`#slideThumbList .slide-thumb-v[data-slide-idx="${idx}"]`);
+    if ($thumbV.length) {
+        const $innerV = $thumbV.find('.slide-thumb-v-inner');
+        $innerV.empty().removeAttr('style');
+        renderSlideToContainer($innerV, slide, 256, 144);
+    }
+}
+
+// ============ 타이핑 애니메이션 (레거시) ============
 async function animateSlideGeneration() {
     _animationCancelled = false;
     _isAnimating = true;
@@ -2361,16 +2549,23 @@ async function animateSlideGeneration() {
         if (_animationCancelled) break;
 
         state.currentSlideIndex = i;
-        renderSlideAtIndex(i);
 
-        // 배경 + 오브젝트 이미지 로드 완료까지 대기
+        // 배경 + 오브젝트 이미지 로드 완료까지 캔버스 내용 숨김
         const slide = state.generatedSlides[i];
         const imgWaits = [];
         if (slide?.background_image) imgWaits.push(_waitForImage(slide.background_image));
         (slide?.objects || []).forEach(obj => {
             if (obj.obj_type === 'image' && obj.image_url) imgWaits.push(_waitForImage(obj.image_url));
         });
-        if (imgWaits.length > 0) await Promise.all(imgWaits);
+
+        if (imgWaits.length > 0) {
+            // 이미지 로딩 중에는 캔버스 내용을 보이지 않게 처리
+            $('#previewCanvas .preview-obj').css('visibility', 'hidden');
+            await Promise.all(imgWaits);
+        }
+
+        // 이미지 로드 완료 후 슬라이드 렌더링
+        renderSlideAtIndex(i);
 
         // 텍스트가 있는 모든 프리뷰 오브젝트 수집
         const textEls = [];
@@ -2809,6 +3004,21 @@ $(document).on('keydown', function (e) {
         if (active && active.getAttribute('contenteditable') === 'true') return;
         deleteEditSelectedObject();
         e.preventDefault();
+    }
+});
+
+// 좌측 썸네일 키보드 ↑↓ 네비게이션
+$('#slideThumbList').on('keydown', '.slide-thumb-v', function (e) {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    e.preventDefault();
+    const idx = parseInt($(this).attr('data-slide-idx'), 10);
+    const next = e.key === 'ArrowUp' ? idx - 1 : idx + 1;
+    if (next < 0 || next >= state.generatedSlides.length) return;
+    goToSlide(next);
+    const $target = $(`#slideThumbList .slide-thumb-v[data-slide-idx="${next}"]`);
+    if ($target.length) {
+        $target.focus();
+        $target[0].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
 });
 
@@ -3384,9 +3594,9 @@ function renderPresentationSlide(index, panel) {
     container.find('.preview-obj').remove();
 
     if (slide.background_image) {
-        $(`#presentationBg${panel}`).css({ 'background-image': `url(${slide.background_image})`, 'background': '' });
+        $(`#presentationBg${panel}`).css({ 'background-image': `url(${slide.background_image})`, 'background-color': 'transparent' });
     } else {
-        $(`#presentationBg${panel}`).css({ 'background-image': 'none', 'background': 'white' });
+        $(`#presentationBg${panel}`).css({ 'background-image': 'none', 'background-color': 'white' });
     }
 
     const containerW = container.width();

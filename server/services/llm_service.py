@@ -209,11 +209,23 @@ def _build_slides_description(slides_meta: list[dict]) -> str:
         effective_items = min(effective_items, 4)  # 슬라이드당 최대 4개 항목 제한
 
         lines.append(f"  특성: has_title={has_title}, has_governance={has_governance}, subtitle_count={ph_sub_actual}, description_count={ph_desc_actual}")
-        if content_type == "body":
+        if content_type == "toc":
+            # 목차 슬라이드: 슬롯 수에 맞게 항목 수 제한
+            toc_slots = max(ph_sub_actual, ph_desc_actual)
+            if toc_slots > 0:
+                lines.append(f"  ※ 목차 슬라이드: 이 템플릿은 최대 {toc_slots}개 항목을 표시할 수 있습니다. 목차 items를 반드시 {toc_slots}개 이하로 생성하세요. 섹션이 {toc_slots}개보다 많으면 관련 섹션끼리 그룹핑하여 {toc_slots}개로 맞추세요.")
+        elif content_type == "body":
             # 슬라이드에 표시되는 placeholder 수와 관계없이 아웃라인용으로 최소 3개 항목 요청
             min_items = max(effective_items, 3)
             max_items = max(effective_items, 4)
             lines.append(f"  ※ 본문 슬라이드: items를 최소 {min_items}개~최대 {max_items}개 생성하세요. 슬라이드에는 {effective_items}개까지 표시되며 나머지는 아웃라인에 표시됩니다. 절대 1개만 생성하지 마세요.")
+        elif content_type == "section_divider":
+            # 간지 슬라이드: 부제목 필드 유무 안내
+            has_subtitle_ph = ph_sub_actual > 0
+            if has_subtitle_ph:
+                lines.append(f"  ※ 간지 슬라이드: section_title(제목)은 필수입니다. 부제목 있음 → section_subtitle도 생성하세요.")
+            else:
+                lines.append(f"  ※ 간지 슬라이드: section_title(제목)은 필수입니다. 부제목 없음 → section_subtitle은 생성하지 마세요.")
         lines.append(f"  placeholder 목록:")
         if ph_desc:
             lines.extend(ph_desc)
@@ -282,10 +294,9 @@ def _parse_rich_schema(response_text: str, slides_meta: list[dict]) -> dict | No
         if isinstance(schema_slides, list) and schema_slides:
             # 첫 번째 항목에 "type" 필드가 있으면 리치 스키마
             if "type" in schema_slides[0]:
-                # content 슬라이드의 items 최소 개수 보장
-                _ensure_minimum_items(schema_slides, slides_meta)
                 # 목차(toc) items를 section 제목으로 보정
                 _ensure_toc_items(schema_slides)
+                # 리치 스키마 → placeholder 매핑 (내부에서 items 수 기반 템플릿 매칭 수행)
                 mapped = _map_rich_schema_to_contents(schema_slides, slides_meta)
                 return {
                     "slides": mapped,
@@ -403,93 +414,72 @@ def _try_repair_truncated_json(text: str) -> dict | None:
     return None
 
 
-def _ensure_minimum_items(schema_slides: list[dict], slides_meta: list[dict]):
-    """content 슬라이드의 items가 부족한 경우 detail을 분할하여 보충
+def _ensure_minimum_items_for_slide(slide: dict, target_count: int):
+    """단일 content 슬라이드의 items를 target_count까지 보충
 
-    LLM이 items를 1개만 생성한 경우, detail 텍스트를 문장 단위로 분할하여
-    최소 description_count 또는 3개의 items를 생성합니다.
+    선택된 템플릿의 슬롯 수(effective_slots)를 target으로 받아,
+    items가 부족한 경우 detail 텍스트를 분할하여 보충합니다.
     """
-    # slides_meta에서 description_count 조회용 맵
-    meta_lookup = {}
-    for sm in slides_meta:
-        meta_lookup[sm["slide_index"]] = sm.get("slide_meta", {})
+    items = slide.get("items", [])
+    if len(items) >= target_count:
+        return  # 이미 충분
 
-    for slide in schema_slides:
-        if slide.get("type") != "content":
-            continue
+    if len(items) == 1:
+        # 1개 item의 detail을 문장 단위로 분할 시도
+        item = items[0]
+        detail = item.get("detail", "")
 
-        items = slide.get("items", [])
-        if len(items) >= 3:
-            continue  # 이미 충분
+        # 문장 분할 (다양한 한국어/영어 문장 종결 패턴)
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?。])\s+', detail) if s.strip() and len(s.strip()) > 5]
 
-        # 목표 items 수 결정 (최소 3개)
-        template_idx = slide.get("template_index", 0)
-        meta = meta_lookup.get(template_idx, {})
-        target_count = max(meta.get("description_count", 3), 3)
-
-        if len(items) == 1:
-            # 1개 item의 detail을 문장 단위로 분할 시도
-            item = items[0]
-            detail = item.get("detail", "")
-            heading = item.get("heading", "")
-
-            # 문장 분할 (다양한 한국어/영어 문장 종결 패턴)
-            sentences = [s.strip() for s in re.split(r'(?<=[.!?。])\s+', detail) if s.strip() and len(s.strip()) > 5]
-
-            if len(sentences) >= target_count:
-                # 문장을 target_count 그룹으로 분배하여 새 items 생성
+        if len(sentences) >= target_count:
+            new_items = []
+            per_group = len(sentences) // target_count
+            remainder = len(sentences) % target_count
+            idx = 0
+            for i in range(target_count):
+                count = per_group + (1 if i < remainder else 0)
+                group_sentences = sentences[idx:idx + count]
+                new_detail = " ".join(group_sentences)
+                new_heading = group_sentences[0][:30].rstrip('.!?。 ') if group_sentences else f"포인트 {i+1}"
+                new_items.append({"heading": new_heading, "detail": new_detail})
+                idx += count
+            slide["items"] = new_items
+        else:
+            # 문장이 부족하면 줄바꿈/콤마 기준으로 분할 시도
+            parts = [p.strip() for p in re.split(r'[\n,;·•\-]', detail) if p.strip() and len(p.strip()) > 5]
+            if len(parts) >= target_count:
                 new_items = []
-                per_group = len(sentences) // target_count
-                remainder = len(sentences) % target_count
+                per_group = len(parts) // target_count
+                remainder = len(parts) % target_count
                 idx = 0
                 for i in range(target_count):
                     count = per_group + (1 if i < remainder else 0)
-                    group_sentences = sentences[idx:idx + count]
-                    new_detail = " ".join(group_sentences)
-                    new_heading = group_sentences[0][:30].rstrip('.!?。 ') if group_sentences else f"포인트 {i+1}"
+                    group = parts[idx:idx + count]
+                    new_detail = ". ".join(group)
+                    new_heading = group[0][:30].rstrip('.!?。 ') if group else f"포인트 {i+1}"
                     new_items.append({"heading": new_heading, "detail": new_detail})
                     idx += count
                 slide["items"] = new_items
             else:
-                # 문장이 부족하면 detail을 줄바꿈/콤마 기준으로 분할 시도
-                parts = [p.strip() for p in re.split(r'[\n,;·•\-]', detail) if p.strip() and len(p.strip()) > 5]
-                if len(parts) >= target_count:
-                    new_items = []
-                    per_group = len(parts) // target_count
-                    remainder = len(parts) % target_count
-                    idx = 0
-                    for i in range(target_count):
-                        count = per_group + (1 if i < remainder else 0)
-                        group = parts[idx:idx + count]
-                        new_detail = ". ".join(group)
-                        new_heading = group[0][:30].rstrip('.!?。 ') if group else f"포인트 {i+1}"
-                        new_items.append({"heading": new_heading, "detail": new_detail})
-                        idx += count
-                    slide["items"] = new_items
-                else:
-                    print(f"[LLM] Warning: content slide items=1, target={target_count}, cannot split detail")
+                print(f"[LLM] Info: content slide items={len(items)}, template slots={target_count}, keeping as-is")
 
-        elif len(items) == 2:
-            # 2개인 경우에도 최소 3개까지 보충 시도 (긴 detail이 있으면 분할)
-            longest_idx = 0 if len(items[0].get("detail", "")) >= len(items[1].get("detail", "")) else 1
-            longest_detail = items[longest_idx].get("detail", "")
-            sentences = [s.strip() for s in re.split(r'(?<=[.!?。])\s+', longest_detail) if s.strip() and len(s.strip()) > 5]
-            if len(sentences) >= 2:
-                # 가장 긴 item을 2개로 분할
-                mid = len(sentences) // 2
-                first_half = " ".join(sentences[:mid])
-                second_half = " ".join(sentences[mid:])
-                original_heading = items[longest_idx].get("heading", "")
-                items[longest_idx]["detail"] = first_half
-                new_item = {
-                    "heading": sentences[mid][:30].rstrip('.!?。 '),
-                    "detail": second_half,
-                }
-                items.insert(longest_idx + 1, new_item)
-                slide["items"] = items
-
-        elif len(items) == 0:
-            print(f"[LLM] Warning: content slide has no items")
+    elif len(items) == 2 and target_count >= 3:
+        # 2개인 경우 3개까지 보충 시도 (긴 detail 분할)
+        longest_idx = 0 if len(items[0].get("detail", "")) >= len(items[1].get("detail", "")) else 1
+        longest_detail = items[longest_idx].get("detail", "")
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?。])\s+', longest_detail) if s.strip() and len(s.strip()) > 5]
+        if len(sentences) >= 2:
+            mid = len(sentences) // 2
+            first_half = " ".join(sentences[:mid])
+            second_half = " ".join(sentences[mid:])
+            items[longest_idx]["detail"] = first_half
+            new_item = {
+                "heading": sentences[mid][:30].rstrip('.!?。 '),
+                "detail": second_half,
+            }
+            items.insert(longest_idx + 1, new_item)
+            slide["items"] = items
 
 
 def _ensure_toc_items(schema_slides: list[dict]):
@@ -627,6 +617,28 @@ def _map_rich_schema_to_contents(schema_slides: list[dict], slides_meta: list[di
         if not target_meta:
             continue
 
+        # toc 슬라이드: 슬롯 수 초과 items 잘라내기 (LLM이 제한을 무시한 경우 안전장치)
+        if slide_type == "toc":
+            phs = target_meta.get("placeholders", [])
+            ph_sub = sum(1 for ph in phs if ph.get("role") == "subtitle")
+            ph_desc = sum(1 for ph in phs if ph.get("role") == "description")
+            toc_slots = max(ph_sub, ph_desc)
+            toc_items = slide.get("items", [])
+            if toc_slots > 0 and len(toc_items) > toc_slots:
+                print(f"[LLM] TOC: items {len(toc_items)}개 → 템플릿 슬롯 {toc_slots}개로 잘라냄")
+                slide["items"] = toc_items[:toc_slots]
+
+        # content 슬라이드: 선택된 템플릿의 슬롯 수에 맞게 items 보충
+        if slide_type == "content":
+            phs = target_meta.get("placeholders", [])
+            ph_sub = sum(1 for ph in phs if ph.get("role") == "subtitle")
+            ph_desc = sum(1 for ph in phs if ph.get("role") == "description")
+            effective_slots = min(ph_sub, ph_desc) if (ph_sub > 0 and ph_desc > 0) else max(ph_sub, ph_desc)
+            items = slide.get("items", [])
+            # 슬롯보다 items가 적을 때만 보충 시도 (최소 슬롯 수 충족 목표)
+            if 0 < len(items) < effective_slots:
+                _ensure_minimum_items_for_slide(slide, effective_slots)
+
         # 역할별 콘텐츠 매핑
         contents = _map_slide_content_to_placeholders(slide, target_meta)
 
@@ -733,9 +745,24 @@ def _map_slide_content_to_placeholders(slide: dict, template_meta: dict) -> dict
                 contents[role_map["body"]] = "\n".join(toc_lines)
 
     elif slide_type == "section":
-        _map_if("title", role_map, contents, slide.get("section_title", ""))
+        # 간지 슬라이드: 제목은 필수 매핑
+        section_title = slide.get("section_title", "")
+        if "title" in role_map:
+            if section_title:
+                contents[role_map["title"]] = section_title
+        elif section_title:
+            # title role이 없어도 첫 번째 빈 placeholder에 제목 매핑
+            for ph in placeholders:
+                name = ph.get("placeholder", "")
+                role = ph.get("role", "")
+                if name and name not in contents and role not in ("number",):
+                    contents[name] = section_title
+                    break
+
+        # 부제목: subtitle placeholder가 있을 때만 매핑
         if subtitle_placeholders and slide.get("section_subtitle"):
             contents[subtitle_placeholders[0]] = slide["section_subtitle"]
+
         _map_if("governance", role_map, contents, slide.get("section_num", ""))
         _map_if("body", role_map, contents, slide.get("section_subtitle", ""))
         # number placeholder에 section_num 매핑
@@ -801,12 +828,14 @@ def _map_slide_content_to_placeholders(slide: dict, template_meta: dict) -> dict
         if desc_placeholders and slide.get("contact"):
             contents[desc_placeholders[0]] = slide["contact"]
 
-    # 빈 placeholder에 대한 처리: 매핑되지 않은 placeholder는 빈 문자열
-    # (number 역할은 매핑 안 된 경우 제거 대상이므로 제외)
+    # 빈 placeholder에 대한 처리:
+    # - subtitle/description/number: 매핑 안 된 경우 contents에 포함하지 않음
+    #   → _build_gen_objects에서 generated_text=None 판정 → 오브젝트 제거
+    # - 그 외 역할 (title/governance/body 등): 빈 문자열로 유지
     for ph in placeholders:
         name = ph.get("placeholder", "")
         role = ph.get("role", "")
-        if name and name not in contents and role != "number":
+        if name and name not in contents and role not in ("number", "subtitle", "description"):
             contents[name] = ""
 
     return contents
