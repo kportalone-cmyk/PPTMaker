@@ -37,7 +37,7 @@ async def create_onlyoffice_document(project_id: str, file_type: str, source_pat
 
     # source_path가 상대경로인 경우 절대경로로 변환
     if source_path.startswith("/uploads/"):
-        abs_source = os.path.join(settings.UPLOAD_DIR, source_path.lstrip("/uploads/"))
+        abs_source = os.path.join(settings.UPLOAD_DIR, source_path[len("/uploads/"):])
     else:
         abs_source = source_path
 

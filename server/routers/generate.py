@@ -1,19 +1,20 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from bson import ObjectId
 from datetime import datetime
-from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, DocxGenerateRequest
+from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest
 from services.mongo_service import get_db
 from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible, get_user_by_key
 from services import redis_service
 from routers.collaboration import check_project_access
 from services.template_service import recommend_slide, get_template_slides
 from services.ppt_service import generate_pptx
-from services.excel_service import generate_xlsx
+from services.excel_service import generate_xlsx, auto_generate_chart_definition, render_chart_to_file
 from services.word_service import generate_docx
-from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content, generate_excel_content_stream, generate_docx_content_stream
+from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content, generate_excel_content_stream, modify_excel_content_stream, generate_docx_content_stream
 from services.search_service import search_web
 from services.onlyoffice_service import create_onlyoffice_document
+from services.file_service import extract_excel_structure
 from config import settings
 import os
 import uuid
@@ -1052,6 +1053,245 @@ async def generate_excel_stream(jwt_token: str, data: ExcelGenerateRequest):
     )
 
 
+@router.post("/{jwt_token}/api/generate/excel/modify/stream")
+async def modify_excel_stream(jwt_token: str, data: ExcelModifyRequest):
+    """SSE 스트리밍으로 기존 엑셀 데이터를 부분 수정"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    generation_id = str(uuid.uuid4())
+    await redis_service.clear_generation_cancel(data.project_id)
+
+    await db.projects.update_one(
+        {"_id": ObjectId(data.project_id)},
+        {"$set": {
+            "status": "generating",
+            "generation_id": generation_id,
+            "updated_at": datetime.utcnow(),
+        }}
+    )
+
+    def _sse(event: str, payload: dict) -> str:
+        return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False, default=str)}\n\n"
+
+    async def event_stream():
+        try:
+            yield _sse("start", {"message": "AI가 데이터를 수정하고 있습니다..."})
+
+            if await _check_cancelled(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "수정이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            llm_result = None
+            chunk_count = 0
+            cancelled = False
+            async for event_type, event_data in modify_excel_content_stream(
+                data.current_data, data.instruction, data.lang,
+                target_sheet_index=data.target_sheet_index,
+            ):
+                if event_type == "delta":
+                    yield _sse("delta", {"text": event_data})
+                    chunk_count += 1
+                    if chunk_count % 50 == 0:
+                        if await _check_cancelled(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
+                elif event_type == "result":
+                    llm_result = event_data
+
+            if cancelled:
+                yield _sse("stopped", {"message": "수정이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            if not llm_result:
+                yield _sse("error", {"message": "데이터 수정 실패"})
+                return
+
+            yield _sse("parsing", {"message": "수정된 데이터를 정리하고 있습니다..."})
+
+            # 타겟 시트만 수정한 경우: 기존 시트 배열에 병합
+            result_sheets = llm_result.get("sheets", [])
+            original_sheets = data.current_data.get("sheets", [])
+
+            if (data.target_sheet_index is not None
+                    and 0 <= data.target_sheet_index < len(original_sheets)
+                    and len(result_sheets) == 1):
+                # LLM이 타겟 시트 1개만 반환 → 해당 인덱스만 교체
+                merged_sheets = list(original_sheets)
+                merged_sheets[data.target_sheet_index] = result_sheets[0]
+                final_sheets = merged_sheets
+                print(f"[Excel-Modify] 타겟 시트 병합: index={data.target_sheet_index}")
+            else:
+                # 전체 시트 교체 (시트 추가/삭제 또는 전체 수정)
+                final_sheets = result_sheets
+
+            await db.generated_excel.update_one(
+                {"project_id": data.project_id},
+                {"$set": {
+                    "sheets": final_sheets,
+                    "meta": llm_result.get("meta", {}) or data.current_data.get("meta", {}),
+                    "updated_at": datetime.utcnow(),
+                }},
+                upsert=True
+            )
+
+            excel_doc = await db.generated_excel.find_one({"project_id": data.project_id})
+            excel_doc["_id"] = str(excel_doc["_id"])
+
+            update_fields = {
+                "status": "generated",
+                "updated_at": datetime.utcnow(),
+            }
+            meta = llm_result.get("meta", {})
+            if meta:
+                update_fields["presentation_meta"] = meta
+            await db.projects.update_one(
+                {"_id": ObjectId(data.project_id)},
+                {"$set": update_fields}
+            )
+
+            yield _sse("excel_data", {"excel": excel_doc})
+            yield _sse("complete", {"total_sheets": len(llm_result.get("sheets", []))})
+
+        except Exception as e:
+            print(f"[SSE-Excel-Modify] Stream error: {e}")
+            project = await db.projects.find_one(
+                {"_id": ObjectId(data.project_id)}, {"status": 1}
+            )
+            if project and project.get("status") in ("stop_requested", "stopped"):
+                yield _sse("stopped", {"message": "수정이 중단되었습니다."})
+            else:
+                yield _sse("error", {"message": str(e)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@router.post("/{jwt_token}/api/generate/excel/upload")
+async def upload_excel_file(jwt_token: str, project_id: str = Form(...), file: UploadFile = File(...)):
+    """로컬 엑셀 파일 업로드 → generated_excel에 저장"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    # 파일 확장자 검증
+    filename = file.filename or "upload.xlsx"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext not in ("xlsx", "xls"):
+        raise HTTPException(status_code=400, detail="xlsx 또는 xls 파일만 업로드 가능합니다")
+
+    # 임시 파일 저장
+    upload_dir = os.path.join(settings.UPLOAD_DIR, "temp")
+    os.makedirs(upload_dir, exist_ok=True)
+    temp_filename = f"{uuid.uuid4().hex}.{ext}"
+    temp_path = os.path.join(upload_dir, temp_filename)
+
+    try:
+        content = await file.read()
+        with open(temp_path, "wb") as f:
+            f.write(content)
+
+        # 엑셀 구조 파싱
+        excel_data = extract_excel_structure(temp_path, original_filename=filename)
+
+        # generated_excel에 저장 (upsert)
+        await db.generated_excel.update_one(
+            {"project_id": project_id},
+            {"$set": {
+                "project_id": project_id,
+                "sheets": excel_data.get("sheets", []),
+                "meta": excel_data.get("meta", {}),
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }},
+            upsert=True,
+        )
+
+        # 프로젝트 상태 업데이트
+        update_fields = {
+            "status": "generated",
+            "updated_at": datetime.utcnow(),
+        }
+        meta = excel_data.get("meta", {})
+        if meta:
+            update_fields["presentation_meta"] = meta
+        await db.projects.update_one(
+            {"_id": ObjectId(project_id)},
+            {"$set": update_fields},
+        )
+
+        excel_doc = await db.generated_excel.find_one({"project_id": project_id})
+        excel_doc["_id"] = str(excel_doc["_id"])
+
+        return {"success": True, "excel": excel_doc}
+
+    finally:
+        # 임시 파일 삭제
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+@router.post("/{jwt_token}/api/generate/excel/chart")
+async def generate_excel_chart(jwt_token: str, data: ExcelChartRequest):
+    """시트 데이터에서 직접 차트 생성 (LLM 없이, 즉시 생성)"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    excel_doc = await db.generated_excel.find_one({"project_id": data.project_id})
+    if not excel_doc:
+        raise HTTPException(status_code=404, detail="엑셀 데이터가 없습니다")
+
+    sheets = excel_doc.get("sheets", [])
+    if data.sheet_index < 0 or data.sheet_index >= len(sheets):
+        raise HTTPException(status_code=400, detail=f"시트 인덱스 범위 초과 (0~{len(sheets)-1})")
+
+    sheet = sheets[data.sheet_index]
+
+    valid_types = {"bar", "line", "pie", "area", "scatter", "doughnut", "radar"}
+    chart_type = data.chart_type if data.chart_type in valid_types else "bar"
+
+    # 차트 정의 자동 생성
+    chart_def = auto_generate_chart_definition(sheet, chart_type, data.title)
+    if not chart_def:
+        raise HTTPException(status_code=400, detail="차트 생성 불가: 숫자 데이터가 있는 열이 없습니다")
+
+    # matplotlib 이미지 렌더링 → 파일 저장
+    image_url = render_chart_to_file(chart_def, sheet)
+    if image_url:
+        chart_def["image_url"] = image_url
+
+    # 시트에 차트 추가
+    if "charts" not in sheet:
+        sheet["charts"] = []
+    sheet["charts"].append(chart_def)
+
+    # 시트당 최대 3개 제한
+    if len(sheet["charts"]) > 3:
+        sheet["charts"] = sheet["charts"][-3:]
+
+    # DB 업데이트
+    await db.generated_excel.update_one(
+        {"project_id": data.project_id},
+        {"$set": {
+            "sheets": sheets,
+            "updated_at": datetime.utcnow(),
+        }},
+    )
+
+    excel_doc = await db.generated_excel.find_one({"project_id": data.project_id})
+    excel_doc["_id"] = str(excel_doc["_id"])
+
+    return {"success": True, "excel": excel_doc, "chart_image_url": image_url}
+
+
 @router.get("/{jwt_token}/api/generate/{project_id}/excel")
 async def get_generated_excel(jwt_token: str, project_id: str):
     """생성된 엑셀 데이터 조회"""
@@ -1160,10 +1400,6 @@ async def generate_onlyoffice_pptx_stream(jwt_token: str, data: GenerateRequest)
 
     async def event_stream():
         try:
-            # 슬라이드 카탈로그 설명
-            type_availability = _get_type_availability(slides_meta)
-            slides_description = _build_slides_description(slides_meta, type_availability)
-
             yield _sse("start", {"message": "AI가 프레젠테이션을 설계하고 있습니다..."})
 
             llm_result = None
@@ -1245,7 +1481,7 @@ async def generate_onlyoffice_pptx_stream(jwt_token: str, data: GenerateRequest)
                 yield _sse("error", {"message": f"파일 생성 실패: {str(e)}"})
                 return
 
-            yield _sse("complete", {"total_slides": len(generated_slides_data)})
+            yield _sse("complete", {"total_slides": len(llm_slides)})
 
         except Exception as e:
             print(f"[SSE-OO-PPTX] Stream error: {e}")
@@ -1370,10 +1606,14 @@ async def generate_onlyoffice_xlsx_stream(jwt_token: str, data: ExcelGenerateReq
             yield _sse("file_creating", {"message": "파일을 생성하고 있습니다..."})
             try:
                 file_url = await generate_xlsx(data.project_id)
+                print(f"[OnlyOffice-XLSX] XLSX 파일 생성 완료: {file_url}")
                 oo_doc = await create_onlyoffice_document(data.project_id, "xlsx", file_url)
+                print(f"[OnlyOffice-XLSX] OnlyOffice 문서 등록 완료: key={oo_doc.get('document_key', 'N/A')}")
                 yield _sse("onlyoffice_ready", {"project_id": data.project_id, "document": oo_doc})
             except Exception as e:
                 print(f"[OnlyOffice-XLSX] 파일 생성 실패: {e}")
+                import traceback
+                traceback.print_exc()
                 yield _sse("error", {"message": f"파일 생성 실패: {str(e)}"})
                 return
 

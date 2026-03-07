@@ -195,6 +195,10 @@
                         </div>
                         <!-- 온라인 프레젠스 바 -->
                         <div id="collabPresenceBar" class="collab-presence-bar" style="display:none;"></div>
+                        <!-- OnlyOffice 다운로드 버튼 (헤더에 배치) -->
+                        <button class="ws-action-btn" id="btnDownloadOO" onclick="downloadOnlyOfficeDoc()" title="다운로드" style="display:none;">
+                            <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 10v3h11v-3M7.5 2v7.5M4.5 7l3 3 3-3"/></svg>
+                        </button>
                         <button class="ws-action-btn" onclick="showResetConfirm()" title="초기화">
                             <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M1.5 2v4.5H6"/><path d="M2.8 9.5a5.5 5.5 0 109.2-4"/><path d="M2 6.5A5.5 5.5 0 0112 2.8"/></svg>
                         </button>
@@ -433,12 +437,17 @@
                                 <span class="excel-title" id="excelTitle">스프레드시트</span>
                             </div>
                             <div class="excel-toolbar-right">
+                                <button class="excel-tool-btn" onclick="document.getElementById('excelUploadInput').click()" id="btnUploadExcel">
+                                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12v2h10v-2M8 11V3M5 6l3-3 3 3"/></svg>
+                                    XLSX
+                                </button>
                                 <button class="excel-tool-btn" onclick="downloadXLSX()" id="btnDownloadXlsx" style="display:none;">
                                     <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12v2h10v-2M8 3v8M5 8l3 3 3-3"/></svg>
                                     XLSX
                                 </button>
                             </div>
                         </div>
+                        <input type="file" id="excelUploadInput" style="display:none;" accept=".xlsx,.xls" onchange="uploadExcelFile(event)">
                         <!-- 엑셀 생성 진행 상태 오버레이 -->
                         <div id="excelProgressOverlay" class="excel-progress-overlay" style="display:none;">
                             <div class="excel-progress-inner">
@@ -466,28 +475,56 @@
                     </div>
                     <!-- OnlyOffice 워크스페이스 -->
                     <div id="onlyofficeWorkspace" style="display:none;" class="onlyoffice-workspace">
-                        <div class="excel-toolbar">
-                            <div class="excel-toolbar-left">
-                                <span class="excel-title" id="onlyofficeTitle">문서</span>
-                            </div>
-                            <div class="excel-toolbar-right">
-                                <button class="excel-tool-btn" onclick="downloadOnlyOfficeDoc()" id="btnDownloadOO" style="display:none;">
-                                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12v2h10v-2M8 3v8M5 8l3 3 3-3"/></svg>
-                                    <span id="btnDownloadOOLabel">다운로드</span>
-                                </button>
-                            </div>
-                        </div>
-                        <!-- OnlyOffice 생성 진행 상태 오버레이 -->
-                        <div id="onlyofficeProgressOverlay" class="excel-progress-overlay" style="display:none;">
-                            <div class="excel-progress-inner">
-                                <div class="excel-progress-spinner"></div>
-                                <div class="excel-progress-text">
-                                    <span id="onlyofficeProgressMsg" class="excel-progress-msg">준비 중...</span>
-                                    <span id="onlyofficeProgressDetail" class="excel-progress-detail"></span>
+                        <!-- OnlyOffice 생성 진행 상태 -->
+                        <div id="onlyofficeProgressOverlay" class="oo-gen-overlay" style="display:none;">
+                            <!-- 단계 표시 -->
+                            <div class="oo-gen-steps">
+                                <div class="oo-gen-step" data-step="search">
+                                    <div class="oo-gen-step-icon">
+                                        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                                    </div>
+                                    <span>검색</span>
+                                </div>
+                                <div class="oo-gen-step-line"></div>
+                                <div class="oo-gen-step" data-step="generate">
+                                    <div class="oo-gen-step-icon">
+                                        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/><path d="M10 21h4"/></svg>
+                                    </div>
+                                    <span>AI 생성</span>
+                                </div>
+                                <div class="oo-gen-step-line"></div>
+                                <div class="oo-gen-step" data-step="parse">
+                                    <div class="oo-gen-step-icon">
+                                        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                                    </div>
+                                    <span>구성</span>
+                                </div>
+                                <div class="oo-gen-step-line"></div>
+                                <div class="oo-gen-step" data-step="file">
+                                    <div class="oo-gen-step-icon">
+                                        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                    </div>
+                                    <span>파일</span>
+                                </div>
+                                <div class="oo-gen-step-line"></div>
+                                <div class="oo-gen-step" data-step="editor">
+                                    <div class="oo-gen-step-icon">
+                                        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                                    </div>
+                                    <span>에디터</span>
                                 </div>
                             </div>
-                            <div class="excel-progress-bar-wrap">
-                                <div class="excel-progress-bar" id="onlyofficeProgressBar"></div>
+                            <!-- 상태 메시지 -->
+                            <div class="oo-gen-status">
+                                <div class="oo-gen-spinner"></div>
+                                <span id="onlyofficeProgressMsg">준비 중...</span>
+                                <span id="ooGenTimer" class="oo-gen-timer">0:00</span>
+                            </div>
+                            <!-- AI 스트리밍 콘텐츠 -->
+                            <div id="ooGenContent" class="oo-gen-content"></div>
+                            <!-- 프로그레스 바 -->
+                            <div class="oo-gen-bar-wrap">
+                                <div class="oo-gen-bar" id="onlyofficeProgressBar"></div>
                             </div>
                         </div>
                         <div id="onlyofficeContainer" class="onlyoffice-container"></div>

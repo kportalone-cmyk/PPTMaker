@@ -160,6 +160,9 @@ const I18N = {
         typeSlide: '슬라이드',
         typeExcel: '엑셀',
         generateExcel: '엑셀 생성',
+        excelModifyPlaceholder: '수정할 내용을 입력하세요 (예: 3월 데이터 삭제, 새 열 추가, 차트 타입 변경)',
+        excelUploading: '엑셀 파일 업로드 중...',
+        excelUploaded: '엑셀 파일이 업로드되었습니다',
         downloadXlsx: 'XLSX 다운로드',
         excelGenerating: 'AI가 데이터를 구조화하고 있습니다...',
         excelSearching: '인터넷에서 자료를 검색하고 있습니다...',
@@ -306,6 +309,9 @@ const I18N = {
         typeSlide: 'Slides',
         typeExcel: 'Excel',
         generateExcel: 'Generate Excel',
+        excelModifyPlaceholder: 'Enter modification instructions (e.g., delete March data, add new column, change chart type)',
+        excelUploading: 'Uploading Excel file...',
+        excelUploaded: 'Excel file uploaded successfully',
         downloadXlsx: 'Download XLSX',
         excelGenerating: 'AI is structuring data...',
         excelSearching: 'Searching the internet for data...',
@@ -452,6 +458,9 @@ const I18N = {
         typeSlide: 'スライド',
         typeExcel: 'エクセル',
         generateExcel: 'エクセル生成',
+        excelModifyPlaceholder: '修正内容を入力してください (例: 3月データ削除、新しい列追加、チャートタイプ変更)',
+        excelUploading: 'エクセルファイルをアップロード中...',
+        excelUploaded: 'エクセルファイルがアップロードされました',
         downloadXlsx: 'XLSXダウンロード',
         excelGenerating: 'AIがデータを構造化しています...',
         excelSearching: 'インターネットで資料を検索中...',
@@ -598,6 +607,9 @@ const I18N = {
         typeSlide: '幻灯片',
         typeExcel: '电子表格',
         generateExcel: '生成表格',
+        excelModifyPlaceholder: '请输入修改内容 (例如: 删除3月数据, 添加新列, 更改图表类型)',
+        excelUploading: '正在上传Excel文件...',
+        excelUploaded: 'Excel文件上传成功',
         downloadXlsx: '下载XLSX',
         excelGenerating: 'AI正在整理数据...',
         excelSearching: '正在从互联网搜索资料...',
@@ -5460,6 +5472,7 @@ async function initExcelWorkspace() {
             if (state.generatedExcel.meta && state.generatedExcel.meta.title) {
                 $('#excelTitle').text(state.generatedExcel.meta.title);
             }
+            $('#instructionsInput').attr('placeholder', t('excelModifyPlaceholder'));
         } else {
             initUniver();
             $('#btnDownloadXlsx').hide();
@@ -5844,7 +5857,11 @@ function _extractCompleteRows(text) {
 function handleGenerate() {
     const type = state.currentProject ? state.currentProject.project_type : 'slide';
     if (type === 'excel') {
-        generateExcel();
+        if (state.generatedExcel && state.generatedExcel.sheets && state.generatedExcel.sheets.length > 0) {
+            modifyExcel();
+        } else {
+            generateExcel();
+        }
     } else if (type === 'onlyoffice_pptx') {
         generateOnlyOfficePptx();
     } else if (type === 'onlyoffice_xlsx') {
@@ -5945,6 +5962,332 @@ async function generateExcel() {
     }
 }
 
+function _detectChartRequest(instruction) {
+    // 차트/그래프 키워드 확인
+    const chartKeywords = ['차트', 'chart', '그래프', 'graph'];
+    const isChartRequest = chartKeywords.some(kw => instruction.toLowerCase().includes(kw));
+    if (!isChartRequest) return null;
+
+    // 생성 키워드 확인 (삭제/수정 요청은 LLM으로)
+    const createKeywords = ['생성', '만들', '추가', '그려', '그리', 'create', 'add', 'generate', 'make', 'draw'];
+    const isCreate = createKeywords.some(kw => instruction.toLowerCase().includes(kw));
+    if (!isCreate) return null;
+
+    // 차트 타입 감지
+    const chartTypeMap = [
+        [['막대', 'bar', '바 차트', '바차트', '세로 막대'], 'bar'],
+        [['선형', '라인', 'line', '꺾은선', '선 그래프', '추세'], 'line'],
+        [['원형', '파이', 'pie', '원 그래프'], 'pie'],
+        [['영역', 'area'], 'area'],
+        [['산점', 'scatter', '산포'], 'scatter'],
+        [['도넛', 'doughnut', '도너츠'], 'doughnut'],
+        [['방사', '레이더', 'radar', '레이다'], 'radar'],
+    ];
+
+    let chartType = 'bar'; // 기본값
+    const lowerInst = instruction.toLowerCase();
+    for (const [keywords, type] of chartTypeMap) {
+        if (keywords.some(kw => lowerInst.includes(kw))) {
+            chartType = type;
+            break;
+        }
+    }
+
+    // 시트 인덱스 감지
+    let sheetIndex = 0;
+    // "1번 시트", "2번시트", "첫번째 시트" 등
+    const sheetPatterns = [
+        { regex: /(\d+)\s*번\s*시트/, handler: m => parseInt(m[1]) - 1 },
+        { regex: /시트\s*(\d+)/, handler: m => parseInt(m[1]) - 1 },
+        { regex: /sheet\s*(\d+)/i, handler: m => parseInt(m[1]) - 1 },
+        { regex: /첫\s*번째/, handler: () => 0 },
+        { regex: /두\s*번째/, handler: () => 1 },
+        { regex: /세\s*번째/, handler: () => 2 },
+    ];
+    for (const { regex, handler } of sheetPatterns) {
+        const match = instruction.match(regex);
+        if (match) {
+            sheetIndex = handler(match);
+            break;
+        }
+    }
+
+    // 활성 시트 인덱스 fallback
+    if (sheetIndex === 0 && state.univerAPI) {
+        try {
+            const wb = state.univerAPI.getActiveWorkbook();
+            if (wb) {
+                const activeSheet = wb.getActiveSheet();
+                if (activeSheet) {
+                    const sheetId = activeSheet.getSheetId();
+                    const m = sheetId && sheetId.match(/sheet_(\d+)/);
+                    if (m) sheetIndex = parseInt(m[1], 10);
+                }
+            }
+        } catch (e) {}
+    }
+
+    // 차트 제목 추출 (따옴표로 감싼 제목)
+    let title = null;
+    const titleMatch = instruction.match(/[""']([^""']+)[""']/);
+    if (titleMatch) title = titleMatch[1];
+
+    return { sheetIndex, chartType, title };
+}
+
+async function _generateChartDirect(chartReq) {
+    _isGenerating = true;
+    _showStopButton();
+    _showExcelProgress('차트를 생성하고 있습니다...', '');
+
+    try {
+        const response = await fetch(`/${state.jwtToken}/api/generate/excel/chart`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                project_id: state.currentProject._id,
+                sheet_index: chartReq.sheetIndex,
+                chart_type: chartReq.chartType,
+                title: chartReq.title,
+            }),
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || '차트 생성 실패');
+        }
+
+        const result = await response.json();
+        if (result.success && result.excel) {
+            state.generatedExcel = result.excel;
+
+            // Univer 리로드 + 차트 렌더링
+            await loadUniverScripts();
+            populateUniverFromData(state.generatedExcel);
+            renderExcelCharts(state.generatedExcel);
+
+            // 차트 이미지가 있으면 차트 영역에 이미지도 표시
+            if (result.chart_image_url) {
+                _appendChartImage(result.chart_image_url);
+            }
+
+            $('#btnDownloadXlsx').show();
+            if (state.generatedExcel.meta && state.generatedExcel.meta.title) {
+                $('#excelTitle').text(state.generatedExcel.meta.title);
+            }
+
+            showToast('차트가 생성되었습니다', 'success');
+        }
+    } catch (e) {
+        console.error('[Excel] 차트 생성 실패:', e);
+        showToast(e.message || '차트 생성 실패', 'error');
+    } finally {
+        _isGenerating = false;
+        _hideExcelProgress();
+        _showGenerateOrRestartButton();
+        $('#instructionsInput').val('');
+        autoResizeTextarea(document.getElementById('instructionsInput'));
+    }
+}
+
+function _appendChartImage(imageUrl) {
+    // 차트 이미지를 차트 컨테이너에 추가 표시
+    const container = document.getElementById('excelChartsContainer');
+    const grid = document.getElementById('excelChartsGrid');
+    if (!container || !grid) return;
+
+    const card = document.createElement('div');
+    card.className = 'excel-chart-card';
+    card.style.cssText = 'text-align:center;';
+
+    const img = document.createElement('img');
+    img.src = imageUrl;
+    img.style.cssText = 'max-width:100%;height:auto;border-radius:6px;';
+    img.alt = 'Generated Chart';
+
+    card.appendChild(img);
+    grid.appendChild(card);
+    $(container).show();
+}
+
+async function modifyExcel() {
+    const instruction = $('#instructionsInput').val().trim();
+    if (!instruction) {
+        showToast(t('msgEnterInstructions'), 'error');
+        return;
+    }
+
+    if (!state.generatedExcel || !state.generatedExcel.sheets) {
+        showToast('수정할 엑셀 데이터가 없습니다.', 'error');
+        return;
+    }
+
+    // 차트 생성 요청 감지 → LLM 없이 직접 생성
+    const chartReq = _detectChartRequest(instruction);
+    if (chartReq) {
+        await _generateChartDirect(chartReq);
+        return;
+    }
+
+    _isGenerating = true;
+    _destroyExcelCharts();
+    _showStopButton();
+    _showExcelProgress(t('excelModifying') || 'AI가 데이터를 수정하고 있습니다...', '');
+
+    _excelStreamBuffer = '';
+    _excelSheetStates = [];
+    initUniver();
+
+    _abortController = new AbortController();
+
+    try {
+        // 현재 활성 시트 인덱스 탐지
+        let targetSheetIndex = null;
+        if (state.univerAPI) {
+            try {
+                const wb = state.univerAPI.getActiveWorkbook();
+                if (wb) {
+                    const activeSheet = wb.getActiveSheet();
+                    if (activeSheet) {
+                        const sheetId = activeSheet.getSheetId();
+                        // sheetId 형식: "sheet_0", "sheet_1", ...
+                        const match = sheetId && sheetId.match(/sheet_(\d+)/);
+                        if (match) targetSheetIndex = parseInt(match[1], 10);
+                    }
+                }
+            } catch (e) {
+                console.warn('[Excel] 활성 시트 인덱스 탐지 실패:', e);
+            }
+        }
+
+        const response = await fetch(`/${state.jwtToken}/api/generate/excel/modify/stream`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                project_id: state.currentProject._id,
+                instruction: instruction,
+                current_data: {
+                    meta: state.generatedExcel.meta || {},
+                    sheets: state.generatedExcel.sheets || [],
+                },
+                lang: $('#langSelect').val(),
+                target_sheet_index: targetSheetIndex,
+            }),
+            signal: _abortController.signal,
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Modification failed');
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                try {
+                    const evt = JSON.parse(line.slice(6));
+                    _handleExcelSSEEvent(evt);
+                } catch (e) {}
+            }
+        }
+
+        if (buffer.startsWith('data: ')) {
+            try {
+                const evt = JSON.parse(buffer.slice(6));
+                _handleExcelSSEEvent(evt);
+            } catch (e) {}
+        }
+
+    } catch (e) {
+        if (e.name !== 'AbortError') {
+            console.error('[Excel] 수정 실패:', e);
+            showToast(e.message || '엑셀 수정 실패', 'error');
+        }
+    } finally {
+        _isGenerating = false;
+        _abortController = null;
+        _hideExcelProgress();
+        _showGenerateOrRestartButton();
+    }
+}
+
+async function uploadExcelFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!['xlsx', 'xls'].includes(ext)) {
+        showToast('xlsx 또는 xls 파일만 업로드 가능합니다', 'error');
+        event.target.value = '';
+        return;
+    }
+
+    if (!state.currentProject) {
+        showToast('프로젝트를 먼저 선택하세요', 'error');
+        event.target.value = '';
+        return;
+    }
+
+    _destroyExcelCharts();
+    _showExcelProgress(t('excelUploading') || '엑셀 파일 업로드 중...', '');
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('project_id', state.currentProject._id);
+
+    try {
+        const response = await fetch(`/${state.jwtToken}/api/generate/excel/upload`, {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || '업로드 실패');
+        }
+
+        const result = await response.json();
+        if (result.success && result.excel) {
+            state.generatedExcel = result.excel;
+
+            // Univer에 데이터 표시
+            await loadUniverScripts();
+            populateUniverFromData(state.generatedExcel);
+            renderExcelCharts(state.generatedExcel);
+
+            // UI 업데이트
+            $('#btnDownloadXlsx').show();
+            if (state.generatedExcel.meta && state.generatedExcel.meta.title) {
+                $('#excelTitle').text(state.generatedExcel.meta.title);
+            }
+
+            // placeholder를 수정 모드로 변경
+            $('#instructionsInput').val('').attr('placeholder', t('excelModifyPlaceholder'));
+            autoResizeTextarea(document.getElementById('instructionsInput'));
+
+            _showGenerateOrRestartButton();
+            showToast(t('excelUploaded') || '엑셀 파일이 업로드되었습니다', 'success');
+        }
+    } catch (e) {
+        console.error('[Excel] 업로드 실패:', e);
+        showToast(e.message || '엑셀 업로드 실패', 'error');
+    } finally {
+        _hideExcelProgress();
+        event.target.value = '';
+    }
+}
+
 function _handleExcelSSEEvent(evt) {
     const eventType = evt.event;
 
@@ -6012,6 +6355,8 @@ function _handleExcelSSEEvent(evt) {
             if (state.generatedExcel.meta && state.generatedExcel.meta.title) {
                 $('#excelTitle').text(state.generatedExcel.meta.title);
             }
+            $('#instructionsInput').val('').attr('placeholder', t('excelModifyPlaceholder'));
+            autoResizeTextarea(document.getElementById('instructionsInput'));
             break;
 
         case 'complete':
@@ -6142,6 +6487,22 @@ async function openOnlyOfficeEditor(projectId) {
 async function initOnlyOfficeWorkspace() {
     if (state.onlyofficeDoc) {
         await openOnlyOfficeEditor(state.currentProject._id);
+    } else {
+        // 문서가 없을 때 빈 상태 표시
+        const projectType = state.currentProject ? state.currentProject.project_type : '';
+        const labels = {
+            'onlyoffice_pptx': { icon: '📊', title: '프레젠테이션', desc: '지침을 입력하고 PPT 생성 버튼을 클릭하세요' },
+            'onlyoffice_xlsx': { icon: '📋', title: '스프레드시트', desc: '지침을 입력하고 Excel 생성 버튼을 클릭하세요' },
+            'onlyoffice_docx': { icon: '📝', title: '문서', desc: '지침을 입력하고 Word 생성 버튼을 클릭하세요' },
+        };
+        const info = labels[projectType] || { icon: '📄', title: '문서', desc: '지침을 입력하고 생성 버튼을 클릭하세요' };
+        $('#onlyofficeContainer').html(`
+            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;min-height:400px;color:#94a3b8;">
+                <div style="font-size:48px;margin-bottom:16px;">${info.icon}</div>
+                <div style="font-size:18px;font-weight:600;color:#64748b;margin-bottom:8px;">${info.title}</div>
+                <div style="font-size:14px;">${info.desc}</div>
+            </div>
+        `);
     }
 }
 
@@ -6154,19 +6515,72 @@ function downloadOnlyOfficeDoc() {
 }
 
 // OnlyOffice SSE 진행 상태 표시
-function _showOnlyOfficeProgress(msg, detail) {
+let _ooGenTimerInterval = null;
+let _ooGenStartTime = 0;
+
+function _showOnlyOfficeProgress(msg) {
     $('#onlyofficeProgressOverlay').show();
     $('#onlyofficeProgressMsg').text(msg || '준비 중...');
-    $('#onlyofficeProgressDetail').text(detail || '');
 }
 
 function _hideOnlyOfficeProgress() {
     $('#onlyofficeProgressOverlay').hide();
     $('#onlyofficeProgressBar').css('width', '0%');
+    $('#ooGenContent').empty();
+    _ooGenStopTimer();
+    // 모든 step 초기화
+    $('.oo-gen-step').removeClass('active done');
+    $('.oo-gen-step-line').removeClass('done');
+}
+
+function _ooGenSetStep(stepName) {
+    const order = ['search', 'generate', 'parse', 'file', 'editor'];
+    const idx = order.indexOf(stepName);
+    if (idx < 0) return;
+    const $steps = $('.oo-gen-step');
+    const $lines = $('.oo-gen-step-line');
+    $steps.each(function (i) {
+        const $s = $(this);
+        if (i < idx) {
+            $s.removeClass('active').addClass('done');
+        } else if (i === idx) {
+            $s.removeClass('done').addClass('active');
+        } else {
+            $s.removeClass('active done');
+        }
+    });
+    $lines.each(function (i) {
+        $(this).toggleClass('done', i < idx);
+    });
+}
+
+function _ooGenStartTimer() {
+    _ooGenStartTime = Date.now();
+    _ooGenStopTimer();
+    _ooGenUpdateTimer();
+    _ooGenTimerInterval = setInterval(_ooGenUpdateTimer, 1000);
+}
+function _ooGenStopTimer() {
+    if (_ooGenTimerInterval) { clearInterval(_ooGenTimerInterval); _ooGenTimerInterval = null; }
+}
+function _ooGenUpdateTimer() {
+    const elapsed = Math.floor((Date.now() - _ooGenStartTime) / 1000);
+    const m = Math.floor(elapsed / 60);
+    const s = elapsed % 60;
+    $('#ooGenTimer').text(`${m}:${s.toString().padStart(2, '0')}`);
+}
+
+function _ooGenAppendContent(text) {
+    const el = document.getElementById('ooGenContent');
+    if (!el) return;
+    el.textContent += text;
+    el.scrollTop = el.scrollHeight;
 }
 
 async function _onlyofficeStreamGenerate(url, body) {
-    _showOnlyOfficeProgress('AI가 콘텐츠를 생성하고 있습니다...');
+    _showOnlyOfficeProgress('준비 중...');
+    _ooGenStartTimer();
+    $('#ooGenContent').empty();
     _showStopButton();
 
     state.currentProject.status = 'generating';
@@ -6178,6 +6592,20 @@ async function _onlyofficeStreamGenerate(url, body) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
         });
+
+        if (!response.ok) {
+            let errMsg = `HTTP ${response.status}`;
+            try {
+                const errBody = await response.json();
+                errMsg = errBody.detail || errBody.message || errMsg;
+            } catch {}
+            _hideOnlyOfficeProgress();
+            _showGenerateOrRestartButton();
+            state.currentProject.status = 'draft';
+            $('#wsProjectStatus').text(t('statusDraft')).attr('class', 'ws-status draft');
+            showToast(errMsg, 'error');
+            return;
+        }
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -6198,28 +6626,38 @@ async function _onlyofficeStreamGenerate(url, body) {
 
                 switch (evt.event) {
                     case 'searching':
+                        _ooGenSetStep('search');
                         _showOnlyOfficeProgress('인터넷에서 자료를 검색하고 있습니다...');
                         break;
                     case 'search_done':
+                        _ooGenSetStep('search');
                         _showOnlyOfficeProgress('검색 완료! 콘텐츠를 생성합니다...');
+                        if (evt.result_count) {
+                            _ooGenAppendContent(`[검색 완료] ${evt.result_count}건의 자료를 찾았습니다.\n\n`);
+                        }
                         break;
                     case 'start':
+                        _ooGenSetStep('generate');
                         _showOnlyOfficeProgress(evt.message || 'AI가 콘텐츠를 생성하고 있습니다...');
                         break;
                     case 'delta':
                         llmText += evt.text || '';
+                        _ooGenAppendContent(evt.text || '');
                         const progress = Math.min(llmText.length / 5000 * 70, 70);
                         $('#onlyofficeProgressBar').css('width', progress + '%');
                         break;
                     case 'parsing':
+                        _ooGenSetStep('parse');
                         _showOnlyOfficeProgress(evt.message || '콘텐츠를 구성하고 있습니다...');
                         $('#onlyofficeProgressBar').css('width', '75%');
                         break;
                     case 'file_creating':
+                        _ooGenSetStep('file');
                         _showOnlyOfficeProgress(evt.message || '파일을 생성하고 있습니다...');
                         $('#onlyofficeProgressBar').css('width', '85%');
                         break;
                     case 'onlyoffice_ready':
+                        _ooGenSetStep('editor');
                         _showOnlyOfficeProgress('OnlyOffice 에디터를 열고 있습니다...');
                         $('#onlyofficeProgressBar').css('width', '95%');
                         state.onlyofficeDoc = evt.document || null;
@@ -6249,6 +6687,12 @@ async function _onlyofficeStreamGenerate(url, body) {
                         break;
                 }
             }
+        }
+
+        // 스트림이 끝났는데 complete/error 이벤트 없이 종료된 경우
+        if ($('#onlyofficeProgressOverlay').is(':visible')) {
+            _hideOnlyOfficeProgress();
+            _showGenerateOrRestartButton();
         }
     } catch (e) {
         _hideOnlyOfficeProgress();

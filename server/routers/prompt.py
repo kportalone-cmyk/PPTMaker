@@ -255,6 +255,92 @@ DEFAULT_PROMPTS = [
 charts는 선택적입니다. 숫자 데이터가 시각화에 적합한 경우에만 포함하세요. 텍스트만 있는 시트에는 생략합니다.""",
     },
     {
+        "key": "excel_modify_system",
+        "name": "엑셀 수정 시스템 프롬프트",
+        "description": "기존 엑셀 데이터를 사용자 지침에 따라 부분 수정하는 시스템 프롬프트. 변수: {lang_instruction}",
+        "model": "claude-sonnet-4-6",
+        "content": """당신은 데이터 분석 및 스프레드시트 편집 전문가입니다.
+사용자의 지침에 따라 기존 스프레드시트 데이터를 수정합니다.
+
+## 중요 규칙
+1. 사용자가 특정 부분만 수정 요청하면 해당 부분만 변경하고 나머지는 그대로 유지하세요.
+2. 숫자 데이터는 숫자 타입으로, 날짜는 "YYYY-MM-DD" 형식으로 유지합니다.
+3. {lang_instruction}
+4. 반드시 JSON 형식으로만 응답합니다.
+
+## 수정 유형별 처리
+- 열 추가/삭제: 기존 데이터 유지하면서 열 추가 또는 제거
+- 행 추가/삭제: 해당 행만 추가 또는 제거, 나머지 유지
+- 셀 값 변경: 지정된 셀만 수정
+- 차트 변경: 차트 타입/설정만 수정, 데이터 유지
+- 시트 추가/삭제: 기존 시트 유지하면서 추가 또는 제거
+- 데이터 재계산: 수식/계산 요청 시 값을 직접 계산하여 결과값으로 반환
+
+## 차트 규칙
+- 데이터 변경 시 차트의 data_range(row_start, row_end, series)도 함께 업데이트
+- 지원 타입: bar, line, pie, area, scatter, doughnut, radar
+- pie/doughnut 차트는 series 1개만""",
+    },
+    {
+        "key": "excel_modify_user",
+        "name": "엑셀 수정 사용자 프롬프트",
+        "description": "기존 엑셀 데이터와 수정 지침을 포함한 사용자 프롬프트. 변수: {lang_instruction}, {instruction}, {current_excel_data}",
+        "model": "claude-sonnet-4-6",
+        "content": """아래 기존 스프레드시트 데이터를 사용자의 수정 지침에 따라 수정해주세요.
+
+## 출력 언어
+{lang_instruction}
+
+## 현재 스프레드시트 데이터
+{current_excel_data}
+
+## 사용자 수정 지침
+{instruction}
+
+## 응답 형식
+수정된 데이터를 아래 JSON 형식으로 응답하세요.
+- "target_sheet" 필드가 있으면: 해당 시트만 수정하여 sheets 배열에 1개만 포함하세요.
+- "target_sheet" 필드가 없으면: 모든 시트를 포함하세요 (수정하지 않은 시트도 포함).
+
+```json
+{{
+    "meta": {{
+        "title": "스프레드시트 제목",
+        "description": "데이터 설명"
+    }},
+    "sheets": [
+        {{
+            "name": "시트명 (최대 31자)",
+            "columns": ["열1", "열2", "열3"],
+            "rows": [
+                ["값1", 100, "2024-01-01"],
+                ["값2", 200, "2024-02-01"]
+            ],
+            "charts": [
+                {{
+                    "type": "bar",
+                    "title": "차트 제목",
+                    "data_range": {{
+                        "labels_column": 0,
+                        "series": [
+                            {{"name": "시리즈명", "column": 1}}
+                        ],
+                        "row_start": 0,
+                        "row_end": null
+                    }},
+                    "options": {{
+                        "stacked": false,
+                        "show_legend": true
+                    }}
+                }}
+            ]
+        }}
+    ]
+}}
+```
+charts는 선택적입니다. 기존 차트를 유지/수정/삭제 요청에 따라 처리하세요.""",
+    },
+    {
         "key": "docx_generation_system",
         "name": "문서 생성 시스템 프롬프트",
         "description": "리소스를 분석하여 구조화된 Word 문서를 생성하는 시스템 프롬프트. 변수: {lang_instruction}, {section_count_instruction}",

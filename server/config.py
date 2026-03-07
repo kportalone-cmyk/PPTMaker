@@ -56,6 +56,7 @@ class Settings:
     # OnlyOffice
     ONLYOFFICE_URL: str = os.getenv("ONLYOFFICE_URL", "")
     ONLYOFFICE_JWT_SECRET: str = os.getenv("ONLYOFFICE_JWT_SECRET", "")
+    SERVER_BASE_URL: str = os.getenv("SERVER_BASE_URL", "")
 
     # SSL
     SSL_CERTFILE: str = os.getenv("SSL_CERTFILE", "")

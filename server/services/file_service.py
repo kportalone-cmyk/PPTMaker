@@ -177,6 +177,72 @@ def _extract_pdf(file_path: str) -> str:
     return "\n\n".join(parts)
 
 
+def extract_excel_structure(file_path: str, original_filename: str = None) -> dict:
+    """Excel 파일을 구조화된 데이터로 파싱 (generated_excel 형식)
+
+    Returns:
+        {"meta": {"title": ..., "description": ...}, "sheets": [...]}
+    """
+    from openpyxl import load_workbook
+
+    wb = load_workbook(file_path, read_only=True, data_only=True)
+    sheets = []
+
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        all_rows = []
+        for row in ws.iter_rows(values_only=True):
+            cells = []
+            for cell in row:
+                if cell is None:
+                    cells.append("")
+                elif isinstance(cell, (int, float)):
+                    cells.append(cell)
+                else:
+                    cells.append(str(cell))
+            # 빈 행 스킵
+            if any(c != "" and c != 0 for c in cells):
+                all_rows.append(cells)
+
+        if not all_rows:
+            sheets.append({
+                "name": sheet_name[:31],
+                "columns": ["A"],
+                "rows": [],
+            })
+            continue
+
+        # 첫 행 = 헤더 (columns), 나머지 = 데이터 (rows)
+        columns = [str(c) if c != "" else f"Col{i+1}" for i, c in enumerate(all_rows[0])]
+        rows = all_rows[1:] if len(all_rows) > 1 else []
+
+        # 모든 행의 열 수를 columns 길이에 맞춤
+        for i, row in enumerate(rows):
+            if len(row) < len(columns):
+                rows[i] = row + [""] * (len(columns) - len(row))
+            elif len(row) > len(columns):
+                rows[i] = row[:len(columns)]
+
+        sheets.append({
+            "name": sheet_name[:31],
+            "columns": columns,
+            "rows": rows,
+        })
+
+    wb.close()
+
+    # 파일명에서 제목 추출 (원본 파일명 우선 사용)
+    if original_filename:
+        title = os.path.splitext(os.path.basename(original_filename))[0]
+    else:
+        title = os.path.splitext(os.path.basename(file_path))[0]
+
+    return {
+        "meta": {"title": title, "description": f"업로드된 엑셀 파일 ({len(sheets)}개 시트)"},
+        "sheets": sheets,
+    }
+
+
 def _rows_to_markdown_table(rows: list) -> str:
     """2D 배열을 마크다운 테이블로 변환"""
     if not rows:

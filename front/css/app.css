@@ -3478,6 +3478,7 @@ body {
 .onlyoffice-workspace {
     display: flex;
     flex-direction: column;
+    width: 100%;
     height: 100%;
     min-height: 0;
 }
@@ -3494,6 +3495,183 @@ body {
     border: none;
     width: 100%;
     height: 100%;
+}
+
+/* OnlyOffice/Excel 활성 시 slide-area 풀 너비 */
+.slide-area:has(.onlyoffice-workspace),
+.slide-area:has(.excel-workspace) {
+    align-items: stretch;
+}
+
+/* ============ OnlyOffice 생성 진행 UI ============ */
+
+.oo-gen-overlay {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    background: var(--surface);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    overflow: hidden;
+}
+
+/* 단계 표시기 */
+.oo-gen-steps {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    padding: 16px 20px 12px;
+    flex-shrink: 0;
+}
+
+.oo-gen-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    opacity: 0.3;
+    transition: opacity 0.3s, transform 0.3s;
+}
+.oo-gen-step.active {
+    opacity: 1;
+    transform: scale(1.05);
+}
+.oo-gen-step.done {
+    opacity: 0.7;
+}
+
+.oo-gen-step-icon {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--surface-3, #f1f5f9);
+    color: var(--text-tertiary);
+    transition: background 0.3s, color 0.3s, box-shadow 0.3s;
+}
+.oo-gen-step.active .oo-gen-step-icon {
+    background: var(--accent);
+    color: #fff;
+    box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.15);
+}
+.oo-gen-step.done .oo-gen-step-icon {
+    background: #10b981;
+    color: #fff;
+}
+
+.oo-gen-step span {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    white-space: nowrap;
+}
+.oo-gen-step.active span {
+    color: var(--accent);
+    font-weight: 600;
+}
+.oo-gen-step.done span {
+    color: #10b981;
+}
+
+.oo-gen-step-line {
+    width: 24px;
+    height: 2px;
+    background: var(--border);
+    margin: 0 4px;
+    margin-bottom: 18px;
+    border-radius: 1px;
+    transition: background 0.3s;
+}
+.oo-gen-step-line.done {
+    background: #10b981;
+}
+
+/* 상태 메시지 */
+.oo-gen-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 20px 10px;
+    flex-shrink: 0;
+}
+
+.oo-gen-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: ooGenSpin 0.7s linear infinite;
+    flex-shrink: 0;
+}
+@keyframes ooGenSpin { to { transform: rotate(360deg); } }
+
+.oo-gen-status #onlyofficeProgressMsg {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.oo-gen-timer {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+    background: var(--surface-3, #f1f5f9);
+    padding: 2px 8px;
+    border-radius: 10px;
+}
+
+/* AI 스트리밍 콘텐츠 */
+.oo-gen-content {
+    flex: 1;
+    min-height: 0;
+    margin: 0 16px 12px;
+    padding: 12px 14px;
+    background: var(--surface-3, #f8fafc);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm, 6px);
+    overflow-y: auto;
+    font-family: 'Pretendard', monospace;
+    font-size: 11.5px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.oo-gen-content:empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.oo-gen-content:empty::after {
+    content: 'AI 응답 대기 중...';
+    color: var(--text-tertiary);
+    font-style: italic;
+    font-size: 12px;
+}
+
+/* 프로그레스 바 */
+.oo-gen-bar-wrap {
+    height: 3px;
+    background: var(--border);
+    flex-shrink: 0;
+}
+.oo-gen-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--accent), #818cf8);
+    transition: width 0.4s ease;
 }
 
 

@@ -54,6 +54,21 @@ class ExcelGenerateRequest(BaseModel):
     sheet_count: str = "auto"
 
 
+class ExcelModifyRequest(BaseModel):
+    project_id: str
+    instruction: str
+    current_data: dict
+    lang: str = ""
+    target_sheet_index: Optional[int] = None  # None이면 전체 시트, 숫자면 해당 시트만 수정
+
+
+class ExcelChartRequest(BaseModel):
+    project_id: str
+    sheet_index: int = 0
+    chart_type: str = "bar"
+    title: Optional[str] = None
+
+
 class DocxGenerateRequest(BaseModel):
     project_id: str
     instructions: str = ""

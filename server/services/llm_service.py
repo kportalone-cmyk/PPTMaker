@@ -1408,6 +1408,105 @@ async def generate_excel_content_stream(
         yield ("result", _excel_fallback(resources_text))
 
 
+async def modify_excel_content_stream(
+    current_data: dict,
+    instruction: str,
+    lang: str = "",
+    target_sheet_index: int | None = None,
+):
+    """스트리밍 방식 엑셀 부분 수정
+
+    Yields:
+        ("delta", str)   - Claude에서 스트리밍된 텍스트 청크
+        ("result", dict) - 최종 파싱 결과: {"sheets": [...], "meta": {...}}
+    """
+    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+        yield ("result", current_data)
+        return
+
+    system_prompt, user_prompt = await _build_excel_modify_prompts(
+        current_data, instruction, lang, target_sheet_index=target_sheet_index,
+    )
+
+    prompt_model = await get_prompt_model("excel_modify_system")
+    effective_model = prompt_model or settings.ANTHROPIC_MODEL
+
+    try:
+        full_text = ""
+        async for delta in _stream_claude_api(system_prompt, user_prompt, model=effective_model):
+            full_text += delta
+            yield ("delta", delta)
+
+        print(f"[LLM-Excel-Modify] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {effective_model})")
+        parsed = _parse_excel_schema(full_text)
+        if parsed:
+            sheet_count_result = len(parsed.get("sheets", []))
+            print(f"[LLM-Excel-Modify] 파싱 성공 - sheets: {sheet_count_result}개")
+            yield ("result", parsed)
+        else:
+            print(f"[LLM-Excel-Modify] 파싱 실패 → 기존 데이터 유지")
+            yield ("result", current_data)
+    except Exception as e:
+        import traceback
+        print(f"[LLM-Excel-Modify] Streaming 호출 실패: {e}")
+        traceback.print_exc()
+        yield ("result", current_data)
+
+
+async def _build_excel_modify_prompts(
+    current_data: dict, instruction: str, lang: str = "",
+    target_sheet_index: int | None = None,
+) -> tuple[str, str]:
+    """엑셀 수정용 프롬프트 빌드
+
+    target_sheet_index가 지정되면 해당 시트만 전송하여 토큰 절약.
+    """
+    output_lang = lang or (settings.SUPPORTED_LANGS[0] if settings.SUPPORTED_LANGS else "ko")
+    lang_instruction = {
+        "ko": "모든 콘텐츠를 한국어로 작성하세요.",
+        "en": "Write all content in English.",
+        "ja": "すべてのコンテンツを日本語で作成してください。",
+        "zh": "请用中文撰写所有内容。",
+    }.get(output_lang, "모든 콘텐츠를 한국어로 작성하세요.")
+
+    system_template = await get_prompt_content("excel_modify_system")
+    user_template = await get_prompt_content("excel_modify_user")
+
+    system_prompt = system_template.format(
+        lang_instruction=lang_instruction,
+    )
+
+    sheets = current_data.get("sheets", [])
+
+    # 타겟 시트만 전송 (토큰 절약)
+    if target_sheet_index is not None and 0 <= target_sheet_index < len(sheets):
+        target_sheet = sheets[target_sheet_index]
+        # 타겟 시트 데이터만 포함, 다른 시트 이름만 참조로 제공
+        other_sheet_names = [s.get("name", f"Sheet{i+1}") for i, s in enumerate(sheets) if i != target_sheet_index]
+        send_data = {
+            "meta": current_data.get("meta", {}),
+            "target_sheet_index": target_sheet_index,
+            "target_sheet": target_sheet,
+        }
+        if other_sheet_names:
+            send_data["other_sheets_reference"] = other_sheet_names
+        print(f"[LLM-Excel-Modify] 타겟 시트만 전송: index={target_sheet_index}, name={target_sheet.get('name', '?')}")
+    else:
+        send_data = current_data
+
+    current_excel_json = json.dumps(send_data, ensure_ascii=False, indent=2)
+    if len(current_excel_json) > 30000:
+        current_excel_json = current_excel_json[:30000] + "\n... (데이터 일부 생략)"
+
+    user_prompt = user_template.format(
+        lang_instruction=lang_instruction,
+        instruction=instruction,
+        current_excel_data=current_excel_json,
+    )
+
+    return system_prompt, user_prompt
+
+
 async def _build_excel_generation_prompts(
     resources_text: str, instructions: str, lang: str = "",
     sheet_count: str = "auto",
