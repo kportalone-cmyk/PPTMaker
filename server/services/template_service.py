@@ -1,15 +1,27 @@
 from services.mongo_service import get_db
+from services import redis_service
 from bson import ObjectId
+
+# 캐시 TTL: 템플릿은 드물게 변경되므로 긴 TTL
+_TEMPLATE_SLIDES_TTL = 86400   # 24시간
+_TEMPLATES_SUMMARY_TTL = 86400  # 24시간
 
 
 async def get_template_slides(template_id: str) -> list:
-    """템플릿의 슬라이드 목록 조회"""
+    """템플릿의 슬라이드 목록 조회 (Redis 캐시)"""
+    cache_key = f"template:{template_id}:slides"
+    cached = await redis_service.cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     db = get_db()
     cursor = db.slides.find({"template_id": template_id}).sort("order", 1)
     slides = []
     async for s in cursor:
         s["_id"] = str(s["_id"])
         slides.append(s)
+
+    await redis_service.cache_set(cache_key, slides, ttl=_TEMPLATE_SLIDES_TTL)
     return slides
 
 
@@ -25,7 +37,6 @@ async def recommend_slide(template_id: str, content_meta: dict) -> dict | None:
         "layout": "two_column"   # "cover" | "numbered_list" | "divider" | "single_column" | "two_column" | "grid" | "closing"
     }
     """
-    db = get_db()
     slides = await get_template_slides(template_id)
 
     best_match = None
@@ -67,7 +78,12 @@ async def recommend_slide(template_id: str, content_meta: dict) -> dict | None:
 
 
 async def get_all_templates_summary() -> list:
-    """모든 템플릿의 요약 정보 (사용자 선택용) - 첫 슬라이드 포함"""
+    """모든 템플릿의 요약 정보 (사용자 선택용) - Redis 캐시"""
+    cache_key = "templates:summary"
+    cached = await redis_service.cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     db = get_db()
     cursor = db.templates.find().sort("name", 1)
     templates = []
@@ -87,4 +103,15 @@ async def get_all_templates_summary() -> list:
         else:
             t["first_slide"] = None
         templates.append(t)
+
+    await redis_service.cache_set(cache_key, templates, ttl=_TEMPLATES_SUMMARY_TTL)
     return templates
+
+
+async def invalidate_template_cache(template_id: str = None):
+    """템플릿 관련 캐시 무효화"""
+    # 요약 목록은 항상 무효화
+    await redis_service.cache_delete("templates:summary")
+    if template_id:
+        await redis_service.cache_delete(f"template:{template_id}:slides")
+        await redis_service.cache_delete(f"template:{template_id}:analysis")

@@ -47,6 +47,12 @@ class Settings:
         l.strip() for l in os.getenv("SUPPORTED_LANGS", "ko").split(",") if l.strip()
     ]
 
+    # Redis
+    REDIS_HOST: str = os.getenv("REDIS_HOST", "127.0.0.1")
+    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
+    REDIS_DB: int = int(os.getenv("REDIS_DB", "0"))
+    REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD", "")
+
     # SSL
     SSL_CERTFILE: str = os.getenv("SSL_CERTFILE", "")
     SSL_KEYFILE: str = os.getenv("SSL_KEYFILE", "")

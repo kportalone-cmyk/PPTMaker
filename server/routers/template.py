@@ -7,6 +7,7 @@ from models.template import (
 )
 from services.mongo_service import get_db
 from services.auth_service import decode_jwt_token, get_user_flexible, is_admin
+from services.template_service import invalidate_template_cache
 from config import settings
 import aiofiles
 import os
@@ -56,6 +57,7 @@ async def create_template(jwt_token: str, data: TemplateCreate):
     }
     result = await db.templates.insert_one(doc)
     doc["_id"] = str(result.inserted_id)
+    await invalidate_template_cache()
     return {"template": doc}
 
 
@@ -93,6 +95,7 @@ async def update_template(jwt_token: str, template_id: str, data: TemplateUpdate
     )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="템플릿을 찾을 수 없습니다")
+    await invalidate_template_cache(template_id)
     return {"success": True}
 
 
@@ -103,6 +106,7 @@ async def delete_template(jwt_token: str, template_id: str):
     db = get_db()
     await db.templates.delete_one({"_id": ObjectId(template_id)})
     await db.slides.delete_many({"template_id": template_id})
+    await invalidate_template_cache(template_id)
     return {"success": True}
 
 
@@ -127,6 +131,7 @@ async def upload_background(jwt_token: str, template_id: str, file: UploadFile =
         {"_id": ObjectId(template_id)},
         {"$set": {"background_image": image_url, "updated_at": datetime.utcnow()}}
     )
+    await invalidate_template_cache(template_id)
     return {"image_url": image_url}
 
 
@@ -158,6 +163,7 @@ async def create_slide(jwt_token: str, data: SlideCreate):
         doc["background_image"] = data.background_image
     result = await db.slides.insert_one(doc)
     doc["_id"] = str(result.inserted_id)
+    await invalidate_template_cache(data.template_id)
     return {"slide": doc}
 
 
@@ -177,12 +183,16 @@ async def update_slide(jwt_token: str, slide_id: str, data: SlideUpdate):
         update_data["background_image"] = data.background_image if data.background_image else None
     update_data["updated_at"] = datetime.utcnow()
 
+    # 캐시 무효화를 위해 template_id 조회
+    slide_doc = await db.slides.find_one({"_id": ObjectId(slide_id)}, {"template_id": 1})
     result = await db.slides.update_one(
         {"_id": ObjectId(slide_id)},
         {"$set": update_data}
     )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="슬라이드를 찾을 수 없습니다")
+    if slide_doc:
+        await invalidate_template_cache(slide_doc.get("template_id"))
     return {"success": True}
 
 
@@ -191,7 +201,10 @@ async def delete_slide(jwt_token: str, slide_id: str):
     """슬라이드 삭제"""
     await verify_admin(jwt_token)
     db = get_db()
+    slide_doc = await db.slides.find_one({"_id": ObjectId(slide_id)}, {"template_id": 1})
     await db.slides.delete_one({"_id": ObjectId(slide_id)})
+    if slide_doc:
+        await invalidate_template_cache(slide_doc.get("template_id"))
     return {"success": True}
 
 

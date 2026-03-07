@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from services.mongo_service import get_db
+from services import redis_service
 from bson import ObjectId
 from datetime import datetime
 
@@ -161,10 +162,16 @@ async def ensure_default_prompts():
 
 
 async def get_prompt_content(key: str) -> str:
-    """DB에서 프롬프트 content 조회. 없으면 기본값 반환"""
+    """DB에서 프롬프트 content 조회 (Redis 캐시, 24시간). 없으면 기본값 반환"""
+    cache_key = f"prompt:{key}"
+    cached = await redis_service.cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     db = get_db()
     doc = await db.prompts.find_one({"key": key})
     if doc:
+        await redis_service.cache_set(cache_key, doc["content"], ttl=86400)
         return doc["content"]
     # DB에 없으면 기본 프롬프트에서 찾기
     for p in DEFAULT_PROMPTS:
@@ -202,12 +209,16 @@ async def get_prompt(jwt_token: str, prompt_id: str):
 async def update_prompt(jwt_token: str, prompt_id: str, body: PromptUpdate):
     """프롬프트 내용 수정"""
     db = get_db()
+    # 캐시 무효화를 위해 key 조회
+    doc = await db.prompts.find_one({"_id": ObjectId(prompt_id)}, {"key": 1})
     result = await db.prompts.update_one(
         {"_id": ObjectId(prompt_id)},
         {"$set": {"content": body.content, "updated_at": datetime.utcnow()}}
     )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="프롬프트를 찾을 수 없습니다")
+    if doc:
+        await redis_service.cache_delete(f"prompt:{doc['key']}")
     return {"success": True}
 
 
@@ -233,4 +244,5 @@ async def reset_prompt(jwt_token: str, prompt_id: str):
         {"_id": ObjectId(prompt_id)},
         {"$set": {"content": default_content, "updated_at": datetime.utcnow()}}
     )
+    await redis_service.cache_delete(f"prompt:{doc['key']}")
     return {"success": True, "content": default_content}

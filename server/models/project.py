@@ -35,6 +35,7 @@ class SlideReorderRequest(BaseModel):
 class ManualSlideRequest(BaseModel):
     project_id: str
     template_slide_id: str
+    insert_after_order: Optional[int] = None  # None이면 맨 끝에 추가
 
 
 class SlideTextRequest(BaseModel):
@@ -42,3 +43,4 @@ class SlideTextRequest(BaseModel):
     slide_id: str
     instruction: str
     template_slide_id: str = ""
+    current_content: Optional[dict] = None

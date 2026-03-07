@@ -4,7 +4,9 @@ from bson import ObjectId
 from datetime import datetime
 from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest
 from services.mongo_service import get_db
-from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible
+from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible, get_user_by_key
+from services import redis_service
+from routers.collaboration import check_project_access
 from services.template_service import recommend_slide, get_template_slides
 from services.ppt_service import generate_pptx
 from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content
@@ -86,6 +88,10 @@ async def generate_slides(jwt_token: str, data: GenerateRequest):
 
     # 기존 생성 슬라이드 삭제
     await db.generated_slides.delete_many({"project_id": data.project_id})
+    # 협업 데이터 정리 (재생성 시 Lock/히스토리 리셋)
+    await db.slide_locks.delete_many({"project_id": data.project_id})
+    await db.slide_history.delete_many({"project_id": data.project_id})
+    await redis_service.delete_project_locks(data.project_id)
 
     # 리소스 텍스트 수집
     cursor = db.resources.find({"project_id": data.project_id})
@@ -110,8 +116,8 @@ async def generate_slides(jwt_token: str, data: GenerateRequest):
     template = await db.templates.find_one({"_id": ObjectId(data.template_id)})
     bg_image = template.get("background_image") if template else None
 
-    # ── 핵심: 템플릿 슬라이드 분석 및 자동 placeholder 할당 ──
-    slides_meta = _analyze_template_slides(slides)
+    # ── 핵심: 템플릿 슬라이드 분석 및 자동 placeholder 할당 (Redis 캐시) ──
+    slides_meta = await _analyze_template_slides_cached(data.template_id, slides)
 
     # Claude Opus API 호출하여 리치 스키마 콘텐츠 생성
     llm_result = await generate_slide_content(
@@ -190,6 +196,10 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
 
     # 기존 생성 슬라이드 삭제
     await db.generated_slides.delete_many({"project_id": data.project_id})
+    # 협업 데이터 정리 (재생성 시 Lock/히스토리 리셋)
+    await db.slide_locks.delete_many({"project_id": data.project_id})
+    await db.slide_history.delete_many({"project_id": data.project_id})
+    await redis_service.delete_project_locks(data.project_id)
 
     # 리소스 텍스트 수집
     cursor = db.resources.find({"project_id": data.project_id})
@@ -212,11 +222,14 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
     template = await db.templates.find_one({"_id": ObjectId(data.template_id)})
     bg_image = template.get("background_image") if template else None
 
-    # 템플릿 슬라이드 분석
-    slides_meta = _analyze_template_slides(slides)
+    # 템플릿 슬라이드 분석 (Redis 캐시)
+    slides_meta = await _analyze_template_slides_cached(data.template_id, slides)
 
     # 생성 ID (중복 생성 방지 및 취소 체크용)
     generation_id = str(uuid.uuid4())
+
+    # 이전 취소 플래그 클리어
+    await redis_service.clear_generation_cancel(data.project_id)
 
     # 프로젝트 상태 업데이트
     await db.projects.update_one(
@@ -395,17 +408,32 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
 
 @router.post("/{jwt_token}/api/generate/manual-slide")
 async def add_manual_slide(jwt_token: str, data: ManualSlideRequest):
-    """수동 모드: 템플릿 슬라이드를 기반으로 빈 슬라이드 추가"""
-    await get_user_key(jwt_token)
+    """슬라이드 추가: 템플릿 슬라이드를 기반으로 빈 슬라이드 추가 (owner/editor)"""
+    user_key = await get_user_key(jwt_token)
     db = get_db()
+
+    # 접근 제어: editor 이상만 허용
+    await check_project_access(db, data.project_id, user_key, "editor")
 
     # 템플릿 슬라이드 조회
     template_slide = await db.slides.find_one({"_id": ObjectId(data.template_slide_id)})
     if not template_slide:
         raise HTTPException(status_code=404, detail="템플릿 슬라이드를 찾을 수 없습니다")
 
-    # 기존 슬라이드 수 확인 (order 결정)
-    count = await db.generated_slides.count_documents({"project_id": data.project_id})
+    now = datetime.utcnow()
+
+    # 삽입 위치 결정
+    if data.insert_after_order is not None:
+        # 선택된 슬라이드 다음에 삽입: 이후 슬라이드 order +1 shift
+        await db.generated_slides.update_many(
+            {"project_id": data.project_id, "order": {"$gt": data.insert_after_order}},
+            {"$inc": {"order": 1}, "$set": {"updated_at": now}}
+        )
+        new_order = data.insert_after_order + 1
+    else:
+        # 맨 끝에 추가
+        count = await db.generated_slides.count_documents({"project_id": data.project_id})
+        new_order = count + 1
 
     # 템플릿 분석 (auto role/placeholder 할당)
     analyzed = _analyze_template_slides([dict(template_slide)])
@@ -423,24 +451,33 @@ async def add_manual_slide(jwt_token: str, data: ManualSlideRequest):
     doc = {
         "project_id": data.project_id,
         "template_slide_id": data.template_slide_id,
-        "order": count + 1,
+        "order": new_order,
         "objects": gen_objects,
         "items": [],
         "background_image": template_slide.get("background_image"),
         "slide_meta": template_slide.get("slide_meta", {}),
-        "created_at": datetime.utcnow(),
+        "created_at": now,
+        "updated_at": now,
     }
     result = await db.generated_slides.insert_one(doc)
     doc["_id"] = str(result.inserted_id)
 
-    # 프로젝트 상태를 generated로 변경 (slidePreview 표시)
+    # order 정규화 (동시 삽입 시 중복 방지)
+    await _normalize_slide_order(db, data.project_id)
+
+    # 프로젝트 상태 업데이트
+    existing_count = await db.generated_slides.count_documents({"project_id": data.project_id})
+    update_fields = {
+        "status": "generated",
+        "updated_at": now,
+    }
+    # 첫 슬라이드일 때만 manual_mode 설정
+    if existing_count == 1:
+        update_fields["manual_mode"] = True
+
     await db.projects.update_one(
         {"_id": ObjectId(data.project_id)},
-        {"$set": {
-            "status": "generated",
-            "manual_mode": True,
-            "updated_at": datetime.utcnow(),
-        }}
+        {"$set": update_fields}
     )
 
     return {"slide": doc}
@@ -481,19 +518,58 @@ async def generate_slide_text(jwt_token: str, data: SlideTextRequest):
     project = await db.projects.find_one({"_id": ObjectId(data.project_id)})
     lang = (project or {}).get("lang", "ko") or "ko"
 
+    # 현재 슬라이드의 기존 내용 수집 (편집 모드에서 전달)
+    existing_content = None
+    if data.current_content:
+        existing_content = data.current_content
+    else:
+        # 프론트에서 전달하지 않은 경우 DB에서 수집
+        ec = {}
+        for obj in gen_slide.get("objects", []):
+            if obj.get("obj_type") == "text":
+                role = obj.get("role") or obj.get("_auto_role") or ""
+                text = obj.get("generated_text") or obj.get("text_content") or ""
+                if text:
+                    ec[role or "text"] = text
+        if ec:
+            existing_content = {"contents": ec, "items": gen_slide.get("items", [])}
+
     # LLM으로 단일 슬라이드 텍스트 생성
-    llm_result = await generate_single_slide_content(
-        resources_text=resources_text,
-        instruction=data.instruction,
-        slide_meta=slide_meta,
-        lang=lang,
-    )
+    print(f"[slide-text] instruction: {data.instruction}")
+    print(f"[slide-text] slide_meta placeholders: {slide_meta.get('placeholders', [])}")
+    print(f"[slide-text] existing_content: {existing_content}")
+
+    try:
+        llm_result = await generate_single_slide_content(
+            resources_text=resources_text,
+            instruction=data.instruction,
+            slide_meta=slide_meta,
+            lang=lang,
+            current_content=existing_content,
+        )
+    except Exception as e:
+        print(f"[slide-text] LLM 호출 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"AI 텍스트 생성 실패: {str(e)}")
 
     contents = llm_result.get("contents", {})
     items = llm_result.get("items", [])
+    print(f"[slide-text] LLM result contents: {contents}")
+    print(f"[slide-text] LLM result items: {items}")
+
+    # items를 subtitle/description placeholder에 매핑
+    # (_build_gen_objects가 매핑되지 않은 subtitle/description 오브젝트를 제거하므로 반드시 필요)
+    if items:
+        sub_phs = [p["placeholder"] for p in slide_meta.get("placeholders", []) if p["role"] == "subtitle"]
+        desc_phs = [p["placeholder"] for p in slide_meta.get("placeholders", []) if p["role"] == "description"]
+        for i, item in enumerate(items):
+            if i < len(sub_phs) and sub_phs[i] not in contents:
+                contents[sub_phs[i]] = item.get("heading", "")
+            if i < len(desc_phs) and desc_phs[i] not in contents:
+                contents[desc_phs[i]] = item.get("detail", "")
 
     # _build_gen_objects로 텍스트 매핑
     gen_objects = _build_gen_objects(dict(template_slide), contents)
+    print(f"[slide-text] gen_objects count: {len(gen_objects)}, text objs: {[(o.get('role',''), o.get('generated_text','')[:30]) for o in gen_objects if o.get('obj_type')=='text']}")
 
     # DB 업데이트
     await db.generated_slides.update_one(
@@ -514,8 +590,8 @@ async def generate_slide_text(jwt_token: str, data: SlideTextRequest):
 
 @router.delete("/{jwt_token}/api/generate/manual-slide/{slide_id}")
 async def delete_manual_slide(jwt_token: str, slide_id: str):
-    """수동 모드: 슬라이드 삭제"""
-    await get_user_key(jwt_token)
+    """슬라이드 삭제 (owner/editor)"""
+    user_key = await get_user_key(jwt_token)
     db = get_db()
 
     slide = await db.generated_slides.find_one({"_id": ObjectId(slide_id)})
@@ -523,16 +599,29 @@ async def delete_manual_slide(jwt_token: str, slide_id: str):
         raise HTTPException(status_code=404, detail="슬라이드를 찾을 수 없습니다")
 
     project_id = slide.get("project_id")
+
+    # 접근 제어: editor 이상만 허용
+    await check_project_access(db, project_id, user_key, "editor")
+
+    # 락 체크: 다른 사용자가 편집 중인 슬라이드는 삭제 불가
+    now = datetime.utcnow()
+    lock = await db.slide_locks.find_one({
+        "project_id": project_id, "slide_id": slide_id
+    })
+    if lock and lock.get("expires_at") and lock["expires_at"] > now:
+        if lock.get("user_key") != user_key:
+            raise HTTPException(status_code=423, detail="다른 사용자가 편집 중이므로 삭제할 수 없습니다")
+
     await db.generated_slides.delete_one({"_id": ObjectId(slide_id)})
 
-    # 순서 재정렬
-    remaining = db.generated_slides.find({"project_id": project_id}).sort("order", 1)
-    order = 1
-    async for s in remaining:
-        await db.generated_slides.update_one(
-            {"_id": s["_id"]}, {"$set": {"order": order}}
-        )
-        order += 1
+    # 순서 재정렬 + updated_at 갱신 (협업 감지용)
+    await _normalize_slide_order(db, project_id)
+
+    # 프로젝트 updated_at 갱신
+    await db.projects.update_one(
+        {"_id": ObjectId(project_id)},
+        {"$set": {"updated_at": now}}
+    )
 
     return {"success": True}
 
@@ -549,6 +638,9 @@ async def stop_generation(jwt_token: str, project_id: str):
 
     if project.get("status") != "generating":
         return {"success": True, "message": "생성 중이 아닙니다"}
+
+    # Redis에 취소 플래그 설정 (빠른 폴링용)
+    await redis_service.set_generation_cancel(project_id)
 
     await db.projects.update_one(
         {"_id": ObjectId(project_id)},
@@ -574,11 +666,60 @@ async def get_generated_slides(jwt_token: str, project_id: str):
     return {"slides": slides}
 
 
-@router.put("/{jwt_token}/api/generate/slides/{slide_id}")
-async def update_generated_slide(jwt_token: str, slide_id: str, data: SlideUpdateRequest):
-    """생성된 슬라이드 수정"""
+@router.post("/{jwt_token}/api/generate/{project_id}/slides/delta")
+async def get_slides_delta(jwt_token: str, project_id: str, data: dict):
+    """변경된 슬라이드만 조회 (slide_ids 목록으로 필터)"""
     await get_user_key(jwt_token)
     db = get_db()
+    slide_ids = data.get("slide_ids", [])
+    if not slide_ids:
+        return {"slides": []}
+    object_ids = [ObjectId(sid) for sid in slide_ids]
+    cursor = db.generated_slides.find(
+        {"_id": {"$in": object_ids}, "project_id": project_id}
+    ).sort("order", 1)
+    slides = []
+    async for s in cursor:
+        s["_id"] = str(s["_id"])
+        slides.append(s)
+    return {"slides": slides}
+
+
+@router.put("/{jwt_token}/api/generate/slides/{slide_id}")
+async def update_generated_slide(jwt_token: str, slide_id: str, data: SlideUpdateRequest):
+    """생성된 슬라이드 수정 (협업 시 잠금 확인 + 히스토리 기록)"""
+    user_key = await get_user_key(jwt_token)
+    db = get_db()
+
+    # 슬라이드 조회 (project_id 확인용)
+    slide = await db.generated_slides.find_one({"_id": ObjectId(slide_id)})
+    if not slide:
+        raise HTTPException(status_code=404, detail="슬라이드를 찾을 수 없습니다")
+
+    project_id = slide.get("project_id")
+
+    # 권한 확인: 소유자 또는 editor 이상
+    await check_project_access(db, project_id, user_key, "editor")
+
+    # 협업 프로젝트면 Lock 확인
+    collab_count = await db.collaborators.count_documents({"project_id": project_id})
+    if collab_count > 0:
+        lock = await db.slide_locks.find_one(
+            {"project_id": project_id, "slide_id": slide_id}
+        )
+        if not lock or lock.get("user_key") != user_key:
+            raise HTTPException(
+                status_code=423,
+                detail="슬라이드를 잠금한 후 편집할 수 있습니다"
+            )
+
+    # 변경 전 스냅샷
+    before = {
+        "objects": slide.get("objects", []),
+        "items": slide.get("items", []),
+    }
+
+    # 업데이트 수행
     update_fields = {
         "objects": data.objects,
         "updated_at": datetime.utcnow(),
@@ -589,6 +730,22 @@ async def update_generated_slide(jwt_token: str, slide_id: str, data: SlideUpdat
         {"_id": ObjectId(slide_id)},
         {"$set": update_fields}
     )
+
+    # 협업 프로젝트면 히스토리 기록
+    if collab_count > 0:
+        user = await get_user_by_key(user_key)
+        user_name = user.get("nm", user_key) if user else user_key
+        after = {
+            "objects": data.objects,
+            "items": data.items if data.items is not None else slide.get("items", []),
+        }
+        await _record_slide_history(
+            db, project_id, slide_id,
+            action="update", user_key=user_key, user_name=user_name,
+            before_snapshot=before, after_snapshot=after,
+            description="슬라이드 수정",
+        )
+
     return {"success": True}
 
 
@@ -643,6 +800,90 @@ async def download_pptx(jwt_token: str, project_id: str):
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{jwt_token}/api/generate/switch-template-slide")
+async def switch_template_slide(jwt_token: str, data: dict):
+    """항목 수 변경 시 적합한 템플릿 슬라이드로 자동 전환
+
+    요청: { slide_id, items_count, contents, items }
+    - 현재 슬라이드의 template_id에서 동일 content_type + items_count에 가까운 템플릿 슬라이드를 찾아
+      오브젝트를 재매핑하고 DB 업데이트
+    """
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    slide_id = data.get("slide_id")
+    new_items_count = data.get("items_count", 0)
+    contents = data.get("contents", {})
+    items = data.get("items", [])
+
+    gen_slide = await db.generated_slides.find_one({"_id": ObjectId(slide_id)})
+    if not gen_slide:
+        raise HTTPException(status_code=404, detail="슬라이드를 찾을 수 없습니다")
+
+    project_id = gen_slide.get("project_id")
+    project = await db.projects.find_one({"_id": ObjectId(project_id)})
+    if not project or not project.get("template_id"):
+        return {"switched": False, "reason": "no_template"}
+
+    template_id = project["template_id"]
+
+    # 현재 템플릿 슬라이드의 content_type 확인
+    old_tmpl_id = gen_slide.get("template_slide_id")
+    old_tmpl = await db.slides.find_one({"_id": ObjectId(old_tmpl_id)}) if old_tmpl_id else None
+    current_content_type = (old_tmpl or {}).get("slide_meta", {}).get("content_type", "body")
+
+    # 동일 템플릿의 같은 content_type 슬라이드들 조회
+    cursor = db.slides.find({"template_id": template_id})
+    candidates = []
+    async for tmpl_slide in cursor:
+        meta = tmpl_slide.get("slide_meta", {})
+        if meta.get("content_type") == current_content_type:
+            desc_count = meta.get("description_count", 0)
+            if not desc_count:
+                # auto-detect from objects
+                text_objs = [o for o in tmpl_slide.get("objects", []) if o.get("obj_type") == "text"]
+                desc_count = sum(1 for o in text_objs if o.get("role") in ("description", "subtitle"))
+            candidates.append({
+                "slide": tmpl_slide,
+                "desc_count": desc_count,
+            })
+
+    if not candidates:
+        return {"switched": False, "reason": "no_candidates"}
+
+    # 항목 수에 가장 가까운 템플릿 슬라이드 선택
+    best = min(candidates, key=lambda c: abs(c["desc_count"] - new_items_count))
+    new_tmpl = best["slide"]
+    new_tmpl_id = str(new_tmpl["_id"])
+
+    # 현재와 같은 템플릿이면 전환 불필요
+    if new_tmpl_id == old_tmpl_id:
+        return {"switched": False, "reason": "same_template"}
+
+    # 새 템플릿으로 오브젝트 재매핑
+    analyzed = _analyze_template_slides([dict(new_tmpl)])
+    gen_objects = _build_gen_objects(dict(new_tmpl), contents)
+
+    # DB 업데이트
+    now = datetime.utcnow()
+    await db.generated_slides.update_one(
+        {"_id": ObjectId(slide_id)},
+        {"$set": {
+            "template_slide_id": new_tmpl_id,
+            "objects": gen_objects,
+            "items": items,
+            "background_image": new_tmpl.get("background_image") or gen_slide.get("background_image"),
+            "updated_at": now,
+        }}
+    )
+
+    # 업데이트된 슬라이드 반환
+    updated = await db.generated_slides.find_one({"_id": ObjectId(slide_id)})
+    updated["_id"] = str(updated["_id"])
+
+    return {"switched": True, "slide": updated, "new_template_slide_id": new_tmpl_id}
 
 
 @router.get("/{jwt_token}/api/generate/{project_id}/download/pdf")
@@ -700,10 +941,51 @@ async def get_shared_slides(share_token: str):
     }
 
 
+# ============ 유틸: 슬라이드 히스토리 기록 ============
+
+async def _record_slide_history(
+    db, project_id: str, slide_id: str, action: str,
+    user_key: str, user_name: str, before_snapshot: dict,
+    after_snapshot: dict, description: str
+):
+    """슬라이드 변경 히스토리 기록"""
+    await db.slide_history.insert_one({
+        "project_id": project_id,
+        "slide_id": slide_id,
+        "action": action,
+        "user_key": user_key,
+        "user_name": user_name,
+        "before_snapshot": before_snapshot,
+        "after_snapshot": after_snapshot,
+        "description": description,
+        "created_at": datetime.utcnow(),
+    })
+
+
+async def _normalize_slide_order(db, project_id: str):
+    """슬라이드 order를 1..N으로 정규화 (동시 삽입 시 중복/gap 방지)"""
+    cursor = db.generated_slides.find(
+        {"project_id": project_id}
+    ).sort([("order", 1), ("created_at", 1)])
+    order = 1
+    async for s in cursor:
+        if s.get("order") != order:
+            await db.generated_slides.update_one(
+                {"_id": s["_id"]}, {"$set": {"order": order}}
+            )
+        order += 1
+
+
 # ============ 유틸: 생성 취소 체크 ============
 
 async def _check_cancelled(db, project_id: str, generation_id: str) -> bool:
-    """MongoDB에서 생성 중단 요청 여부 확인"""
+    """생성 중단 요청 여부 확인 (Redis 우선, MongoDB 폴백)"""
+    # Redis 우선 체크 (O(1))
+    redis_cancelled = await redis_service.check_generation_cancel(project_id)
+    if redis_cancelled is True:
+        return True
+
+    # Redis에 없거나 불가 시 MongoDB 확인
     project = await db.projects.find_one(
         {"_id": ObjectId(project_id)},
         {"status": 1, "generation_id": 1}
@@ -720,6 +1002,7 @@ async def _check_cancelled(db, project_id: str, generation_id: str) -> bool:
 
 async def _set_stopped(db, project_id: str):
     """프로젝트 상태를 stopped로 변경"""
+    await redis_service.clear_generation_cancel(project_id)
     await db.projects.update_one(
         {"_id": ObjectId(project_id)},
         {"$set": {"status": "stopped", "updated_at": datetime.utcnow()}}
@@ -727,6 +1010,18 @@ async def _set_stopped(db, project_id: str):
 
 
 # ============ 유틸: 공통 헬퍼 ============
+
+async def _analyze_template_slides_cached(template_id: str, slides: list) -> list[dict]:
+    """템플릿 슬라이드 분석 결과를 Redis에 캐시 (24시간)"""
+    cache_key = f"template:{template_id}:analysis"
+    cached = await redis_service.cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    result = _analyze_template_slides(slides)
+    await redis_service.cache_set(cache_key, result, ttl=86400)
+    return result
+
 
 def _analyze_template_slides(slides: list) -> list[dict]:
     """템플릿 슬라이드 분석 및 자동 placeholder 할당"""

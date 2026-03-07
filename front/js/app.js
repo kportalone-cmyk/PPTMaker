@@ -29,6 +29,20 @@ const state = {
     editResizeDir: '',
     editResizeStart: null,
     editDirtySlides: new Set(),
+    editingSlideId: null,  // 현재 편집 중인 슬라이드 ID (Lock 추적용)
+    // 협업 상태
+    collaborators: [],
+    sharedProjects: [],
+    activeLocks: {},
+    onlineUsers: [],
+    isCollabProject: false,
+    collabRole: null,
+    pollInterval: null,
+    heartbeatInterval: null,
+    lastSlideTimestamps: {},
+    editAutoSaveInterval: null,
+    projectPage: 0,         // 프로젝트 목록 현재 페이지 (0-based)
+    projectPageSize: 10,    // 페이지당 프로젝트 수
 };
 
 let _animationCancelled = false;
@@ -100,16 +114,18 @@ const I18N = {
         emptyStep1: '리소스를 추가하세요',
         emptyStep2: '지침을 입력하세요',
         emptyStep3: '생성 버튼을 누르세요',
-        manualCreate: '수동',
+        addSlideBtn: '슬라이드 추가',
         addSlide: '슬라이드 추가',
         selectTemplateSlide: '슬라이드 레이아웃 선택',
         generateSlideText: 'AI 생성',
-        slideInstructionPlaceholder: '이 슬라이드에 대한 지침을 입력하세요...',
+        slideInstructionPlaceholder: '이 슬라이드에 대한 지침을 입력하세요... (예: 제목을 바꿔줘, 항목을 추가해줘)',
         msgSlideAdded: '슬라이드가 추가되었습니다',
         msgSlideDeleted: '슬라이드가 삭제되었습니다',
         msgSlideTextGenerated: '텍스트가 생성되었습니다',
         msgSelectTemplate: '먼저 템플릿을 선택하세요',
         msgGeneratingText: '텍스트 생성 중...',
+        aiModifyRequest: 'AI 수정 요청',
+        editingNow: '편집 중',
         prev: '이전',
         next: '다음',
         textResourceTitle: '텍스트 리소스 추가',
@@ -227,16 +243,18 @@ const I18N = {
         emptyStep1: 'Add resources',
         emptyStep2: 'Enter instructions',
         emptyStep3: 'Click Generate',
-        manualCreate: 'Manual',
+        addSlideBtn: 'Add Slide',
         addSlide: 'Add Slide',
         selectTemplateSlide: 'Select Slide Layout',
         generateSlideText: 'AI Generate',
-        slideInstructionPlaceholder: 'Enter instructions for this slide...',
+        slideInstructionPlaceholder: 'Enter instructions for this slide... (e.g., change the title, add an item)',
         msgSlideAdded: 'Slide added',
         msgSlideDeleted: 'Slide deleted',
         msgSlideTextGenerated: 'Text generated',
         msgSelectTemplate: 'Please select a template first',
         msgGeneratingText: 'Generating text...',
+        aiModifyRequest: 'AI Modify',
+        editingNow: 'Editing',
         prev: 'Prev',
         next: 'Next',
         textResourceTitle: 'Add Text Resource',
@@ -354,16 +372,18 @@ const I18N = {
         emptyStep1: 'リソースを追加',
         emptyStep2: '指示を入力',
         emptyStep3: '生成ボタンを押す',
-        manualCreate: '手動',
+        addSlideBtn: 'スライド追加',
         addSlide: 'スライド追加',
         selectTemplateSlide: 'スライドレイアウト選択',
         generateSlideText: 'AI生成',
-        slideInstructionPlaceholder: 'このスライドの指示を入力...',
+        slideInstructionPlaceholder: 'このスライドの指示を入力... (例: タイトルを変更、項目を追加)',
         msgSlideAdded: 'スライドを追加しました',
         msgSlideDeleted: 'スライドを削除しました',
         msgSlideTextGenerated: 'テキストを生成しました',
         msgSelectTemplate: 'テンプレートを選択してください',
         msgGeneratingText: 'テキスト生成中...',
+        aiModifyRequest: 'AI修正',
+        editingNow: '編集中',
         prev: '前',
         next: '次',
         textResourceTitle: 'テキスト追加',
@@ -481,16 +501,18 @@ const I18N = {
         emptyStep1: '添加资源',
         emptyStep2: '输入指令',
         emptyStep3: '点击生成',
-        manualCreate: '手动',
+        addSlideBtn: '添加幻灯片',
         addSlide: '添加幻灯片',
         selectTemplateSlide: '选择幻灯片布局',
         generateSlideText: 'AI生成',
-        slideInstructionPlaceholder: '输入此幻灯片的指令...',
+        slideInstructionPlaceholder: '输入此幻灯片的指令... (例如: 修改标题, 添加项目)',
         msgSlideAdded: '幻灯片已添加',
         msgSlideDeleted: '幻灯片已删除',
         msgSlideTextGenerated: '文本已生成',
         msgSelectTemplate: '请先选择模板',
         msgGeneratingText: '正在生成文本...',
+        aiModifyRequest: 'AI修改',
+        editingNow: '编辑中',
         prev: '上一页',
         next: '下一页',
         textResourceTitle: '添加文本',
@@ -617,7 +639,9 @@ function applyI18n() {
         $('.i18n-generateBtn').text(t('generateBtn'));
     }
     $('.i18n-slideCountAuto').text(t('slideCountAuto'));
+    $('.i18n-addSlideBtn').text(t('addSlideBtn'));
     $('#instructionsInput').attr('placeholder', t('instructionsPlaceholder'));
+    $('#slideInstructionInput').attr('placeholder', t('slideInstructionPlaceholder'));
 
     // 모달
     $('.i18n-newProjectTitle').text(t('newProjectTitle'));
@@ -1006,18 +1030,29 @@ function showEmptyState() {
 function renderRecentProjects() {
     const grid = $('#recentProjectsGrid');
     grid.empty();
-    const recent = state.projects.slice(0, 6);
-    if (recent.length === 0) return;
+    // 내 프로젝트 + 공유 프로젝트를 합쳐서 최근순 6개
+    const all = [
+        ...state.projects.map(p => ({ ...p, _isShared: false })),
+        ...state.sharedProjects.map(p => ({ ...p, _isShared: true })),
+    ].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)).slice(0, 6);
+    if (all.length === 0) return;
 
-    recent.forEach(p => {
+    all.forEach(p => {
         const statusLabel = { draft: t('statusDraft'), preparing: t('statusPreparing'), generating: t('statusGenerating'), generated: t('statusGenerated'), stop_requested: t('statusStopped'), stopped: t('statusStopped') }[p.status] || t('statusDraft');
         const date = p.created_at ? new Date(p.created_at).toLocaleDateString() : '';
+        const collabCount = p._collab_count || 0;
+        const collabIndicator = collabCount > 0
+            ? `<span class="rc-collab" onclick="event.stopPropagation();openProject('${p._id}');setTimeout(showCollabModal,300)" title="${t('collaboration','협업')} (${collabCount})"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="4.5" cy="4.5" r="2.2"/><circle cx="9" cy="5.5" r="1.8"/><path d="M.5 10.5c0-2 1.5-3.5 4-3.5s2.5.8 3 1.5"/></svg> ${collabCount}</span>`
+            : '';
+        const sharedBadge = p._isShared
+            ? `<span class="rc-shared-role">${p._collab_role === 'editor' ? t('editor','편집자') : t('viewer','뷰어')}</span>`
+            : '';
         grid.append(`
             <div class="recent-card" onclick="openProject('${p._id}')">
-                <div class="rc-title">${escapeHtml(p.name)}</div>
+                <div class="rc-title">${escapeHtml(p.name)}${collabIndicator}</div>
                 <div class="rc-desc">${escapeHtml(p.description || t('noDesc'))}</div>
                 <div class="rc-meta">
-                    <span class="rc-date">${date}</span>
+                    <span class="rc-date">${date}${sharedBadge}</span>
                     <span class="rc-status ${p.status || 'draft'}">${statusLabel}</span>
                 </div>
             </div>
@@ -1030,6 +1065,7 @@ async function loadProjects() {
     try {
         const res = await apiGet('/api/projects');
         state.projects = res.projects || [];
+        state.sharedProjects = res.shared_projects || [];
         renderProjectList();
     } catch (e) {
         showToast(t('msgLoadingProject'), 'error');
@@ -1040,27 +1076,109 @@ function renderProjectList() {
     const list = $('#projectList');
     list.empty();
 
-    if (state.projects.length === 0) {
+    // 내 프로젝트 + 공유 프로젝트를 하나로 합침
+    const allProjects = [
+        ...state.projects.map(p => ({ ...p, _isShared: false })),
+        ...state.sharedProjects.map(p => ({ ...p, _isShared: true })),
+    ];
+
+    if (allProjects.length === 0) {
         list.html(`<div style="padding:16px 12px;text-align:center;color:var(--sidebar-text);font-size:12px;opacity:0.6;">${t('noResources')}</div>`);
         return;
     }
 
-    state.projects.forEach(p => {
+    const pageSize = state.projectPageSize;
+    const totalPages = Math.ceil(allProjects.length / pageSize);
+
+    // 페이지 범위 보정
+    if (state.projectPage >= totalPages) state.projectPage = totalPages - 1;
+    if (state.projectPage < 0) state.projectPage = 0;
+
+    const start = state.projectPage * pageSize;
+    const pageItems = allProjects.slice(start, start + pageSize);
+
+    // 현재 프로젝트가 포함된 페이지로 이동 (새 프로젝트 열 때)
+    if (state.currentProject) {
+        const globalIdx = allProjects.findIndex(p => p._id === state.currentProject._id);
+        if (globalIdx >= 0) {
+            const targetPage = Math.floor(globalIdx / pageSize);
+            if (targetPage !== state.projectPage) {
+                state.projectPage = targetPage;
+                renderProjectList();
+                return;
+            }
+        }
+    }
+
+    let lastWasShared = false;
+
+    pageItems.forEach(p => {
+        // 공유 프로젝트 섹션 라벨 (첫 번째 공유 프로젝트 앞에 한 번만)
+        if (p._isShared && !lastWasShared) {
+            list.append(`<div class="sidebar-section-label" style="margin-top:12px;padding:0 12px;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--sidebar-text);opacity:0.5;">공유됨</div>`);
+            lastWasShared = true;
+        }
+
         const isActive = state.currentProject && state.currentProject._id === p._id;
         const date = p.created_at ? new Date(p.created_at).toLocaleDateString() : '';
-        list.append(`
-            <div class="project-item ${isActive ? 'active' : ''}" onclick="openProject('${p._id}')">
-                <div class="proj-icon">
-                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 6h6M5 9h4"/></svg>
+
+        if (p._isShared) {
+            const roleLabel = p._collab_role === 'editor' ? '편집자' : '뷰어';
+            list.append(`
+                <div class="project-item ${isActive ? 'active' : ''}" onclick="openProject('${p._id}')">
+                    <div class="proj-icon collab-icon">
+                        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="12" cy="8" r="2.5"/><path d="M1 14c0-3 2.5-5 5-5s3.5 1 4 2"/></svg>
+                    </div>
+                    <div class="proj-info">
+                        <div class="proj-name">${escapeHtml(p.name)}</div>
+                        <div class="proj-date">${date} · ${roleLabel}</div>
+                    </div>
+                    <div class="proj-status-dot ${p.status || 'draft'}"></div>
                 </div>
-                <div class="proj-info">
-                    <div class="proj-name">${escapeHtml(p.name)}</div>
-                    <div class="proj-date">${date}</div>
+            `);
+        } else {
+            const collabCount = p._collab_count || 0;
+            const collabBadge = collabCount > 0
+                ? `<span class="proj-collab-badge" onclick="event.stopPropagation();openProject('${p._id}');setTimeout(showCollabModal,300)" title="${t('collaboration','협업')} (${collabCount})"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="4.5" cy="4.5" r="2.2"/><circle cx="9" cy="5.5" r="1.8"/><path d="M.5 10.5c0-2 1.5-3.5 4-3.5s2.5.8 3 1.5"/></svg><span>${collabCount}</span></span>`
+                : '';
+            list.append(`
+                <div class="project-item ${isActive ? 'active' : ''}" onclick="openProject('${p._id}')">
+                    <div class="proj-icon">
+                        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 6h6M5 9h4"/></svg>
+                    </div>
+                    <div class="proj-info">
+                        <div class="proj-name">${escapeHtml(p.name)}${collabBadge}</div>
+                        <div class="proj-date">${date}</div>
+                    </div>
+                    <div class="proj-status-dot ${p.status || 'draft'}"></div>
                 </div>
-                <div class="proj-status-dot ${p.status || 'draft'}"></div>
-            </div>
-        `);
+            `);
+        }
     });
+
+    // 페이징 UI (2페이지 이상일 때만)
+    if (totalPages > 1) {
+        let paginationHtml = '<div class="project-pagination">';
+        paginationHtml += `<button class="pp-btn ${state.projectPage === 0 ? 'disabled' : ''}" onclick="goProjectPage(${state.projectPage - 1})" ${state.projectPage === 0 ? 'disabled' : ''}><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2L3 6l5 4"/></svg></button>`;
+
+        // 페이지 번호 (최대 5개 표시)
+        let startPage = Math.max(0, state.projectPage - 2);
+        let endPage = Math.min(totalPages - 1, startPage + 4);
+        if (endPage - startPage < 4) startPage = Math.max(0, endPage - 4);
+
+        for (let i = startPage; i <= endPage; i++) {
+            paginationHtml += `<button class="pp-num ${i === state.projectPage ? 'active' : ''}" onclick="goProjectPage(${i})">${i + 1}</button>`;
+        }
+
+        paginationHtml += `<button class="pp-btn ${state.projectPage === totalPages - 1 ? 'disabled' : ''}" onclick="goProjectPage(${state.projectPage + 1})" ${state.projectPage === totalPages - 1 ? 'disabled' : ''}><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 2l5 4-5 4"/></svg></button>`;
+        paginationHtml += '</div>';
+        list.append(paginationHtml);
+    }
+}
+
+function goProjectPage(page) {
+    state.projectPage = page;
+    renderProjectList();
 }
 
 function showNewProjectModal() {
@@ -1095,18 +1213,26 @@ async function createProject() {
 async function openProject(projectId) {
     try {
         showLoading(t('msgLoadingProject'));
+
+        // 이전 프로젝트의 폴링 중지
+        stopCollabPolling();
+
         const res = await apiGet('/api/projects/' + projectId);
         state.currentProject = res.project;
         state.resources = res.resources || [];
         state.generatedSlides = res.generated_slides || [];
         state.currentSlideIndex = 0;
+        state.collabRole = res.project._collab_role || 'owner';
 
         hideLoading();
         renderProjectWorkspace();
-        renderProjectList(); // 사이드바 활성 상태 업데이트
+        renderProjectList();
 
         // 배경/오브젝트 이미지 백그라운드 프리로드
         _preloadSlideImages(state.generatedSlides);
+
+        // 협업 초기화
+        await initCollaboration(projectId);
     } catch (e) {
         hideLoading();
         showToast(t('msgLoadingProject'), 'error');
@@ -1144,6 +1270,9 @@ function renderProjectWorkspace() {
     // 수동 모드 상태 복원
     state.manualMode = !!state.currentProject.manual_mode;
     updateManualModeUI();
+
+    // 협업 UI 업데이트
+    updateCollabUI();
 }
 
 function showEditProjectModal() {
@@ -1558,7 +1687,7 @@ async function deleteAllResources() {
 
 // ============ 수동 생성 모드 ============
 
-async function enterManualMode() {
+async function openAddSlideModal() {
     if (!state.currentProject) return;
 
     // 템플릿 미선택 시 선택 유도
@@ -1568,37 +1697,15 @@ async function enterManualMode() {
         return;
     }
 
-    state.manualMode = true;
-
-    // 이미 슬라이드가 있으면 그대로 표시, 없으면 빈 상태
-    if (state.generatedSlides.length === 0) {
-        // slidePreview 표시 + 빈 상태에서 시작
-        $('#slideEmpty').hide();
-        $('#slidePreview').show();
-        renderSlideThumbList();
-        // 캔버스 비우기
-        $('#previewCanvas').find('.preview-obj,.edit-obj-wrap').remove();
-        $('#previewBg').css('background-image', 'none');
-    }
-
-    // 수동 모드 UI 업데이트
-    updateManualModeUI();
     showTemplateSlidePickerModal();
 }
 
-function exitManualMode() {
-    state.manualMode = false;
-    updateManualModeUI();
-}
-
 function updateManualModeUI() {
-    // 슬라이드 지침 바 표시/숨김
-    if (state.manualMode) {
+    // 슬라이드가 있으면 AI 지침 바 표시
+    if (state.generatedSlides.length > 0) {
         $('#slideInstructionBar').show();
-        $('#btnManualCreate').addClass('active');
     } else {
         $('#slideInstructionBar').hide();
-        $('#btnManualCreate').removeClass('active');
     }
     // 좌측 패널 + 추가 버튼 갱신
     renderSlideThumbList();
@@ -1649,19 +1756,40 @@ async function showTemplateSlidePickerModal() {
 async function addManualSlide(templateSlideId) {
     if (!state.currentProject) return;
 
+    // 삽입 위치 결정: 선택된 슬라이드 다음 또는 맨 끝
+    let insertAfterOrder = null;
+    if (state.currentSlideIndex >= 0 && state.currentSlideIndex < state.generatedSlides.length) {
+        const selectedSlide = state.generatedSlides[state.currentSlideIndex];
+        if (selectedSlide && selectedSlide.order != null) {
+            insertAfterOrder = selectedSlide.order;
+        }
+    }
+
     try {
         showLoading(t('msgSlideAdded'));
         const res = await apiPost('/api/generate/manual-slide', {
             project_id: state.currentProject._id,
             template_slide_id: templateSlideId,
+            insert_after_order: insertAfterOrder,
         });
 
-        state.generatedSlides.push(res.slide);
-        state.currentSlideIndex = state.generatedSlides.length - 1;
+        // 삽입 후 전체 슬라이드 재로딩 (order shift 반영)
+        const slidesRes = await apiGet('/api/generate/' + state.currentProject._id + '/slides');
+        state.generatedSlides = slidesRes.slides || [];
+
+        // 새로 추가된 슬라이드로 이동
+        const newSlideIndex = state.generatedSlides.findIndex(s => s._id === res.slide._id);
+        state.currentSlideIndex = newSlideIndex >= 0 ? newSlideIndex : state.generatedSlides.length - 1;
 
         // 프로젝트 상태 업데이트
         state.currentProject.status = 'generated';
-        state.currentProject.manual_mode = true;
+
+        // 협업 타임스탬프 캐시 갱신 (불필요한 재로딩 방지)
+        state.generatedSlides.forEach(s => {
+            if (s._id && s.updated_at) {
+                state.lastSlideTimestamps[s._id] = s.updated_at;
+            }
+        });
 
         // UI 표시
         $('#slideEmpty').hide();
@@ -1673,10 +1801,52 @@ async function addManualSlide(templateSlideId) {
         closeModal('templateSlidePickerModal');
         hideLoading();
         showToast(t('msgSlideAdded'), 'success');
+
+        // 추가 후 자동으로 편집 모드 진입
+        if (!state.editMode) {
+            enterEditMode();
+        }
     } catch (e) {
         hideLoading();
         showToast(e.message, 'error');
     }
+}
+
+function handleSlideInstructionKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        generateSlideText();
+    }
+}
+
+function _collectCurrentSlideContent(slide) {
+    // 현재 슬라이드의 텍스트 내용을 수집하여 LLM에 전달
+    if (!slide) return {};
+    const contents = {};
+    const items = slide.items || [];
+    let subIdx = 0, descIdx = 0;
+
+    (slide.objects || []).forEach(obj => {
+        if (obj.obj_type !== 'text') return;
+        const role = obj.role || obj._auto_role || '';
+        const placeholder = obj._placeholder || obj.placeholder || role || obj.obj_type;
+
+        if (role === 'subtitle' && items.length > 0) {
+            if (subIdx < items.length) {
+                contents[placeholder + '_' + subIdx] = items[subIdx].heading || '';
+                subIdx++;
+            }
+        } else if (role === 'description' && items.length > 0) {
+            if (descIdx < items.length) {
+                contents[placeholder + '_' + descIdx] = items[descIdx].detail || '';
+                descIdx++;
+            }
+        } else {
+            contents[placeholder] = obj.generated_text || obj.text_content || '';
+        }
+    });
+
+    return { contents, items };
 }
 
 async function generateSlideText() {
@@ -1687,40 +1857,213 @@ async function generateSlideText() {
 
     const instruction = $('#slideInstructionInput').val().trim();
     if (!instruction) {
-        showToast(t('msgEnterContent'), 'error');
+        $('#slideInstructionInput').focus();
         return;
     }
 
+    // 편집 모드에서 수정된 텍스트 수집
+    if (state.editMode) collectEditedText();
+
+    // 현재 슬라이드의 기존 내용 수집
+    const currentContent = _collectCurrentSlideContent(slide);
+    const oldItemsCount = (slide.items || []).length;
+
     try {
-        $('#btnSlideAI').prop('disabled', true);
-        showLoading(t('msgGeneratingText'));
+        // 로딩 UI 표시
+        $('#btnSlideAI').prop('disabled', true).html(
+            '<svg class="spin-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 1a7 7 0 106.93 6"/></svg> ' +
+            t('msgGeneratingText')
+        ).css('opacity', '0.7');
+        $('#slideInstructionInput').prop('disabled', true);
 
         const res = await apiPost('/api/generate/slide-text', {
             project_id: state.currentProject._id,
             slide_id: slide._id,
             instruction: instruction,
             template_slide_id: slide.template_slide_id || '',
+            current_content: currentContent,
         });
 
-        // 슬라이드 업데이트
-        slide.objects = res.objects;
-        slide.items = res.items;
+        let finalObjects = res.objects;
+        let finalItems = res.items;
+        const newItemsCount = (finalItems || []).length;
 
-        // 캔버스 다시 렌더링
-        if (state.editMode) {
-            renderSlideAtIndexEditable(state.currentSlideIndex);
-        } else {
-            renderSlideAtIndex(state.currentSlideIndex);
+        // 항목 수가 달라졌으면 적합한 템플릿 슬라이드로 자동 전환
+        if (newItemsCount > 0 && newItemsCount !== oldItemsCount) {
+            try {
+                // contents 재구성 (switch-template-slide에 전달)
+                const contentsForSwitch = {};
+                (finalObjects || []).forEach(obj => {
+                    if (obj.obj_type === 'text') {
+                        const ph = obj.placeholder || obj._auto_placeholder || obj.role || '';
+                        if (ph && obj.generated_text) {
+                            contentsForSwitch[ph] = obj.generated_text;
+                        }
+                    }
+                });
+
+                const switchRes = await apiPost('/api/generate/switch-template-slide', {
+                    slide_id: slide._id,
+                    items_count: newItemsCount,
+                    contents: contentsForSwitch,
+                    items: finalItems,
+                });
+
+                if (switchRes.switched && switchRes.slide) {
+                    finalObjects = switchRes.slide.objects;
+                    finalItems = switchRes.slide.items;
+                    slide.template_slide_id = switchRes.new_template_slide_id;
+                    slide.background_image = switchRes.slide.background_image;
+                }
+            } catch (switchErr) {
+                // 템플릿 전환 실패해도 텍스트 변경은 유지
+                console.log('Template switch skipped:', switchErr.message);
+            }
         }
-        renderSlideThumbList();
 
-        hideLoading();
+        // 슬라이드 데이터 업데이트
+        slide.objects = finalObjects;
+        slide.items = finalItems;
+
+        // 타이핑 애니메이션으로 캔버스에 표시
+        if (state.editMode) {
+            _exitEditModeClean();
+        }
+        await _animateSlideTextUpdate(state.currentSlideIndex);
+
+        // 자동 저장
+        try {
+            await fetch(`/${state.jwtToken}/api/generate/slides/${slide._id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ objects: slide.objects, items: slide.items || [] }),
+            });
+        } catch (saveErr) {
+            console.log('Auto-save failed:', saveErr);
+        }
+
+        // 썸네일 업데이트
+        renderSlideThumbList();
+        renderSlideThumbnails();
+        renderSlideTextPanel();
+
+        // 입력 초기화
+        $('#slideInstructionInput').val('');
+        autoResizeTextarea(document.getElementById('slideInstructionInput'));
+
         showToast(t('msgSlideTextGenerated'), 'success');
     } catch (e) {
-        hideLoading();
         showToast(e.message, 'error');
     } finally {
-        $('#btnSlideAI').prop('disabled', false);
+        // 버튼 원래 상태로 복원
+        $('#btnSlideAI').prop('disabled', false).html(
+            '<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 1L3 6l8 5V1z"/></svg> ' +
+            t('aiModifyRequest', 'AI 수정 요청')
+        ).css('opacity', '');
+        $('#slideInstructionInput').prop('disabled', false);
+    }
+}
+
+async function _animateSlideTextUpdate(index) {
+    const slide = state.generatedSlides[index];
+    if (!slide) return;
+
+    const canvas = $('#previewCanvas');
+    canvas.find('.preview-obj').remove();
+
+    if (slide.background_image) {
+        $('#previewBg').css('background-image', `url(${slide.background_image})`);
+    } else {
+        $('#previewBg').css('background-image', 'none');
+    }
+
+    const canvasW = canvas.width();
+    const canvasH = canvas.height();
+    const scaleX = canvasW / 960;
+    const scaleY = canvasH / 540;
+
+    let descIndex = 0;
+    let subIndex = 0;
+    const items = slide.items || [];
+
+    // 모든 오브젝트를 먼저 배치 (텍스트는 비워둠)
+    const textEls = [];
+    (slide.objects || []).forEach(obj => {
+        const div = $('<div>').addClass('preview-obj').css({
+            position: 'absolute',
+            left: (obj.x * scaleX) + 'px',
+            top: (obj.y * scaleY) + 'px',
+            width: (obj.width * scaleX) + 'px',
+            zIndex: 10,
+        });
+
+        if (obj.obj_type === 'image' && obj.image_url) {
+            div.css('height', (obj.height * scaleY) + 'px');
+            const imgFit = obj.image_fit || 'contain';
+            div.append(`<img src="${obj.image_url}" style="width:100%;height:100%;object-fit:${imgFit};">`);
+            canvas.append(div);
+        } else if (obj.obj_type === 'shape') {
+            div.css('height', (obj.height * scaleY) + 'px');
+            canvas.append(div);
+        } else if (obj.obj_type === 'text') {
+            const style = obj.text_style || {};
+            const role = obj.role || '';
+            let text = obj.generated_text || obj.text_content || '';
+
+            if (role === 'subtitle' && items.length > 0 && subIndex < items.length) {
+                text = items[subIndex].heading || '';
+                subIndex++;
+            } else if (role === 'description' && items.length > 0 && descIndex < items.length) {
+                text = items[descIndex].detail || '';
+                descIndex++;
+            }
+
+            const fontSize = (style.font_size || 16) * scaleX;
+            div.css({
+                fontSize: fontSize + 'px',
+                fontFamily: style.font_family || 'Inter, sans-serif',
+                fontWeight: style.bold ? '700' : '400',
+                fontStyle: style.italic ? 'italic' : 'normal',
+                color: style.color || '#000',
+                textAlign: style.align || 'left',
+                lineHeight: '1.4',
+                overflow: 'hidden',
+                height: 'auto',
+                textDecoration: [
+                    style.underline ? 'underline' : '',
+                    style.strikethrough ? 'line-through' : ''
+                ].filter(Boolean).join(' ') || 'none',
+            });
+
+            if (role === 'number' || role === 'governance') {
+                div.css('height', (obj.height * scaleY) + 'px');
+            }
+
+            canvas.append(div);
+            if (text) {
+                textEls.push({ $el: div, text: text });
+            }
+        }
+    });
+
+    // 텍스트 타이핑 애니메이션
+    for (const item of textEls) {
+        const $el = item.$el;
+        const text = item.text;
+        const cursor = $('<span style="display:inline-block;width:2px;height:1em;background:var(--accent);animation:blink 0.6s infinite;vertical-align:text-bottom;margin-left:1px;"></span>');
+        $el.empty().append(cursor);
+
+        const speed = Math.max(10, Math.min(30, 600 / text.length));
+        for (let k = 0; k < text.length; k++) {
+            const ch = text[k];
+            if (ch === '\n') {
+                cursor.before($('<br>')[0]);
+            } else {
+                cursor.before(document.createTextNode(ch));
+            }
+            if (k % 2 === 0) await new Promise(r => setTimeout(r, speed));
+        }
+        cursor.remove();
     }
 }
 
@@ -1815,6 +2158,12 @@ function selectTemplateFromPicker(templateId) {
     state.selectedTemplateId = templateId;
     updateTemplateButtonLabel();
     closeModal('templatePickerModal');
+
+    // 프로젝트에 선택된 템플릿 저장 (다시 열 때 복원용)
+    if (state.currentProject && state.currentProject._id) {
+        state.currentProject.template_id = templateId;
+        apiPut('/api/projects/' + state.currentProject._id, { template_id: templateId }).catch(() => {});
+    }
 }
 
 async function loadSupportedLangs() {
@@ -2270,6 +2619,7 @@ function renderSlideArea() {
         $('#slideEmpty').show();
         $('#slidePreview').hide();
         $('#wsSlideTools').hide();
+        $('#slideInstructionBar').hide();
         // 썸네일/캔버스/아웃라인 등 잔여 콘텐츠 제거
         $('#slideThumbnails').empty();
         $('#slideThumbList').empty();
@@ -2284,6 +2634,7 @@ function renderSlideArea() {
     $('#slideEmpty').hide();
     $('#slidePreview').css('display', 'flex');
     $('#wsSlideTools').css('display', 'flex');
+    $('#slideInstructionBar').show();
     renderSlideThumbList();
     renderSlideTextPanel();
     renderSlideAtIndex(state.currentSlideIndex);
@@ -2297,6 +2648,15 @@ function renderSlideAtIndex(index) {
 
     const canvas = $('#previewCanvas');
     canvas.find('.preview-obj').remove();
+    canvas.find('.live-edit-banner').remove();
+
+    // 다른 사용자가 편집 중인 슬라이드이면 실시간 편집 배너 표시
+    if (state.isCollabProject && slide._id && state.activeLocks[slide._id]) {
+        const lock = state.activeLocks[slide._id];
+        if (lock.user_key !== (state.userInfo && state.userInfo.ky)) {
+            canvas.append(`<div class="live-edit-banner"><span class="live-dot"></span>${escapeHtml(lock.user_name)} ${t('editingNow','편집 중')}</div>`);
+        }
+    }
 
     if (slide.background_image) {
         $('#previewBg').css('background-image', `url(${slide.background_image})`);
@@ -2464,23 +2824,36 @@ function renderSlideThumbList() {
         const isActive = i === state.currentSlideIndex;
         const thumbWrap = $('<div>').addClass('slide-thumb-v-wrap');
         const thumbEl = $(`
-            <div class="slide-thumb-v ${isActive ? 'active' : ''}" draggable="true" tabindex="0" onclick="goToSlide(${i})" data-slide-idx="${i}">
+            <div class="slide-thumb-v ${isActive ? 'active' : ''}" draggable="true" tabindex="0" onclick="goToSlide(${i})" data-slide-idx="${i}" data-slide-id="${slide._id || ''}">
                 <div class="slide-thumb-v-num">${i + 1}</div>
                 <div class="slide-thumb-v-inner"></div>
             </div>
         `);
         renderSlideToContainer(thumbEl.find('.slide-thumb-v-inner'), slide, 256, 144);
+
+        // 협업: Lock 배지 표시
+        if (state.isCollabProject && slide._id && state.activeLocks[slide._id]) {
+            const lock = state.activeLocks[slide._id];
+            if (lock.user_key !== (state.userInfo && state.userInfo.ky)) {
+                thumbEl.append(`<div class="lock-badge"><svg width="10" height="10" fill="currentColor" viewBox="0 0 16 16"><path d="M8 1a3 3 0 0 0-3 3v2H4a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1h-1V4a3 3 0 0 0-3-3zm-2 3a2 2 0 1 1 4 0v2H6V4z"/></svg><span>${escapeHtml(lock.user_name)}</span></div>`);
+            }
+        }
+
         thumbWrap.append(thumbEl);
 
-        // 수동 모드: 삭제 버튼 추가
-        if (state.manualMode) {
+        // 슬라이드 삭제 버튼 (owner/editor + 슬라이드 생성 상태)
+        const canModifySlides = (state.collabRole === 'owner' || state.collabRole === 'editor')
+            && state.currentProject && state.currentProject.status === 'generated';
+        if (canModifySlides) {
             thumbWrap.append(`<button class="slide-thumb-delete" onclick="event.stopPropagation();deleteManualSlide('${slide._id}')" title="삭제">&times;</button>`);
         }
         list.append(thumbWrap);
     });
 
-    // 수동 모드: 슬라이드 추가 버튼
-    if (state.manualMode) {
+    // 슬라이드 추가 버튼 (owner/editor + 슬라이드 1개 이상)
+    const canAddSlide = (state.collabRole === 'owner' || state.collabRole === 'editor')
+        && state.currentProject && state.generatedSlides.length > 0;
+    if (canAddSlide) {
         const addBtn = $(`
             <div class="slide-add-btn" onclick="showTemplateSlidePickerModal()">
                 <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 6v12M6 12h12"/></svg>
@@ -2735,28 +3108,22 @@ function updateSlideNav() {
 
 function goToSlide(index) {
     _animationCancelled = true;
-    if (state.editMode) collectEditedText();
-    state.currentSlideIndex = index;
-    if (state.editMode) {
-        renderSlideAtIndexEditable(index);
-        _updateEditSlideCounter();
-    } else {
-        renderSlideAtIndex(index);
+    const prevIndex = state.currentSlideIndex;
+    // 다른 슬라이드로 이동 시 편집 모드 해제
+    if (state.editMode && index !== prevIndex) {
+        exitEditMode();
     }
+    state.currentSlideIndex = index;
+    renderSlideAtIndex(index);
     updateSlideNav();
 }
 
 function prevSlide() {
     if (state.currentSlideIndex > 0) {
         _animationCancelled = true;
-        if (state.editMode) collectEditedText();
+        if (state.editMode) exitEditMode();
         state.currentSlideIndex--;
-        if (state.editMode) {
-            renderSlideAtIndexEditable(state.currentSlideIndex);
-            _updateEditSlideCounter();
-        } else {
-            renderSlideAtIndex(state.currentSlideIndex);
-        }
+        renderSlideAtIndex(state.currentSlideIndex);
         updateSlideNav();
     }
 }
@@ -2764,14 +3131,9 @@ function prevSlide() {
 function nextSlide() {
     if (state.currentSlideIndex < state.generatedSlides.length - 1) {
         _animationCancelled = true;
-        if (state.editMode) collectEditedText();
+        if (state.editMode) exitEditMode();
         state.currentSlideIndex++;
-        if (state.editMode) {
-            renderSlideAtIndexEditable(state.currentSlideIndex);
-            _updateEditSlideCounter();
-        } else {
-            renderSlideAtIndex(state.currentSlideIndex);
-        }
+        renderSlideAtIndex(state.currentSlideIndex);
         updateSlideNav();
     }
 }
@@ -3042,8 +3404,37 @@ function toggleEditMode() {
     }
 }
 
-function enterEditMode() {
+async function enterEditMode() {
     if (state.generatedSlides.length === 0) return;
+
+    // 협업 프로젝트: viewer는 편집 불가
+    if (state.isCollabProject && state.collabRole === 'viewer') {
+        showToast('뷰어는 편집할 수 없습니다', 'error');
+        return;
+    }
+
+    // 협업 프로젝트: Lock 획득
+    if (state.isCollabProject) {
+        const slide = state.generatedSlides[state.currentSlideIndex];
+        if (slide && slide._id) {
+            const existingLock = state.activeLocks[slide._id];
+            if (existingLock && existingLock.user_key !== state.userInfo.ky) {
+                showToast(`${existingLock.user_name}이(가) 편집 중입니다`, 'error');
+                return;
+            }
+            try {
+                await apiPost('/api/projects/' + state.currentProject._id + '/slides/' + slide._id + '/lock', {});
+            } catch (e) {
+                showToast(e.message, 'error');
+                return;
+            }
+        }
+    }
+
+    // 편집 중인 슬라이드 ID 기록
+    const editSlide = state.generatedSlides[state.currentSlideIndex];
+    state.editingSlideId = editSlide ? editSlide._id : null;
+
     state.editMode = true;
     state.editTool = 'select';
     $('#previewCanvas').addClass('edit-mode');
@@ -3052,9 +3443,49 @@ function enterEditMode() {
     // 하단 썸네일 숨기고 편집 도구 모음 표시
     $('.slide-nav').hide();
     $('#editBottomToolbar').show();
+    // AI 지침 입력 바 유지
+    $('#slideInstructionBar').show();
     _updateEditSlideCounter();
     _populateEditFontSelector();
     renderSlideAtIndexEditable(state.currentSlideIndex);
+
+    // 협업 프로젝트: 편집 중 자동 저장 시작 (3초마다)
+    _startEditAutoSave();
+}
+
+let _lastAutoSaveSnapshot = null;
+
+function _startEditAutoSave() {
+    _stopEditAutoSave();
+    if (!state.isCollabProject) return;
+    // 초기 스냅샷 저장
+    const slide = state.generatedSlides[state.currentSlideIndex];
+    _lastAutoSaveSnapshot = slide ? JSON.stringify({ objects: slide.objects, items: slide.items || [] }) : null;
+
+    state.editAutoSaveInterval = setInterval(() => {
+        if (!state.editMode || !state.editingSlideId) return;
+        collectEditedText();
+        const slide = state.generatedSlides[state.currentSlideIndex];
+        if (!slide || slide._id !== state.editingSlideId) return;
+
+        // 변경 감지: 이전 스냅샷과 비교하여 변경된 경우만 저장
+        const current = JSON.stringify({ objects: slide.objects, items: slide.items || [] });
+        if (current === _lastAutoSaveSnapshot) return;
+        _lastAutoSaveSnapshot = current;
+
+        fetch(`/${state.jwtToken}/api/generate/slides/${slide._id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: current,
+        }).catch(() => {});
+    }, 5000);
+}
+
+function _stopEditAutoSave() {
+    if (state.editAutoSaveInterval) {
+        clearInterval(state.editAutoSaveInterval);
+        state.editAutoSaveInterval = null;
+    }
 }
 
 function exitEditMode() {
@@ -3837,8 +4268,17 @@ async function saveCurrentSlide() {
 }
 
 function _exitEditModeClean() {
+    // 자동 저장 중지
+    _stopEditAutoSave();
+
+    // 협업 프로젝트: Lock 해제 (편집 시작 시 기록한 슬라이드 ID 사용)
+    if (state.isCollabProject && state.currentProject && state.editingSlideId) {
+        apiDelete('/api/projects/' + state.currentProject._id + '/slides/' + state.editingSlideId + '/lock').catch(() => {});
+    }
+
     state.editMode = false;
     state.editSelectedObj = null;
+    state.editingSlideId = null;
     state.editDirtySlides.clear();
     $('#previewCanvas').removeClass('edit-mode');
     $('#btnEditToggle').removeClass('active');
@@ -4241,10 +4681,491 @@ function saveSlideOrder() {
     var slideIds = state.generatedSlides.map(function (s) { return s._id; });
     apiPut('/api/generate/' + state.currentProject._id + '/reorder', {
         slide_ids: slideIds,
+    }).then(function () {
+        // 순서 변경 후 타임스탬프 캐시 무효화 → 다음 폴링에서 본인 변경을 재로드하지 않도록
+        // 서버가 모든 슬라이드의 updated_at을 갱신하므로 캐시를 초기화
+        slideIds.forEach(function (id) {
+            delete state.lastSlideTimestamps[id];
+        });
     }).catch(function (e) {
         showToast('순서 저장 실패: ' + e.message, 'error');
     });
 }
+
+// ============ 협업 기능 ============
+
+async function initCollaboration(projectId) {
+    try {
+        const res = await apiGet('/api/projects/' + projectId + '/collaborators');
+        state.collaborators = res.collaborators || [];
+        state.isCollabProject = (
+            state.collaborators.length > 0 || state.collabRole !== 'owner'
+        );
+
+        if (state.isCollabProject) {
+            // 슬라이드 타임스탬프 초기화
+            state.lastSlideTimestamps = {};
+            state.generatedSlides.forEach(s => {
+                if (s._id && s.updated_at) {
+                    state.lastSlideTimestamps[s._id] = s.updated_at;
+                }
+            });
+            startCollabPolling(projectId);
+            updateCollabUI();
+        }
+    } catch (e) {
+        state.isCollabProject = false;
+    }
+}
+
+function startCollabPolling(projectId) {
+    stopCollabPolling();
+    sendHeartbeat(projectId);
+    pollCollabStatus(projectId);
+    state.pollInterval = setInterval(() => pollCollabStatus(projectId), 5000);
+    state.heartbeatInterval = setInterval(() => sendHeartbeat(projectId), 30000);
+}
+
+function stopCollabPolling() {
+    if (state.pollInterval) {
+        clearInterval(state.pollInterval);
+        state.pollInterval = null;
+    }
+    if (state.heartbeatInterval) {
+        clearInterval(state.heartbeatInterval);
+        state.heartbeatInterval = null;
+    }
+    state.activeLocks = {};
+    state.onlineUsers = [];
+}
+
+async function pollCollabStatus(projectId) {
+    try {
+        const res = await apiGet('/api/projects/' + projectId + '/collab-status');
+
+        // Lock 상태 업데이트
+        const newLocks = {};
+        (res.locks || []).forEach(lock => {
+            newLocks[lock.slide_id] = lock;
+        });
+        state.activeLocks = newLocks;
+        state.onlineUsers = res.online_users || [];
+
+        // 슬라이드 구조 변경 감지 (추가/삭제)
+        const serverSlideIds = new Set(Object.keys(res.slide_timestamps || {}));
+        const localSlideIds = new Set(state.generatedSlides.map(s => s._id).filter(Boolean));
+        const addedIds = [...serverSlideIds].filter(id => !localSlideIds.has(id));
+        const removedIds = [...localSlideIds].filter(id => !serverSlideIds.has(id));
+
+        // 기존 슬라이드 내용 변경 감지 (본인이 편집 중인 슬라이드는 제외)
+        const changedSlides = [];
+        Object.entries(res.slide_timestamps || {}).forEach(([slideId, ts]) => {
+            const prev = state.lastSlideTimestamps[slideId];
+            if (prev && prev !== ts) {
+                // 본인이 편집 중인 슬라이드는 자동저장에 의한 변경이므로 제외
+                if (state.editMode && state.editingSlideId === slideId) return;
+                changedSlides.push(slideId);
+            }
+        });
+
+        // 타임스탬프 캐시 전체 갱신
+        state.lastSlideTimestamps = { ...(res.slide_timestamps || {}) };
+
+        // 구조 변경 시 전체 슬라이드 재로딩
+        if (addedIds.length > 0 || removedIds.length > 0) {
+            await reloadAllSlides();
+        } else if (changedSlides.length > 0) {
+            await reloadChangedSlides(changedSlides);
+        }
+
+        updateLockIndicators();
+        updateOnlinePresence();
+    } catch (e) {
+        // 폴링 실패 시 무시 (다음 주기에 재시도)
+    }
+}
+
+async function sendHeartbeat(projectId) {
+    try {
+        const body = {};
+        // 편집 모드일 때만 editing_slide_id 전송 → 서버가 해당 Lock만 갱신
+        if (state.editMode && state.editingSlideId) {
+            body.editing_slide_id = state.editingSlideId;
+        }
+        await apiPost('/api/projects/' + projectId + '/heartbeat', body);
+    } catch (e) { /* silent */ }
+}
+
+async function reloadChangedSlides(slideIds) {
+    try {
+        // 변경된 슬라이드만 델타 API로 가져옴 (전체 로딩 방지)
+        const res = await apiPost('/api/generate/' + state.currentProject._id + '/slides/delta', {
+            slide_ids: slideIds,
+        });
+        const deltaSlides = res.slides || [];
+
+        // 순서 변경 감지: 하나라도 order가 다르면 전체 재로딩으로 전환
+        const orderChanged = deltaSlides.some(updated => {
+            const existing = state.generatedSlides.find(s => s._id === updated._id);
+            return existing && existing.order !== updated.order;
+        });
+
+        if (orderChanged) {
+            // 순서 변경은 전체 재로딩이 안전 (편집 중 슬라이드 누락 방지)
+            await reloadAllSlides();
+            return;
+        }
+
+        deltaSlides.forEach(updated => {
+            const idx = state.generatedSlides.findIndex(s => s._id === updated._id);
+            if (idx !== -1) {
+                state.generatedSlides[idx] = updated;
+                if (idx === state.currentSlideIndex && !state.editMode) {
+                    renderSlideAtIndex(idx);
+                } else if (idx === state.currentSlideIndex && state.editMode) {
+                    showToast('다른 사용자가 이 슬라이드를 수정했습니다', 'warning');
+                }
+            }
+        });
+
+        renderSlideThumbnails();
+        renderSlideThumbList();
+    } catch (e) { /* silent */ }
+}
+
+async function reloadAllSlides() {
+    if (!state.currentProject) return;
+    try {
+        const res = await apiGet('/api/generate/' + state.currentProject._id + '/slides');
+        const newSlides = res.slides || [];
+
+        // 현재 보고 있는 슬라이드 _id 기억 (선택 유지)
+        const currentSlideId = (state.generatedSlides[state.currentSlideIndex] || {})._id || null;
+
+        state.generatedSlides = newSlides;
+
+        // 같은 슬라이드를 유지하거나 가장 가까운 인덱스로 이동
+        if (currentSlideId) {
+            const newIndex = newSlides.findIndex(s => s._id === currentSlideId);
+            state.currentSlideIndex = newIndex >= 0 ? newIndex :
+                Math.min(state.currentSlideIndex, newSlides.length - 1);
+        } else {
+            state.currentSlideIndex = Math.min(state.currentSlideIndex, newSlides.length - 1);
+        }
+        if (state.currentSlideIndex < 0) state.currentSlideIndex = 0;
+
+        // UI 갱신
+        renderSlideThumbnails();
+        renderSlideThumbList();
+        renderSlideTextPanel();
+        if (!state.editMode) {
+            renderSlideAtIndex(state.currentSlideIndex);
+        }
+        updateSlideNav();
+
+        // 빈 상태 처리
+        if (newSlides.length === 0) {
+            $('#slidePreview').hide();
+            $('#slideEmpty').show();
+        } else {
+            $('#slideEmpty').hide();
+            $('#slidePreview').show();
+        }
+    } catch (e) { /* silent */ }
+}
+
+function updateLockIndicators() {
+    $('.slide-thumb-v').each(function() {
+        const slideId = $(this).data('slide-id');
+        const lock = state.activeLocks[slideId];
+        $(this).find('.lock-badge').remove();
+
+        if (lock && lock.user_key !== (state.userInfo && state.userInfo.ky)) {
+            $(this).append(`<div class="lock-badge"><svg width="10" height="10" fill="currentColor" viewBox="0 0 16 16"><path d="M8 1a3 3 0 0 0-3 3v2H4a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1h-1V4a3 3 0 0 0-3-3zm-2 3a2 2 0 1 1 4 0v2H6V4z"/></svg><span>${escapeHtml(lock.user_name)}</span></div>`);
+        }
+    });
+}
+
+function updateOnlinePresence() {
+    const $bar = $('#collabPresenceBar');
+    if (!state.isCollabProject) { $bar.hide(); return; }
+    $bar.show();
+    const avatars = state.onlineUsers.map(u => {
+        const isSelf = state.userInfo && u.user_key === state.userInfo.ky;
+        return `<div class="presence-avatar ${isSelf ? 'self' : ''}" title="${escapeHtml(u.user_name)}">${escapeHtml(u.user_name.charAt(0))}</div>`;
+    }).join('');
+    $bar.html(avatars);
+}
+
+function updateCollabUI() {
+    const isOwner = state.collabRole === 'owner';
+    const isEditor = state.collabRole === 'editor';
+    const isViewer = state.collabRole === 'viewer';
+
+    // 협업 관리 버튼 (owner만 + 협업 프로젝트일 때)
+    if (state.isCollabProject || isOwner) {
+        $('#btnCollabManage').show();
+        const count = state.collaborators.length;
+        $('#collabCountLabel').text(count > 0 ? `협업 (${count})` : '협업');
+    } else {
+        $('#btnCollabManage').hide();
+    }
+
+    // 히스토리 버튼 (협업 프로젝트일 때)
+    if (state.isCollabProject) {
+        $('#btnHistory').show();
+    } else {
+        $('#btnHistory').hide();
+    }
+
+    // viewer: 편집/삭제/리셋/생성 관련 버튼 숨김
+    if (isViewer) {
+        $('#btnEditToggle').hide();
+        $('#btnEditSave').hide();
+        $('.resource-add-btns').hide();
+        $('#inputBar').hide();
+        $('#btnResetProject').hide();
+        $('#btnDeleteProject').hide();
+    } else if (isEditor) {
+        $('#btnEditToggle').show();
+        // editor는 슬라이드 AI 텍스트 생성 가능
+        $('#slideInstructionBar').show();
+        // editor는 리소스/생성 관련은 숨김
+        $('.resource-add-btns').hide();
+        $('#inputBar').hide();
+        $('#btnResetProject').hide();
+        $('#btnDeleteProject').hide();
+    } else {
+        // owner: 모두 표시
+        $('#btnEditToggle').show();
+        $('.resource-add-btns').show();
+        $('#inputBar').show();
+    }
+}
+
+// ── 협업자 관리 모달 ──
+
+let _collabSearchTimer = null;
+
+async function showCollabModal() {
+    if (!state.currentProject) return;
+    try {
+        const res = await apiGet('/api/projects/' + state.currentProject._id + '/collaborators');
+        state.collaborators = res.collaborators || [];
+    } catch (e) {}
+    renderCollabList();
+
+    // owner만 추가 UI 표시
+    if (state.collabRole === 'owner') {
+        $('#collabAddRow').show();
+    } else {
+        $('#collabAddRow').hide();
+    }
+
+    $('#collabUserSearch').val('');
+    $('#collabUserKey').val('');
+    $('#collabSearchDropdown').hide();
+    $('#collabModal').show();
+}
+
+function renderCollabList() {
+    const $list = $('#collabList');
+    $list.empty();
+
+    if (state.collaborators.length === 0) {
+        $list.html('<div style="padding:16px;text-align:center;color:var(--text-tertiary);font-size:13px;">아직 협업자가 없습니다</div>');
+        return;
+    }
+
+    const canManage = state.collabRole === 'owner';
+    state.collaborators.forEach(c => {
+        $list.append(`
+            <div class="collab-item">
+                <div class="collab-avatar">${escapeHtml((c.user_name || '?').charAt(0))}</div>
+                <div class="collab-info">
+                    <div class="collab-name">${escapeHtml(c.user_name || '')}</div>
+                    <div class="collab-dept">${escapeHtml(c.user_dept || '')}</div>
+                </div>
+                ${canManage ? `
+                <select class="collab-role-select" onchange="updateCollabRole('${c.user_key}', this.value)">
+                    <option value="editor" ${c.role === 'editor' ? 'selected' : ''}>편집자</option>
+                    <option value="viewer" ${c.role === 'viewer' ? 'selected' : ''}>뷰어</option>
+                </select>
+                <button class="collab-remove-btn" onclick="removeCollaborator('${c.user_key}')" title="제거">&times;</button>
+                ` : `<span class="collab-role-label" style="font-size:12px;color:var(--text-secondary);">${c.role === 'editor' ? '편집자' : '뷰어'}</span>`}
+            </div>
+        `);
+    });
+}
+
+function initCollabSearch() {
+    $('#collabUserSearch').off('input').on('input', function() {
+        const query = $(this).val().trim();
+        clearTimeout(_collabSearchTimer);
+        if (query.length < 1) {
+            $('#collabSearchDropdown').hide();
+            return;
+        }
+        _collabSearchTimer = setTimeout(async () => {
+            try {
+                const res = await fetch('/api/auth/search-users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: query }),
+                });
+                const data = await res.json();
+                const users = data.users || [];
+                renderCollabSearchDropdown(users);
+            } catch (e) {}
+        }, 300);
+    });
+}
+
+function renderCollabSearchDropdown(users) {
+    const dd = $('#collabSearchDropdown');
+    dd.empty();
+    if (users.length === 0) {
+        dd.hide();
+        return;
+    }
+    users.forEach((u, i) => {
+        dd.append(`
+            <div class="search-item" onclick="selectCollabUser(${i})" data-index="${i}">
+                <span class="search-name">${escapeHtml(u.nm)}</span>
+                <span class="search-dept">${escapeHtml(u.dp || '')}</span>
+                <span class="search-email">${escapeHtml(u.em || '')}</span>
+            </div>
+        `);
+    });
+    dd.data('users', users);
+    dd.show();
+}
+
+function selectCollabUser(index) {
+    const users = $('#collabSearchDropdown').data('users') || [];
+    const user = users[index];
+    if (!user) return;
+    $('#collabUserSearch').val(user.nm);
+    $('#collabUserKey').val(user.ky);
+    $('#collabSearchDropdown').hide();
+}
+
+async function addCollaborator() {
+    const userKey = $('#collabUserKey').val();
+    const role = $('#collabRoleSelect').val();
+    if (!userKey) { showToast('사용자를 선택하세요', 'error'); return; }
+    try {
+        await apiPost('/api/projects/' + state.currentProject._id + '/collaborators', {
+            user_key: userKey, role: role
+        });
+        const res = await apiGet('/api/projects/' + state.currentProject._id + '/collaborators');
+        state.collaborators = res.collaborators || [];
+        renderCollabList();
+        showToast('협업자가 추가되었습니다', 'success');
+        $('#collabUserSearch').val('');
+        $('#collabUserKey').val('');
+
+        // 폴링 시작 (아직 안 하고 있으면)
+        state.isCollabProject = true;
+        if (!state.pollInterval) startCollabPolling(state.currentProject._id);
+        updateCollabUI();
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+async function updateCollabRole(userKey, newRole) {
+    try {
+        await apiPut('/api/projects/' + state.currentProject._id + '/collaborators/' + userKey, {
+            role: newRole
+        });
+        showToast('역할이 변경되었습니다', 'success');
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+async function removeCollaborator(userKey) {
+    if (!confirm('협업자를 제거하시겠습니까?')) return;
+    try {
+        await apiDelete('/api/projects/' + state.currentProject._id + '/collaborators/' + userKey);
+        const res = await apiGet('/api/projects/' + state.currentProject._id + '/collaborators');
+        state.collaborators = res.collaborators || [];
+        renderCollabList();
+        showToast('협업자가 제거되었습니다', 'success');
+
+        // 협업자가 0이면 폴링 중지
+        if (state.collaborators.length === 0 && state.collabRole === 'owner') {
+            state.isCollabProject = false;
+            stopCollabPolling();
+        }
+        updateCollabUI();
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+// ── 변경 이력 ──
+
+async function showHistoryPanel() {
+    if (!state.currentProject) return;
+    try {
+        const res = await apiGet('/api/projects/' + state.currentProject._id + '/history');
+        renderHistoryList(res.history || []);
+        $('#historyPanel').show();
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+function renderHistoryList(history) {
+    const $list = $('#historyList');
+    $list.empty();
+    if (history.length === 0) {
+        $list.html('<div style="padding:24px;text-align:center;color:var(--text-tertiary);font-size:13px;">변경 이력이 없습니다</div>');
+        return;
+    }
+    history.forEach(h => {
+        const time = h.created_at ? new Date(h.created_at).toLocaleString() : '';
+        const canRevert = state.collabRole === 'owner' && h.action !== 'revert';
+        $list.append(`
+            <div class="history-item">
+                <div class="history-item-header">
+                    <span>${escapeHtml(h.user_name || '')}</span>
+                    <span>${time}</span>
+                </div>
+                <div class="history-item-desc">${escapeHtml(h.description || h.action || '')}</div>
+                ${canRevert ? `<button class="history-revert-btn" onclick="revertHistory('${h._id}')">되돌리기</button>` : ''}
+            </div>
+        `);
+    });
+}
+
+async function revertHistory(historyId) {
+    if (!confirm('이 시점으로 슬라이드를 되돌리겠습니까?')) return;
+    try {
+        const res = await apiPost('/api/projects/' + state.currentProject._id + '/history/' + historyId + '/revert', {});
+        if (res.slide_id) {
+            await reloadChangedSlides([res.slide_id]);
+        }
+        showToast('되돌리기 완료', 'success');
+        // 이력 새로고침
+        await showHistoryPanel();
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+// ── 페이지 종료 시 정리 ──
+
+window.addEventListener('beforeunload', function() {
+    stopCollabPolling();
+});
+
+// 협업 검색 초기화 (DOM ready 시)
+$(function() {
+    initCollabSearch();
+});
 
 function showToast(message, type) {
     const toast = $(`<div class="toast ${type || ''}">${escapeHtml(message)}</div>`);

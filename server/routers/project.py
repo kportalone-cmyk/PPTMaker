@@ -5,6 +5,8 @@ from datetime import datetime
 from models.project import ProjectCreate, ProjectUpdate
 from services.mongo_service import get_db
 from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible
+from services import redis_service
+from routers.collaboration import check_project_access
 
 router = APIRouter(tags=["projects"])
 
@@ -27,15 +29,32 @@ async def get_user_key(jwt_token: str) -> str:
 
 @router.get("/{jwt_token}/api/projects")
 async def list_projects(jwt_token: str):
-    """사용자 프로젝트 목록 조회"""
+    """사용자 프로젝트 목록 조회 (소유 + 공유)"""
     user_key = await get_user_key(jwt_token)
     db = get_db()
+
+    # 내 프로젝트
     cursor = db.projects.find({"user_key": user_key}).sort("created_at", -1)
     projects = []
     async for p in cursor:
-        p["_id"] = str(p["_id"])
+        pid = str(p["_id"])
+        p["_id"] = pid
+        p["_collab_role"] = "owner"
+        p["_collab_count"] = await db.collaborators.count_documents({"project_id": pid})
         projects.append(p)
-    return {"projects": projects}
+
+    # 공유된 프로젝트
+    shared_projects = []
+    async for collab in db.collaborators.find({"user_key": user_key}):
+        project_id = collab.get("project_id")
+        p = await db.projects.find_one({"_id": ObjectId(project_id)})
+        if p:
+            p["_id"] = str(p["_id"])
+            p["_collab_role"] = collab.get("role", "viewer")
+            p["_collab_count"] = await db.collaborators.count_documents({"project_id": project_id})
+            shared_projects.append(p)
+
+    return {"projects": projects, "shared_projects": shared_projects}
 
 
 @router.post("/{jwt_token}/api/projects")
@@ -60,16 +79,14 @@ async def create_project(jwt_token: str, data: ProjectCreate):
 
 @router.get("/{jwt_token}/api/projects/{project_id}")
 async def get_project(jwt_token: str, project_id: str):
-    """프로젝트 상세 조회"""
+    """프로젝트 상세 조회 (소유자 또는 협업자)"""
     user_key = await get_user_key(jwt_token)
     db = get_db()
-    project = await db.projects.find_one({
-        "_id": ObjectId(project_id),
-        "user_key": user_key
-    })
-    if not project:
-        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
-    project["_id"] = str(project["_id"])
+
+    # 소유자 또는 협업자 접근 권한 확인
+    access = await check_project_access(db, project_id, user_key, "viewer")
+    project = access["project"]
+    project["_collab_role"] = access["role"]
 
     # 리소스 목록
     cursor = db.resources.find({"project_id": project_id})
@@ -123,6 +140,13 @@ async def reset_project(jwt_token: str, project_id: str):
 
     # 생성된 슬라이드만 삭제 (리소스는 유지)
     await db.generated_slides.delete_many({"project_id": project_id})
+    # 협업 데이터 정리 (Lock/히스토리 리셋)
+    await db.slide_locks.delete_many({"project_id": project_id})
+    await db.slide_history.delete_many({"project_id": project_id})
+    # Redis 잠금/상태/취소 플래그 정리
+    await redis_service.delete_project_locks(project_id)
+    await redis_service.clear_generation_cancel(project_id)
+    await redis_service.cache_delete_pattern(f"presence:{project_id}")
 
     # 프로젝트 상태 초기화 (지침과 입력 내용은 유지)
     await db.projects.update_one(
@@ -150,4 +174,13 @@ async def delete_project(jwt_token: str, project_id: str):
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
     await db.resources.delete_many({"project_id": project_id})
     await db.generated_slides.delete_many({"project_id": project_id})
+    # 협업 데이터 정리
+    await db.collaborators.delete_many({"project_id": project_id})
+    await db.slide_locks.delete_many({"project_id": project_id})
+    await db.slide_history.delete_many({"project_id": project_id})
+    await db.online_presence.delete_many({"project_id": project_id})
+    # Redis 잠금/상태/취소 플래그 정리
+    await redis_service.delete_project_locks(project_id)
+    await redis_service.clear_generation_cancel(project_id)
+    await redis_service.remove_presence(project_id, user_key)
     return {"success": True}

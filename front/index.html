@@ -183,7 +183,18 @@
                                 <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 7l4 4 8-8"/></svg>
                                 <span class="i18n-editSave">저장</span>
                             </button>
+                            <div style="width:1px;height:20px;background:var(--border);margin:0 4px;" id="collabDivider" class="collab-only" style="display:none;"></div>
+                            <button class="slide-tool-btn collab-only" id="btnCollabManage" onclick="showCollabModal()" style="display:none;">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="5" r="2.5"/><circle cx="11" cy="7" r="2"/><path d="M0.5 12c0-2.5 2-4 4.5-4s3 1 3.5 2"/></svg>
+                                <span id="collabCountLabel">협업</span>
+                            </button>
+                            <button class="slide-tool-btn collab-only" id="btnHistory" onclick="showHistoryPanel()" style="display:none;">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7" cy="7" r="6"/><path d="M7 3v4l3 2"/></svg>
+                                이력
+                            </button>
                         </div>
+                        <!-- 온라인 프레젠스 바 -->
+                        <div id="collabPresenceBar" class="collab-presence-bar" style="display:none;"></div>
                         <button class="ws-action-btn" onclick="showResetConfirm()" title="초기화">
                             <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M1.5 2v4.5H6"/><path d="M2.8 9.5a5.5 5.5 0 109.2-4"/><path d="M2 6.5A5.5 5.5 0 0112 2.8"/></svg>
                         </button>
@@ -314,6 +325,24 @@
 
                             <!-- 우측: 슬라이드 캔버스 -->
                             <div class="slide-canvas-area">
+                                <!-- 슬라이드별 AI 지침 입력 (상단) -->
+                                <div class="slide-instruction-bar" id="slideInstructionBar" style="display:none;">
+                                    <div class="slide-instruction-inner">
+                                        <svg class="slide-instruction-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                            <path d="M14 2.5a1.5 1.5 0 00-2.12 0L5 9.38l-.63 2.25 2.25-.63L13.5 4.12A1.5 1.5 0 0014 2.5z" stroke="currentColor" stroke-width="1.3"/>
+                                            <path d="M2 13.5h12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                                        </svg>
+                                        <textarea id="slideInstructionInput" class="slide-instruction-input"
+                                                  placeholder="이 슬라이드에 대한 지침을 입력하세요... (예: 제목을 바꿔줘, 항목을 추가해줘)"
+                                                  rows="1" oninput="autoResizeTextarea(this)"
+                                                  onkeydown="handleSlideInstructionKey(event)"></textarea>
+                                        <button class="btn-slide-ai" id="btnSlideAI" onclick="generateSlideText()">
+                                            <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 1L3 6l8 5V1z"/></svg>
+                                            AI 수정 요청
+                                        </button>
+                                    </div>
+                                </div>
+
                                 <div class="slide-canvas-wrapper">
                                     <div class="slide-canvas" id="previewCanvas">
                                         <div class="canvas-bg" id="previewBg"></div>
@@ -334,19 +363,6 @@
                                     </button>
 
                                     <span class="slide-counter" id="slideCounter">0 / 0</span>
-                                </div>
-
-                                <!-- 수동모드: 슬라이드별 지침 입력 -->
-                                <div class="slide-instruction-bar" id="slideInstructionBar" style="display:none;">
-                                    <div class="slide-instruction-inner">
-                                        <textarea id="slideInstructionInput" class="slide-instruction-input"
-                                                  placeholder="이 슬라이드에 대한 지침을 입력하세요..."
-                                                  rows="1" oninput="autoResizeTextarea(this)"></textarea>
-                                        <button class="btn-slide-ai" id="btnSlideAI" onclick="generateSlideText()">
-                                            <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2L4 7l8 5V2z"/></svg>
-                                            <span class="i18n-generateSlideText">AI 생성</span>
-                                        </button>
-                                    </div>
                                 </div>
 
                                 <!-- 편집 모드 하단 도구 모음 -->
@@ -434,14 +450,16 @@
                                     <option value="30">30</option>
                                 </select>
                             </div>
-                            <button class="btn-manual-create" id="btnManualCreate" onclick="enterManualMode()">
+                            <div class="input-actions-right">
+                            <button class="btn-add-slide" id="btnAddSlide" onclick="openAddSlideModal()">
                                 <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="12" height="12" rx="2"/><path d="M9 6v6M6 9h6"/></svg>
-                                <span class="i18n-manualCreate">수동</span>
+                                <span class="i18n-addSlideBtn">슬라이드 추가</span>
                             </button>
                             <button class="btn-generate" id="btnGenerate" onclick="generatePPT()">
                                 <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 3L5 8.5l8 5.5V3z"/></svg>
                                 <span class="i18n-generateBtn">생성</span>
                             </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -576,7 +594,7 @@
 
     <!-- 템플릿 슬라이드 선택 모달 (수동 모드) -->
     <div class="modal-overlay" id="templateSlidePickerModal" style="display:none;">
-        <div class="modal-card" style="max-width:720px;">
+        <div class="modal-card" style="max-width:1060px;">
             <div class="modal-header">
                 <h3 class="i18n-selectTemplateSlide">슬라이드 레이아웃 선택</h3>
                 <button class="modal-close" onclick="closeModal('templateSlidePickerModal')">&times;</button>
@@ -723,6 +741,43 @@
         </button>
     </div>
     <input type="file" id="editImageInput" style="display:none;" accept="image/*" onchange="handleEditImageReplace(event)">
+
+    <!-- ============ 협업 관리 모달 ============ -->
+    <div class="modal-overlay" id="collabModal" style="display:none;">
+        <div class="modal-card" style="max-width:480px;">
+            <div class="modal-header">
+                <h3>협업 관리</h3>
+                <button class="modal-close" onclick="closeModal('collabModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="collab-add-row" id="collabAddRow">
+                    <div class="form-field user-search-wrapper collab-search-wrap" style="margin-bottom:0;">
+                        <input type="text" id="collabUserSearch" placeholder="이름으로 사용자 검색" autocomplete="off">
+                        <div id="collabSearchDropdown" class="search-dropdown" style="display:none;"></div>
+                        <input type="hidden" id="collabUserKey" value="">
+                    </div>
+                    <select id="collabRoleSelect" class="collab-role-select-add">
+                        <option value="editor">편집자</option>
+                        <option value="viewer">뷰어</option>
+                    </select>
+                    <button class="btn-primary btn-sm" onclick="addCollaborator()">추가</button>
+                </div>
+                <div id="collabList" class="collab-list"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeModal('collabModal')">닫기</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ 변경 이력 사이드 패널 ============ -->
+    <div class="side-panel" id="historyPanel" style="display:none;">
+        <div class="side-panel-header">
+            <h3>변경 이력</h3>
+            <button class="panel-close-btn" onclick="$('#historyPanel').hide()">&times;</button>
+        </div>
+        <div class="side-panel-body" id="historyList"></div>
+    </div>
 
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
     <script src="/front/js/app.js"></script>

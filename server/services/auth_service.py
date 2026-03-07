@@ -4,6 +4,7 @@ from jose import jwt, JWTError
 from passlib.context import CryptContext
 from config import settings
 from services.mongo_service import get_org_db
+from services import redis_service
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -46,12 +47,20 @@ def extract_user_key(payload: dict) -> str:
 
 
 async def get_user_by_key(user_key: str) -> dict | None:
-    """조직도에서 사용자 조회 (ky 기준)"""
+    """조직도에서 사용자 조회 (ky 기준, Redis 캐시 우선)"""
+    # Redis 캐시 확인
+    cached = await redis_service.get_cached_user(user_key)
+    if cached:
+        return cached
+
+    # MongoDB 조회
     org_db = get_org_db()
     col = org_db[settings.ORG_COLLECTION]
     user = await col.find_one({"ky": user_key})
     if user:
         user["_id"] = str(user["_id"])
+        # Redis에 캐시 (15분)
+        await redis_service.cache_user(user_key, user)
     return user
 
 
@@ -60,7 +69,7 @@ async def get_user_flexible(payload: dict) -> dict | None:
     1) user_key 또는 email → ky 매칭
     2) userid → em(메일) 매칭
     """
-    # 1차: ky 기준 조회
+    # 1차: ky 기준 조회 (Redis 캐시 포함)
     user_key = extract_user_key(payload)
     if user_key:
         user = await get_user_by_key(user_key)
@@ -70,11 +79,19 @@ async def get_user_flexible(payload: dict) -> dict | None:
     # 2차: userid → em(메일) 기준 조회
     userid = payload.get("userid") or ""
     if userid:
+        # Redis 캐시 확인 (em 기준)
+        cached = await redis_service.get_cached_user(f"em:{userid}")
+        if cached:
+            return cached
+
         org_db = get_org_db()
         col = org_db[settings.ORG_COLLECTION]
         user = await col.find_one({"em": userid})
         if user:
             user["_id"] = str(user["_id"])
+            # ky 기준과 em 기준 양쪽으로 캐시
+            await redis_service.cache_user(user.get("ky", userid), user)
+            await redis_service.cache_user(f"em:{userid}", user)
             return user
 
     return None

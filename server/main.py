@@ -13,7 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from config import settings
 from services.mongo_service import init_indexes, close_connection, close_connection_sync
-from routers import auth, template, project, resource, generate, font, prompt
+from services.redis_service import init_redis, close_redis, close_redis_sync
+from routers import auth, template, project, resource, generate, font, prompt, collaboration
 from utils.versioning import get_file_version
 
 
@@ -37,6 +38,13 @@ async def lifespan(app: FastAPI):
     await init_indexes()
     print("MongoDB 인덱스 초기화 완료")
 
+    # Redis 초기화
+    redis_ok = await init_redis()
+    if redis_ok:
+        print("Redis 연결 성공")
+    else:
+        print("Redis 연결 실패 - MongoDB 폴백 모드로 동작합니다")
+
     # 기본 프롬프트 초기화
     from routers.prompt import ensure_default_prompts
     await ensure_default_prompts()
@@ -52,6 +60,11 @@ async def lifespan(app: FastAPI):
         pass
     finally:
         # 종료 시 연결 해제 (CancelledError 포함 모든 상황에서 정리)
+        try:
+            await close_redis()
+            print("Redis 연결 해제")
+        except Exception:
+            pass
         try:
             close_connection_sync()
             print("MongoDB 연결 해제")
@@ -86,6 +99,7 @@ app.include_router(resource.router)
 app.include_router(generate.router)
 app.include_router(font.router)
 app.include_router(prompt.router)
+app.include_router(collaboration.router)
 
 # 정적 파일 서빙
 project_root = Path(__file__).resolve().parent.parent
@@ -264,10 +278,15 @@ if __name__ == "__main__":
 
     # Windows에서 Ctrl+C 시 깔끔하게 종료되도록 시그널 핸들러 설정
     def _force_exit(signum, frame):
-        """Ctrl+C 시 MongoDB 연결 정리 후 강제 종료"""
+        """Ctrl+C 시 Redis/MongoDB 연결 정리 후 강제 종료"""
+        try:
+            close_redis_sync()
+            print("\nRedis 연결 해제")
+        except Exception:
+            pass
         try:
             close_connection_sync()
-            print("\nMongoDB 연결 해제")
+            print("MongoDB 연결 해제")
         except Exception:
             pass
         print("서버 종료")
@@ -279,7 +298,7 @@ if __name__ == "__main__":
 
     # 콘솔 타이틀 설정
     _proto = "HTTPS" if (settings.SSL_CERTFILE and settings.SSL_KEYFILE) else "HTTP"
-    _title = f"PPTMaker Server | {_proto} :{settings.SERVER_PORT} | DB:{settings.PPTMAKER_DB} | {settings.ANTHROPIC_MODEL}"
+    _title = f"PPTMaker Server | {_proto} :{settings.SERVER_PORT} | DB:{settings.PPTMAKER_DB} | Redis:{settings.REDIS_HOST}:{settings.REDIS_PORT} | {settings.ANTHROPIC_MODEL}"
     if platform.system() == "Windows":
         import ctypes
         ctypes.windll.kernel32.SetConsoleTitleW(_title)
@@ -317,6 +336,8 @@ if __name__ == "__main__":
     print(f"  MongoDB      : {settings.MONGO_URI.split('@')[-1].split('?')[0] if '@' in settings.MONGO_URI else settings.MONGO_URI}")
     print(f"  PPTMaker DB  : {settings.PPTMAKER_DB}")
     print(f"  Org DB       : {settings.ORG_DB} / {settings.ORG_COLLECTION}")
+    _redis_pw = "(비밀번호 설정)" if settings.REDIS_PASSWORD else "(비밀번호 없음)"
+    print(f"  Redis        : {settings.REDIS_HOST}:{settings.REDIS_PORT} DB={settings.REDIS_DB} {_redis_pw}")
     print("-" * 60)
     print(f"  CORS Origins : {', '.join(settings.CORS_ORIGINS)}")
     print(f"  Languages    : {', '.join(settings.SUPPORTED_LANGS)}")

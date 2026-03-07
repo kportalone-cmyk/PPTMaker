@@ -88,12 +88,14 @@ async def _call_claude_api(system_prompt: str, user_prompt: str, model: str = ""
             {"role": "user", "content": user_prompt}
         ],
     }
-    # 모델별 max_tokens 적용
+    # 모델별 max_tokens 적용 (Anthropic API 필수 파라미터)
     effective_model = model or settings.ANTHROPIC_MODEL
     if effective_model == settings.ANTHROPIC_OUTLINE_MODEL and settings.ANTHROPIC_OUTLINE_MAX_TOKENS > 0:
         payload["max_tokens"] = settings.ANTHROPIC_OUTLINE_MAX_TOKENS
     elif settings.ANTHROPIC_MAX_TOKENS > 0:
         payload["max_tokens"] = settings.ANTHROPIC_MAX_TOKENS
+    else:
+        payload["max_tokens"] = 4096  # 기본값
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(url, json=payload, headers=headers)
@@ -931,8 +933,12 @@ async def generate_single_slide_content(
     instruction: str,
     slide_meta: dict,
     lang: str = "ko",
+    current_content: dict = None,
 ) -> dict:
-    """단일 슬라이드용 텍스트 콘텐츠 생성 (수동 모드)
+    """단일 슬라이드용 텍스트 콘텐츠 생성/수정
+
+    current_content가 있으면 기존 내용을 바탕으로 사용자 지침에 따라 수정합니다.
+    없으면 새로 생성합니다.
 
     Returns:
         {"contents": {placeholder: text}, "items": [{"heading": ..., "detail": ...}]}
@@ -960,7 +966,64 @@ async def generate_single_slide_content(
         "zh": "请用中文撰写。",
     }.get(lang, "한국어로 작성하세요.")
 
-    system_prompt = f"""당신은 프레젠테이션 콘텐츠 전문가입니다.
+    # 기존 내용이 있는 경우: 수정 모드
+    has_existing = current_content and (current_content.get("contents") or current_content.get("items"))
+
+    if has_existing:
+        existing_contents = current_content.get("contents", {})
+        existing_items = current_content.get("items", [])
+
+        existing_text = ""
+        if existing_contents:
+            existing_text += "### 현재 텍스트 내용:\n"
+            for k, v in existing_contents.items():
+                if v:
+                    existing_text += f'  - {k}: "{v}"\n'
+        if existing_items:
+            existing_text += "### 현재 항목(items):\n"
+            for i, item in enumerate(existing_items):
+                existing_text += f'  {i+1}. heading: "{item.get("heading", "")}", detail: "{item.get("detail", "")}"\n'
+
+        system_prompt = f"""당신은 프레젠테이션 콘텐츠 편집 전문가입니다.
+사용자의 지침에 따라 현재 슬라이드의 내용을 수정합니다.
+{lang_instruction}
+
+## 중요 규칙:
+- 사용자가 특정 부분만 수정 요청하면 해당 부분만 변경하고 나머지는 유지하세요.
+- "제목을 바꿔줘" → title 역할의 텍스트만 변경
+- "항목을 추가해줘" → 기존 items를 유지하고 새 항목 추가
+- "삭제해줘" → 해당 항목 제거
+- "전체를 다시 작성해줘" → 전체 새로 작성
+- 지침이 명확하지 않으면 기존 내용을 최대한 유지하면서 개선하세요.
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{{
+  "contents": {{ "placeholder_name": "텍스트 내용", ... }},
+  "items": [ {{ "heading": "소제목", "detail": "설명 내용" }}, ... ]
+}}
+"""
+
+        user_prompt = f"""## 현재 슬라이드 내용 (수정 대상)
+{existing_text}
+
+## 참고 리소스
+{resources_text[:6000]}
+
+## 사용자 수정 지침
+{instruction}
+
+## 슬라이드 정보
+- 콘텐츠 타입: {meta.get('content_type', 'body')}
+- 설명 항목 수: {desc_count}개
+
+## Placeholder 목록
+{placeholder_desc}
+
+위 현재 내용을 사용자 지침에 따라 수정하여 JSON으로 응답하세요.
+items 배열의 heading은 subtitle, detail은 description에 대응합니다.
+"""
+    else:
+        system_prompt = f"""당신은 프레젠테이션 콘텐츠 전문가입니다.
 주어진 리소스와 지침을 바탕으로 슬라이드 1장의 텍스트를 생성합니다.
 {lang_instruction}
 
@@ -971,7 +1034,7 @@ async def generate_single_slide_content(
 }}
 """
 
-    user_prompt = f"""## 리소스 (참고 자료)
+        user_prompt = f"""## 리소스 (참고 자료)
 {resources_text[:8000]}
 
 ## 사용자 지침
@@ -991,13 +1054,15 @@ subtitle 역할의 placeholder는 items의 heading에 대응하고, description 
 
     try:
         result = await _call_claude_api(system_prompt, user_prompt, model=settings.ANTHROPIC_MODEL)
+        print(f"[LLM] 단일 슬라이드 응답 길이: {len(result)} chars")
         parsed = _extract_json(result)
         if parsed and "contents" in parsed:
             return parsed
-        return {"contents": {}, "items": []}
+        print(f"[LLM] JSON 파싱 실패, 원본: {result[:500]}")
+        raise ValueError("AI 응답을 파싱할 수 없습니다")
     except Exception as e:
         print(f"[LLM] 단일 슬라이드 텍스트 생성 실패: {e}")
-        return {"contents": {}, "items": []}
+        raise
 
 
 def _extract_json(text: str) -> dict:
@@ -1199,12 +1264,14 @@ async def _stream_claude_api(system_prompt: str, user_prompt: str, model: str = 
         "messages": [{"role": "user", "content": user_prompt}],
         "stream": True,
     }
-    # 모델별 max_tokens 적용
+    # 모델별 max_tokens 적용 (Anthropic API 필수 파라미터)
     effective_model = model or settings.ANTHROPIC_MODEL
     if effective_model == settings.ANTHROPIC_OUTLINE_MODEL and settings.ANTHROPIC_OUTLINE_MAX_TOKENS > 0:
         payload["max_tokens"] = settings.ANTHROPIC_OUTLINE_MAX_TOKENS
     elif settings.ANTHROPIC_MAX_TOKENS > 0:
         payload["max_tokens"] = settings.ANTHROPIC_MAX_TOKENS
+    else:
+        payload["max_tokens"] = 4096  # 기본값
 
     async with httpx.AsyncClient(timeout=180.0) as client:
         async with client.stream("POST", url, json=payload, headers=headers) as response:

@@ -50,6 +50,38 @@ async def init_indexes():
     # prompts 컬렉션
     await db.prompts.create_index("key", unique=True)
 
+    # collaborators 컬렉션
+    await db.collaborators.create_index(
+        [("project_id", 1), ("user_key", 1)], unique=True
+    )
+    await db.collaborators.create_index("user_key")
+    await db.collaborators.create_index("project_id")
+
+    # slide_locks 컬렉션
+    await db.slide_locks.create_index(
+        "expires_at", expireAfterSeconds=0
+    )
+    await db.slide_locks.create_index(
+        [("project_id", 1), ("slide_id", 1)], unique=True
+    )
+    await db.slide_locks.create_index([("project_id", 1), ("user_key", 1)])
+    # collab-status에서 expires_at 필터링용 복합 인덱스
+    await db.slide_locks.create_index([("project_id", 1), ("expires_at", 1)])
+
+    # slide_history 컬렉션
+    await db.slide_history.create_index([("project_id", 1), ("created_at", -1)])
+    await db.slide_history.create_index([("project_id", 1), ("slide_id", 1)])
+
+    # online_presence 컬렉션
+    await db.online_presence.create_index(
+        "last_seen", expireAfterSeconds=60
+    )
+    await db.online_presence.create_index(
+        [("project_id", 1), ("user_key", 1)], unique=True
+    )
+    # collab-status에서 project_id + last_seen 필터링용
+    await db.online_presence.create_index([("project_id", 1), ("last_seen", -1)])
+
     # 조직도 인덱스
     org_db = get_org_db()
     org_col = org_db[settings.ORG_COLLECTION]
