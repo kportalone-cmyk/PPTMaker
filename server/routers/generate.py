@@ -2,12 +2,12 @@ from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse, StreamingResponse
 from bson import ObjectId
 from datetime import datetime
-from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest
+from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest
 from services.mongo_service import get_db
 from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible
 from services.template_service import recommend_slide, get_template_slides
 from services.ppt_service import generate_pptx
-from services.llm_service import generate_slide_content, generate_slide_content_stream
+from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content
 from config import settings
 import os
 import uuid
@@ -391,6 +391,150 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
             "Connection": "keep-alive",
         }
     )
+
+
+@router.post("/{jwt_token}/api/generate/manual-slide")
+async def add_manual_slide(jwt_token: str, data: ManualSlideRequest):
+    """수동 모드: 템플릿 슬라이드를 기반으로 빈 슬라이드 추가"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    # 템플릿 슬라이드 조회
+    template_slide = await db.slides.find_one({"_id": ObjectId(data.template_slide_id)})
+    if not template_slide:
+        raise HTTPException(status_code=404, detail="템플릿 슬라이드를 찾을 수 없습니다")
+
+    # 기존 슬라이드 수 확인 (order 결정)
+    count = await db.generated_slides.count_documents({"project_id": data.project_id})
+
+    # 템플릿 분석 (auto role/placeholder 할당)
+    analyzed = _analyze_template_slides([dict(template_slide)])
+    slide_meta = analyzed[0] if analyzed else {}
+
+    # 빈 generated_text로 objects 생성
+    gen_objects = []
+    for obj in template_slide.get("objects", []):
+        gen_obj = obj.copy()
+        gen_obj.pop("_id", None)
+        if obj.get("obj_type") == "text":
+            gen_obj["generated_text"] = ""
+        gen_objects.append(gen_obj)
+
+    doc = {
+        "project_id": data.project_id,
+        "template_slide_id": data.template_slide_id,
+        "order": count + 1,
+        "objects": gen_objects,
+        "items": [],
+        "background_image": template_slide.get("background_image"),
+        "slide_meta": template_slide.get("slide_meta", {}),
+        "created_at": datetime.utcnow(),
+    }
+    result = await db.generated_slides.insert_one(doc)
+    doc["_id"] = str(result.inserted_id)
+
+    # 프로젝트 상태를 generated로 변경 (slidePreview 표시)
+    await db.projects.update_one(
+        {"_id": ObjectId(data.project_id)},
+        {"$set": {
+            "status": "generated",
+            "manual_mode": True,
+            "updated_at": datetime.utcnow(),
+        }}
+    )
+
+    return {"slide": doc}
+
+
+@router.post("/{jwt_token}/api/generate/slide-text")
+async def generate_slide_text(jwt_token: str, data: SlideTextRequest):
+    """수동 모드: 개별 슬라이드의 텍스트를 AI로 생성"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    # 생성된 슬라이드 조회
+    gen_slide = await db.generated_slides.find_one({"_id": ObjectId(data.slide_id)})
+    if not gen_slide:
+        raise HTTPException(status_code=404, detail="슬라이드를 찾을 수 없습니다")
+
+    # 템플릿 슬라이드 조회
+    tmpl_slide_id = data.template_slide_id or gen_slide.get("template_slide_id", "")
+    template_slide = None
+    if tmpl_slide_id:
+        template_slide = await db.slides.find_one({"_id": ObjectId(tmpl_slide_id)})
+
+    if not template_slide:
+        # 템플릿 없으면 gen_slide의 objects를 기반으로 분석
+        template_slide = gen_slide
+
+    # 리소스 텍스트 수집
+    cursor = db.resources.find({"project_id": data.project_id})
+    resources_text = ""
+    async for r in cursor:
+        resources_text += (r.get("content") or "") + "\n\n"
+
+    # 템플릿 분석
+    analyzed = _analyze_template_slides([dict(template_slide)])
+    slide_meta = analyzed[0] if analyzed else {"placeholders": [], "slide_meta": {}}
+
+    # 프로젝트 언어 확인
+    project = await db.projects.find_one({"_id": ObjectId(data.project_id)})
+    lang = (project or {}).get("lang", "ko") or "ko"
+
+    # LLM으로 단일 슬라이드 텍스트 생성
+    llm_result = await generate_single_slide_content(
+        resources_text=resources_text,
+        instruction=data.instruction,
+        slide_meta=slide_meta,
+        lang=lang,
+    )
+
+    contents = llm_result.get("contents", {})
+    items = llm_result.get("items", [])
+
+    # _build_gen_objects로 텍스트 매핑
+    gen_objects = _build_gen_objects(dict(template_slide), contents)
+
+    # DB 업데이트
+    await db.generated_slides.update_one(
+        {"_id": ObjectId(data.slide_id)},
+        {"$set": {
+            "objects": gen_objects,
+            "items": items,
+            "updated_at": datetime.utcnow(),
+        }}
+    )
+
+    return {
+        "slide_id": data.slide_id,
+        "objects": gen_objects,
+        "items": items,
+    }
+
+
+@router.delete("/{jwt_token}/api/generate/manual-slide/{slide_id}")
+async def delete_manual_slide(jwt_token: str, slide_id: str):
+    """수동 모드: 슬라이드 삭제"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    slide = await db.generated_slides.find_one({"_id": ObjectId(slide_id)})
+    if not slide:
+        raise HTTPException(status_code=404, detail="슬라이드를 찾을 수 없습니다")
+
+    project_id = slide.get("project_id")
+    await db.generated_slides.delete_one({"_id": ObjectId(slide_id)})
+
+    # 순서 재정렬
+    remaining = db.generated_slides.find({"project_id": project_id}).sort("order", 1)
+    order = 1
+    async for s in remaining:
+        await db.generated_slides.update_one(
+            {"_id": s["_id"]}, {"$set": {"order": order}}
+        )
+        order += 1
+
+    return {"success": True}
 
 
 @router.post("/{jwt_token}/api/generate/stop/{project_id}")

@@ -1871,6 +1871,164 @@ body {
 .btn-generate:active { transform: scale(0.97); }
 .btn-generate:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* 수동 생성 버튼 */
+.btn-manual-create {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 8px 14px;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+.btn-manual-create:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-light);
+}
+.btn-manual-create.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-light);
+}
+
+/* 수동 모드: 슬라이드 추가 버튼 */
+.slide-add-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 144px;
+    margin: 4px 0;
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    color: var(--text-tertiary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+.slide-add-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-light);
+}
+
+/* 수동 모드: 슬라이드 삭제 버튼 */
+.slide-thumb-v-wrap {
+    position: relative;
+}
+.slide-thumb-delete {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.5);
+    color: white;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+}
+.slide-thumb-v-wrap:hover .slide-thumb-delete {
+    display: flex;
+}
+.slide-thumb-delete:hover {
+    background: var(--danger);
+}
+
+/* 템플릿 슬라이드 선택 그리드 */
+.template-slide-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 16px;
+    padding: 8px 0;
+}
+.template-slide-item {
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+.template-slide-item:hover {
+    border-color: var(--accent);
+    box-shadow: 0 2px 8px rgba(99,102,241,0.15);
+}
+.template-slide-thumb {
+    width: 100%;
+    aspect-ratio: 16/9;
+    background: #f8f9fa;
+    position: relative;
+    overflow: hidden;
+}
+.template-slide-label {
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-align: center;
+    background: var(--surface-2, #f9fafb);
+}
+
+/* 슬라이드별 지침 입력 바 */
+.slide-instruction-bar {
+    padding: 8px 12px;
+}
+.slide-instruction-inner {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+}
+.slide-instruction-input {
+    flex: 1;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-size: 13px;
+    font-family: inherit;
+    resize: none;
+    line-height: 1.5;
+    color: var(--text-primary);
+    min-height: 20px;
+    max-height: 80px;
+}
+.btn-slide-ai {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 14px;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 12px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background var(--transition);
+    flex-shrink: 0;
+}
+.btn-slide-ai:hover { background: var(--accent-hover); }
+.btn-slide-ai:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .btn-stop {
     display: flex;
     align-items: center;

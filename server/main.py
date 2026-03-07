@@ -244,6 +244,19 @@ async def list_templates_for_user(jwt_token: str):
     return {"templates": templates}
 
 
+@app.get("/{jwt_token}/api/templates/{template_id}/slides")
+async def get_template_slides_for_user(jwt_token: str, template_id: str):
+    """사용자용 템플릿 슬라이드 목록 (수동 모드 슬라이드 선택용)"""
+    from services.auth_service import decode_jwt_token
+    from services.template_service import get_template_slides
+    payload = decode_jwt_token(jwt_token)
+    if not payload:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다")
+    slides = await get_template_slides(template_id)
+    return {"slides": slides}
+
+
 if __name__ == "__main__":
     import signal
     import uvicorn

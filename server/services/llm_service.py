@@ -926,6 +926,100 @@ def _validate_and_normalize(slides: list[dict], num_templates: int) -> list[dict
 
 # ============ 폴백 콘텐츠 생성 ============
 
+async def generate_single_slide_content(
+    resources_text: str,
+    instruction: str,
+    slide_meta: dict,
+    lang: str = "ko",
+) -> dict:
+    """단일 슬라이드용 텍스트 콘텐츠 생성 (수동 모드)
+
+    Returns:
+        {"contents": {placeholder: text}, "items": [{"heading": ..., "detail": ...}]}
+    """
+    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+        # 폴백: placeholder마다 지침 텍스트 반환
+        contents = {}
+        for p in slide_meta.get("placeholders", []):
+            contents[p["placeholder"]] = instruction or "내용 없음"
+        return {"contents": contents, "items": []}
+
+    placeholders = slide_meta.get("placeholders", [])
+    meta = slide_meta.get("slide_meta", {})
+    desc_count = meta.get("description_count", 3)
+
+    placeholder_desc = "\n".join(
+        f'  - "{p["placeholder"]}" (역할: {p["role"]})'
+        for p in placeholders
+    )
+
+    lang_instruction = {
+        "ko": "한국어로 작성하세요.",
+        "en": "Write in English.",
+        "ja": "日本語で作成してください。",
+        "zh": "请用中文撰写。",
+    }.get(lang, "한국어로 작성하세요.")
+
+    system_prompt = f"""당신은 프레젠테이션 콘텐츠 전문가입니다.
+주어진 리소스와 지침을 바탕으로 슬라이드 1장의 텍스트를 생성합니다.
+{lang_instruction}
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{{
+  "contents": {{ "placeholder_name": "텍스트 내용", ... }},
+  "items": [ {{ "heading": "소제목", "detail": "설명 내용" }}, ... ]
+}}
+"""
+
+    user_prompt = f"""## 리소스 (참고 자료)
+{resources_text[:8000]}
+
+## 사용자 지침
+{instruction}
+
+## 이 슬라이드 정보
+- 콘텐츠 타입: {meta.get('content_type', 'body')}
+- 레이아웃: {meta.get('layout', '')}
+- 설명 항목 수: {desc_count}개
+
+## Placeholder 목록 (모든 placeholder에 대해 contents를 생성하세요)
+{placeholder_desc}
+
+items 배열에는 heading(소제목)과 detail(설명)을 {desc_count}개 생성하세요.
+subtitle 역할의 placeholder는 items의 heading에 대응하고, description 역할은 items의 detail에 대응합니다.
+"""
+
+    try:
+        result = await _call_claude_api(system_prompt, user_prompt, model=settings.ANTHROPIC_MODEL)
+        parsed = _extract_json(result)
+        if parsed and "contents" in parsed:
+            return parsed
+        return {"contents": {}, "items": []}
+    except Exception as e:
+        print(f"[LLM] 단일 슬라이드 텍스트 생성 실패: {e}")
+        return {"contents": {}, "items": []}
+
+
+def _extract_json(text: str) -> dict:
+    """텍스트에서 JSON 객체 추출"""
+    import re
+    # ```json ... ``` 블록 먼저 시도
+    m = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', text)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            pass
+    # 직접 JSON 파싱 시도
+    m = re.search(r'\{[\s\S]*\}', text)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            pass
+    return {}
+
+
 def _fallback_content(resources_text: str, slides_meta: list[dict]) -> list[dict]:
     """API 키 미설정 또는 오류 시 템플릿 타입 기반 기본 콘텐츠 생성"""
     result = []

@@ -30,3 +30,15 @@ class SlideUpdateRequest(BaseModel):
 
 class SlideReorderRequest(BaseModel):
     slide_ids: list[str]
+
+
+class ManualSlideRequest(BaseModel):
+    project_id: str
+    template_slide_id: str
+
+
+class SlideTextRequest(BaseModel):
+    project_id: str
+    slide_id: str
+    instruction: str
+    template_slide_id: str = ""

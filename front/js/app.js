@@ -19,6 +19,8 @@ const state = {
     searchHighlightIndex: -1,
     lastWebSearchResult: null,
     sidebarCollapsed: false,
+    manualMode: false,
+    manualTemplateSlides: [],
     editMode: false,
     editSelectedObj: null,
     editDragging: false,
@@ -98,6 +100,16 @@ const I18N = {
         emptyStep1: '리소스를 추가하세요',
         emptyStep2: '지침을 입력하세요',
         emptyStep3: '생성 버튼을 누르세요',
+        manualCreate: '수동',
+        addSlide: '슬라이드 추가',
+        selectTemplateSlide: '슬라이드 레이아웃 선택',
+        generateSlideText: 'AI 생성',
+        slideInstructionPlaceholder: '이 슬라이드에 대한 지침을 입력하세요...',
+        msgSlideAdded: '슬라이드가 추가되었습니다',
+        msgSlideDeleted: '슬라이드가 삭제되었습니다',
+        msgSlideTextGenerated: '텍스트가 생성되었습니다',
+        msgSelectTemplate: '먼저 템플릿을 선택하세요',
+        msgGeneratingText: '텍스트 생성 중...',
         prev: '이전',
         next: '다음',
         textResourceTitle: '텍스트 리소스 추가',
@@ -215,6 +227,16 @@ const I18N = {
         emptyStep1: 'Add resources',
         emptyStep2: 'Enter instructions',
         emptyStep3: 'Click Generate',
+        manualCreate: 'Manual',
+        addSlide: 'Add Slide',
+        selectTemplateSlide: 'Select Slide Layout',
+        generateSlideText: 'AI Generate',
+        slideInstructionPlaceholder: 'Enter instructions for this slide...',
+        msgSlideAdded: 'Slide added',
+        msgSlideDeleted: 'Slide deleted',
+        msgSlideTextGenerated: 'Text generated',
+        msgSelectTemplate: 'Please select a template first',
+        msgGeneratingText: 'Generating text...',
         prev: 'Prev',
         next: 'Next',
         textResourceTitle: 'Add Text Resource',
@@ -332,6 +354,16 @@ const I18N = {
         emptyStep1: 'リソースを追加',
         emptyStep2: '指示を入力',
         emptyStep3: '生成ボタンを押す',
+        manualCreate: '手動',
+        addSlide: 'スライド追加',
+        selectTemplateSlide: 'スライドレイアウト選択',
+        generateSlideText: 'AI生成',
+        slideInstructionPlaceholder: 'このスライドの指示を入力...',
+        msgSlideAdded: 'スライドを追加しました',
+        msgSlideDeleted: 'スライドを削除しました',
+        msgSlideTextGenerated: 'テキストを生成しました',
+        msgSelectTemplate: 'テンプレートを選択してください',
+        msgGeneratingText: 'テキスト生成中...',
         prev: '前',
         next: '次',
         textResourceTitle: 'テキスト追加',
@@ -449,6 +481,16 @@ const I18N = {
         emptyStep1: '添加资源',
         emptyStep2: '输入指令',
         emptyStep3: '点击生成',
+        manualCreate: '手动',
+        addSlide: '添加幻灯片',
+        selectTemplateSlide: '选择幻灯片布局',
+        generateSlideText: 'AI生成',
+        slideInstructionPlaceholder: '输入此幻灯片的指令...',
+        msgSlideAdded: '幻灯片已添加',
+        msgSlideDeleted: '幻灯片已删除',
+        msgSlideTextGenerated: '文本已生成',
+        msgSelectTemplate: '请先选择模板',
+        msgGeneratingText: '正在生成文本...',
         prev: '上一页',
         next: '下一页',
         textResourceTitle: '添加文本',
@@ -1098,6 +1140,10 @@ function renderProjectWorkspace() {
     // 템플릿 선택 복원
     state.selectedTemplateId = state.currentProject.template_id || null;
     updateTemplateButtonLabel();
+
+    // 수동 모드 상태 복원
+    state.manualMode = !!state.currentProject.manual_mode;
+    updateManualModeUI();
 }
 
 function showEditProjectModal() {
@@ -1505,6 +1551,198 @@ async function deleteAllResources() {
         state.resources = [];
         renderResourceChips();
         showToast(t('msgAllResDeleted'), 'success');
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+// ============ 수동 생성 모드 ============
+
+async function enterManualMode() {
+    if (!state.currentProject) return;
+
+    // 템플릿 미선택 시 선택 유도
+    if (!state.selectedTemplateId) {
+        showToast(t('msgSelectTemplate'), 'error');
+        openTemplatePickerModal();
+        return;
+    }
+
+    state.manualMode = true;
+
+    // 이미 슬라이드가 있으면 그대로 표시, 없으면 빈 상태
+    if (state.generatedSlides.length === 0) {
+        // slidePreview 표시 + 빈 상태에서 시작
+        $('#slideEmpty').hide();
+        $('#slidePreview').show();
+        renderSlideThumbList();
+        // 캔버스 비우기
+        $('#previewCanvas').find('.preview-obj,.edit-obj-wrap').remove();
+        $('#previewBg').css('background-image', 'none');
+    }
+
+    // 수동 모드 UI 업데이트
+    updateManualModeUI();
+    showTemplateSlidePickerModal();
+}
+
+function exitManualMode() {
+    state.manualMode = false;
+    updateManualModeUI();
+}
+
+function updateManualModeUI() {
+    // 슬라이드 지침 바 표시/숨김
+    if (state.manualMode) {
+        $('#slideInstructionBar').show();
+        $('#btnManualCreate').addClass('active');
+    } else {
+        $('#slideInstructionBar').hide();
+        $('#btnManualCreate').removeClass('active');
+    }
+    // 좌측 패널 + 추가 버튼 갱신
+    renderSlideThumbList();
+}
+
+async function showTemplateSlidePickerModal() {
+    if (!state.selectedTemplateId) {
+        showToast(t('msgSelectTemplate'), 'error');
+        return;
+    }
+
+    const grid = $('#templateSlideGrid');
+    grid.empty().html('<div style="text-align:center;padding:20px;color:var(--text-tertiary);">Loading...</div>');
+    $('#templateSlidePickerModal').show();
+
+    try {
+        const res = await apiGet('/api/templates/' + state.selectedTemplateId + '/slides');
+        const slides = res.slides || [];
+        state.manualTemplateSlides = slides;
+
+        grid.empty();
+        if (slides.length === 0) {
+            grid.html('<div style="text-align:center;padding:20px;color:var(--text-tertiary);">템플릿에 슬라이드가 없습니다</div>');
+            return;
+        }
+
+        slides.forEach(slide => {
+            const item = $('<div>').addClass('template-slide-item').attr('data-slide-id', slide._id);
+            const thumbContainer = $('<div>').addClass('template-slide-thumb');
+            renderSlideToContainer(thumbContainer, slide, 240, 135);
+            item.append(thumbContainer);
+
+            const meta = slide.slide_meta || {};
+            const typeLabel = {
+                title_slide: 'Cover', toc: 'Contents',
+                section_divider: 'Chapter', body: 'Body', closing: 'Closing'
+            }[meta.content_type] || meta.content_type || 'Slide';
+            item.append(`<div class="template-slide-label">${typeLabel}</div>`);
+
+            item.on('click', () => addManualSlide(slide._id));
+            grid.append(item);
+        });
+    } catch (e) {
+        grid.html('<div style="text-align:center;padding:20px;color:var(--danger);">' + e.message + '</div>');
+    }
+}
+
+async function addManualSlide(templateSlideId) {
+    if (!state.currentProject) return;
+
+    try {
+        showLoading(t('msgSlideAdded'));
+        const res = await apiPost('/api/generate/manual-slide', {
+            project_id: state.currentProject._id,
+            template_slide_id: templateSlideId,
+        });
+
+        state.generatedSlides.push(res.slide);
+        state.currentSlideIndex = state.generatedSlides.length - 1;
+
+        // 프로젝트 상태 업데이트
+        state.currentProject.status = 'generated';
+        state.currentProject.manual_mode = true;
+
+        // UI 표시
+        $('#slideEmpty').hide();
+        $('#slidePreview').show();
+        renderSlideThumbList();
+        goToSlide(state.currentSlideIndex);
+        updateManualModeUI();
+
+        closeModal('templateSlidePickerModal');
+        hideLoading();
+        showToast(t('msgSlideAdded'), 'success');
+    } catch (e) {
+        hideLoading();
+        showToast(e.message, 'error');
+    }
+}
+
+async function generateSlideText() {
+    if (!state.currentProject || state.generatedSlides.length === 0) return;
+
+    const slide = state.generatedSlides[state.currentSlideIndex];
+    if (!slide) return;
+
+    const instruction = $('#slideInstructionInput').val().trim();
+    if (!instruction) {
+        showToast(t('msgEnterContent'), 'error');
+        return;
+    }
+
+    try {
+        $('#btnSlideAI').prop('disabled', true);
+        showLoading(t('msgGeneratingText'));
+
+        const res = await apiPost('/api/generate/slide-text', {
+            project_id: state.currentProject._id,
+            slide_id: slide._id,
+            instruction: instruction,
+            template_slide_id: slide.template_slide_id || '',
+        });
+
+        // 슬라이드 업데이트
+        slide.objects = res.objects;
+        slide.items = res.items;
+
+        // 캔버스 다시 렌더링
+        if (state.editMode) {
+            renderSlideAtIndexEditable(state.currentSlideIndex);
+        } else {
+            renderSlideAtIndex(state.currentSlideIndex);
+        }
+        renderSlideThumbList();
+
+        hideLoading();
+        showToast(t('msgSlideTextGenerated'), 'success');
+    } catch (e) {
+        hideLoading();
+        showToast(e.message, 'error');
+    } finally {
+        $('#btnSlideAI').prop('disabled', false);
+    }
+}
+
+async function deleteManualSlide(slideId) {
+    if (!confirm(t('msgConfirmDeleteRes'))) return;
+
+    try {
+        await apiDelete('/api/generate/manual-slide/' + slideId);
+        state.generatedSlides = state.generatedSlides.filter(s => s._id !== slideId);
+
+        if (state.generatedSlides.length === 0) {
+            state.currentSlideIndex = 0;
+            $('#previewCanvas').find('.preview-obj,.edit-obj-wrap').remove();
+            $('#previewBg').css('background-image', 'none');
+        } else {
+            if (state.currentSlideIndex >= state.generatedSlides.length) {
+                state.currentSlideIndex = state.generatedSlides.length - 1;
+            }
+            goToSlide(state.currentSlideIndex);
+        }
+        renderSlideThumbList();
+        showToast(t('msgSlideDeleted'), 'success');
     } catch (e) {
         showToast(e.message, 'error');
     }
@@ -2224,6 +2462,7 @@ function renderSlideThumbList() {
     list.empty();
     state.generatedSlides.forEach((slide, i) => {
         const isActive = i === state.currentSlideIndex;
+        const thumbWrap = $('<div>').addClass('slide-thumb-v-wrap');
         const thumbEl = $(`
             <div class="slide-thumb-v ${isActive ? 'active' : ''}" draggable="true" tabindex="0" onclick="goToSlide(${i})" data-slide-idx="${i}">
                 <div class="slide-thumb-v-num">${i + 1}</div>
@@ -2231,8 +2470,30 @@ function renderSlideThumbList() {
             </div>
         `);
         renderSlideToContainer(thumbEl.find('.slide-thumb-v-inner'), slide, 256, 144);
-        list.append(thumbEl);
+        thumbWrap.append(thumbEl);
+
+        // 수동 모드: 삭제 버튼 추가
+        if (state.manualMode) {
+            thumbWrap.append(`<button class="slide-thumb-delete" onclick="event.stopPropagation();deleteManualSlide('${slide._id}')" title="삭제">&times;</button>`);
+        }
+        list.append(thumbWrap);
     });
+
+    // 수동 모드: 슬라이드 추가 버튼
+    if (state.manualMode) {
+        const addBtn = $(`
+            <div class="slide-add-btn" onclick="showTemplateSlidePickerModal()">
+                <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 6v12M6 12h12"/></svg>
+                <span>${t('addSlide')}</span>
+            </div>
+        `);
+        list.append(addBtn);
+    }
+
+    // 슬라이드 카운터 업데이트
+    const total = state.generatedSlides.length;
+    const current = total > 0 ? state.currentSlideIndex + 1 : 0;
+    $('#slideCounterInline').text(current + ' / ' + total);
 }
 
 function _appendSingleThumbnail(i) {
