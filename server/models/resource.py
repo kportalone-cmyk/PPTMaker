@@ -14,3 +14,8 @@ class ResourceCreate(BaseModel):
 class WebSearchRequest(BaseModel):
     project_id: str
     query: str
+
+
+class URLResourceRequest(BaseModel):
+    project_id: str
+    urls: list

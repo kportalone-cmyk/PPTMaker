@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from bson import ObjectId
 from datetime import datetime
-from models.resource import ResourceCreate, WebSearchRequest
+from models.resource import ResourceCreate, WebSearchRequest, URLResourceRequest
 from services.mongo_service import get_db
 from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible
 from services.search_service import search_web
@@ -153,6 +153,64 @@ async def add_web_search_resource(jwt_token: str, data: WebSearchRequest):
         resources.append(doc)
 
     return {"resources": resources, "count": len(resources)}
+
+
+@router.post("/{jwt_token}/api/resources/urls")
+async def add_url_resources(jwt_token: str, data: URLResourceRequest):
+    """URL 멀티 리소스 추가 - 각 URL의 텍스트 수집 (YouTube는 자막 추출)"""
+    from services.url_service import process_url
+
+    await get_user_key(jwt_token)
+    db = get_db()
+    resources = []
+    errors = []
+    now = datetime.utcnow()
+
+    for url in data.urls:
+        url = url.strip()
+        if not url:
+            continue
+        try:
+            result = await process_url(url)
+            if not result:
+                continue
+
+            if result.get("error") and not result.get("content"):
+                errors.append({"url": url, "error": result["error"]})
+                continue
+
+            doc = {
+                "project_id": data.project_id,
+                "resource_type": result.get("resource_type", "url"),
+                "title": result.get("title", url),
+                "content": result.get("content", ""),
+                "file_path": None,
+                "source_url": result.get("source_url", url),
+                "sources": [result.get("source_url", url)],
+                "created_at": now,
+            }
+            insert_result = await db.resources.insert_one(doc)
+            doc["_id"] = str(insert_result.inserted_id)
+            resources.append(doc)
+        except Exception as e:
+            errors.append({"url": url, "error": str(e)})
+
+    return {"resources": resources, "count": len(resources), "errors": errors}
+
+
+@router.delete("/{jwt_token}/api/resources/all/{project_id}")
+async def delete_all_resources(jwt_token: str, project_id: str):
+    """프로젝트의 모든 리소스 삭제"""
+    await get_user_key(jwt_token)
+    db = get_db()
+    # 파일 리소스의 실제 파일 삭제
+    cursor = db.resources.find({"project_id": project_id, "file_path": {"$ne": None}})
+    async for r in cursor:
+        file_path = os.path.join(".", r["file_path"].lstrip("/"))
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    result = await db.resources.delete_many({"project_id": project_id})
+    return {"success": True, "deleted_count": result.deleted_count}
 
 
 @router.delete("/{jwt_token}/api/resources/{resource_id}")

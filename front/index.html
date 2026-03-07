@@ -220,6 +220,10 @@
                             <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="4"/><path d="M13 13l-3.5-3.5"/></svg>
                             <span class="i18n-webSearch">검색</span>
                         </button>
+                        <button class="chip-btn" onclick="showURLModal()" title="URL 추가">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M6.5 3.5h-2a2 2 0 000 4h2M7.5 3.5h2a2 2 0 010 4h-2M5 5.5h4"/></svg>
+                            <span class="i18n-addUrl">URL</span>
+                        </button>
                     </div>
                     <input type="file" id="fileUploadInput" style="display:none;"
                            accept=".docx,.doc,.xlsx,.xls,.pptx,.ppt,.pdf,.txt,.csv"
@@ -227,6 +231,12 @@
                     <!-- 리소스 드롭다운 리스트 -->
                     <div class="resource-dropdown" id="resourceDropdown" style="display:none;">
                         <div class="resource-dropdown-list" id="resourceDropdownList"></div>
+                        <div class="resource-dd-footer" id="resourceDdFooter" style="display:none;">
+                            <button class="resource-dd-delete-all" onclick="deleteAllResources()">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                <span id="deleteAllLabel">전체 삭제</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -234,11 +244,36 @@
                 <div class="slide-area" id="slideArea">
                     <!-- 슬라이드 미생성 상태 -->
                     <div id="slideEmpty" class="slide-empty">
-                        <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
-                            <rect x="8" y="12" width="48" height="36" rx="4" fill="#F3F4F6" stroke="#D1D5DB" stroke-width="2"/>
-                            <path d="M24 28h16v2H24zM28 33h8v2H28z" fill="#9CA3AF"/>
-                        </svg>
-                        <p class="i18n-noSlides">아래에서 지침을 입력하고 생성 버튼을 눌러주세요</p>
+                        <div class="empty-icon-wrap">
+                            <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                                <rect x="6" y="10" width="36" height="26" rx="4" stroke="currentColor" stroke-width="1.5" opacity="0.5"/>
+                                <rect x="12" y="16" width="24" height="14" rx="2" stroke="currentColor" stroke-width="1" opacity="0.3"/>
+                                <path d="M18 22h12M20 26h8" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity="0.4"/>
+                                <circle cx="38" cy="34" r="8" fill="var(--accent)" opacity="0.15"/>
+                                <path d="M35 34l2.5 2.5L41 31" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </div>
+                        <p class="empty-title i18n-noSlides">아래에서 지침을 입력하고 생성 버튼을 눌러주세요</p>
+                        <div class="empty-steps">
+                            <div class="empty-step">
+                                <span class="empty-step-num">1</span>
+                                <span class="empty-step-text i18n-emptyStep1">리소스를 추가하세요</span>
+                            </div>
+                            <div class="empty-step-arrow">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6 4l4 4-4 4"/></svg>
+                            </div>
+                            <div class="empty-step">
+                                <span class="empty-step-num">2</span>
+                                <span class="empty-step-text i18n-emptyStep2">지침을 입력하세요</span>
+                            </div>
+                            <div class="empty-step-arrow">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6 4l4 4-4 4"/></svg>
+                            </div>
+                            <div class="empty-step">
+                                <span class="empty-step-num">3</span>
+                                <span class="empty-step-text i18n-emptyStep3">생성 버튼을 누르세요</span>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- 슬라이드 프리뷰 -->
@@ -496,6 +531,28 @@
             </div>
             <div class="modal-footer">
                 <button class="btn-secondary" onclick="closeModal('webSearchModal')"><span class="i18n-close">닫기</span></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- URL 리소스 추가 모달 -->
+    <div class="modal-overlay" id="urlResourceModal" style="display:none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 class="i18n-urlModalTitle">URL 추가</h3>
+                <button class="modal-close" onclick="closeModal('urlResourceModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-field">
+                    <label class="i18n-urlLabel">URL 목록</label>
+                    <textarea id="urlInput" rows="6" class="i18n-urlPlaceholder-placeholder"
+                              placeholder="URL을 한 줄에 하나씩 입력하세요&#10;예: https://example.com&#10;    https://youtube.com/watch?v=..."></textarea>
+                    <div class="url-hint i18n-urlHint">YouTube URL은 자동으로 자막을 추출합니다</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeModal('urlResourceModal')"><span class="i18n-cancel">취소</span></button>
+                <button class="btn-primary" id="btnAddUrls" onclick="addURLResources()"><span class="i18n-add">추가</span></button>
             </div>
         </div>
     </div>

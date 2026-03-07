@@ -69,6 +69,13 @@ const I18N = {
         uploadFile: '파일',
         addText: '텍스트',
         webSearch: '검색',
+        addUrl: 'URL',
+        urlModalTitle: 'URL 추가',
+        urlLabel: 'URL 목록',
+        urlPlaceholder: 'URL을 한 줄에 하나씩 입력하세요',
+        urlHint: 'YouTube URL은 자동으로 자막을 추출합니다',
+        msgUrlAdded: 'URL 리소스가 추가되었습니다',
+        msgUrlCollecting: 'URL 콘텐츠 수집 중...',
         noResources: '리소스가 없습니다',
         selectTemplate: '템플릿 선택',
         selectTemplatePlaceholder: '템플릿을 선택하세요',
@@ -87,7 +94,10 @@ const I18N = {
         editReplaceImage: '이미지 교체',
         editUnsavedChanges: '저장하지 않은 변경사항이 있습니다. 저장하시겠습니까?',
         editSaved: '변경사항이 저장되었습니다',
-        noSlides: '아래에서 지침을 입력하고 생성 버튼을 눌러주세요',
+        noSlides: '지침을 입력하고 프레젠테이션을 생성하세요',
+        emptyStep1: '리소스를 추가하세요',
+        emptyStep2: '지침을 입력하세요',
+        emptyStep3: '생성 버튼을 누르세요',
         prev: '이전',
         next: '다음',
         textResourceTitle: '텍스트 리소스 추가',
@@ -138,6 +148,9 @@ const I18N = {
         msgSearchAdded: '검색 결과가 리소스로 추가되었습니다',
         msgConfirmDelete: '이 프로젝트를 삭제하시겠습니까?',
         msgConfirmDeleteRes: '이 리소스를 삭제하시겠습니까?',
+        msgConfirmDeleteAllRes: '모든 리소스를 삭제하시겠습니까?',
+        msgAllResDeleted: '모든 리소스가 삭제되었습니다',
+        deleteAll: '전체 삭제',
         searching: '검색 중...',
         stopBtn: '중단',
         restartBtn: '재생성',
@@ -173,6 +186,13 @@ const I18N = {
         uploadFile: 'File',
         addText: 'Text',
         webSearch: 'Search',
+        addUrl: 'URL',
+        urlModalTitle: 'Add URLs',
+        urlLabel: 'URL List',
+        urlPlaceholder: 'Enter one URL per line',
+        urlHint: 'YouTube URLs will automatically extract subtitles',
+        msgUrlAdded: 'URL resources added',
+        msgUrlCollecting: 'Collecting URL content...',
         noResources: 'No resources',
         selectTemplate: 'Select Template',
         selectTemplatePlaceholder: 'Choose a template',
@@ -191,7 +211,10 @@ const I18N = {
         editReplaceImage: 'Replace',
         editUnsavedChanges: 'You have unsaved changes. Save now?',
         editSaved: 'Changes saved',
-        noSlides: 'Enter instructions below and click Generate',
+        noSlides: 'Enter instructions and generate your presentation',
+        emptyStep1: 'Add resources',
+        emptyStep2: 'Enter instructions',
+        emptyStep3: 'Click Generate',
         prev: 'Prev',
         next: 'Next',
         textResourceTitle: 'Add Text Resource',
@@ -242,6 +265,9 @@ const I18N = {
         msgSearchAdded: 'Search result added',
         msgConfirmDelete: 'Delete this project?',
         msgConfirmDeleteRes: 'Delete this resource?',
+        msgConfirmDeleteAllRes: 'Delete all resources?',
+        msgAllResDeleted: 'All resources deleted',
+        deleteAll: 'Delete All',
         searching: 'Searching...',
         stopBtn: 'Stop',
         restartBtn: 'Regenerate',
@@ -277,6 +303,13 @@ const I18N = {
         uploadFile: 'ファイル',
         addText: 'テキスト',
         webSearch: '検索',
+        addUrl: 'URL',
+        urlModalTitle: 'URL追加',
+        urlLabel: 'URLリスト',
+        urlPlaceholder: '1行に1つのURLを入力してください',
+        urlHint: 'YouTube URLは自動的に字幕を抽出します',
+        msgUrlAdded: 'URLリソースが追加されました',
+        msgUrlCollecting: 'URLコンテンツ収集中...',
         noResources: 'リソースなし',
         selectTemplate: 'テンプレート選択',
         selectTemplatePlaceholder: 'テンプレートを選択',
@@ -295,7 +328,10 @@ const I18N = {
         editReplaceImage: '画像変更',
         editUnsavedChanges: '保存されていない変更があります。保存しますか？',
         editSaved: '変更が保存されました',
-        noSlides: '指示を入力し生成ボタンを押してください',
+        noSlides: '指示を入力してプレゼンテーションを生成',
+        emptyStep1: 'リソースを追加',
+        emptyStep2: '指示を入力',
+        emptyStep3: '生成ボタンを押す',
         prev: '前',
         next: '次',
         textResourceTitle: 'テキスト追加',
@@ -346,6 +382,9 @@ const I18N = {
         msgSearchAdded: '検索結果を追加しました',
         msgConfirmDelete: 'このプロジェクトを削除しますか？',
         msgConfirmDeleteRes: 'このリソースを削除しますか？',
+        msgConfirmDeleteAllRes: '全リソースを削除しますか？',
+        msgAllResDeleted: '全リソースを削除しました',
+        deleteAll: '全削除',
         searching: '検索中...',
         stopBtn: '中断',
         restartBtn: '再生成',
@@ -381,6 +420,13 @@ const I18N = {
         uploadFile: '文件',
         addText: '文本',
         webSearch: '搜索',
+        addUrl: 'URL',
+        urlModalTitle: '添加URL',
+        urlLabel: 'URL列表',
+        urlPlaceholder: '每行输入一个URL',
+        urlHint: 'YouTube URL会自动提取字幕',
+        msgUrlAdded: 'URL资源已添加',
+        msgUrlCollecting: '正在收集URL内容...',
         noResources: '无资源',
         selectTemplate: '选择模板',
         selectTemplatePlaceholder: '选择模板',
@@ -399,7 +445,10 @@ const I18N = {
         editReplaceImage: '替换图片',
         editUnsavedChanges: '有未保存的更改。是否保存？',
         editSaved: '更改已保存',
-        noSlides: '请在下方输入指令并点击生成',
+        noSlides: '输入指令并生成演示文稿',
+        emptyStep1: '添加资源',
+        emptyStep2: '输入指令',
+        emptyStep3: '点击生成',
         prev: '上一页',
         next: '下一页',
         textResourceTitle: '添加文本',
@@ -450,6 +499,9 @@ const I18N = {
         msgSearchAdded: '搜索结果已添加',
         msgConfirmDelete: '确定删除此项目？',
         msgConfirmDeleteRes: '确定删除此资源？',
+        msgConfirmDeleteAllRes: '确定删除所有资源？',
+        msgAllResDeleted: '所有资源已删除',
+        deleteAll: '全部删除',
         searching: '搜索中...',
         stopBtn: '停止',
         restartBtn: '重新生成',
@@ -1130,8 +1182,8 @@ function renderResourceChips() {
 
     // 드롭다운 리스트 렌더링
     list.empty();
-    const icons = { file: '📎', text: '📝', web: '🔍' };
-    const typeLabels = { file: 'File', text: 'Text', web: 'Web' };
+    const icons = { file: '📎', text: '📝', web: '🔍', url: '🔗', youtube: '▶️' };
+    const typeLabels = { file: 'File', text: 'Text', web: 'Web', url: 'URL', youtube: 'YouTube' };
 
     state.resources.forEach(r => {
         const icon = icons[r.resource_type] || '📄';
@@ -1148,6 +1200,15 @@ function renderResourceChips() {
             </div>
         `);
     });
+
+    // 전체 삭제 버튼 표시
+    const footer = $('#resourceDdFooter');
+    if (count > 0) {
+        $('#deleteAllLabel').text(t('deleteAll'));
+        footer.show();
+    } else {
+        footer.hide();
+    }
 }
 
 function toggleResourceDropdown() {
@@ -1271,12 +1332,51 @@ async function doWebSearch() {
     }
 }
 
+function showURLModal() {
+    $('#urlInput').val('');
+    $('#urlResourceModal').show();
+}
+
+async function addURLResources() {
+    const text = $('#urlInput').val().trim();
+    if (!text) { showToast(t('msgEnterContent'), 'error'); return; }
+
+    const urls = text.split('\n').map(u => u.trim()).filter(u => u);
+    if (urls.length === 0) { showToast(t('msgEnterContent'), 'error'); return; }
+
+    try {
+        $('#btnAddUrls').prop('disabled', true);
+        showLoading(t('msgUrlCollecting'));
+        const res = await apiPost('/api/resources/urls', {
+            project_id: state.currentProject._id,
+            urls: urls,
+        });
+
+        const resources = res.resources || [];
+        resources.forEach(r => state.resources.push(r));
+        renderResourceChips();
+        closeModal('urlResourceModal');
+
+        const errCount = (res.errors || []).length;
+        if (resources.length > 0) {
+            showToast(resources.length + '개 ' + t('msgUrlAdded') + (errCount > 0 ? ` (${errCount}개 실패)` : ''), 'success');
+        } else if (errCount > 0) {
+            showToast('URL 수집 실패: ' + res.errors[0].error, 'error');
+        }
+    } catch (e) {
+        showToast(e.message, 'error');
+    } finally {
+        $('#btnAddUrls').prop('disabled', false);
+        hideLoading();
+    }
+}
+
 async function showResourceContent(resourceId) {
     const resource = state.resources.find(r => r._id === resourceId);
     if (!resource) return;
 
     const icons = { file: '📎', text: '📝', web: '🔍' };
-    const iconClasses = { file: 'file', text: 'text', web: 'web' };
+    const iconClasses = { file: 'file', text: 'text', web: 'web', url: 'url', youtube: 'youtube' };
     const icon = icons[resource.resource_type] || '📄';
     const iconClass = iconClasses[resource.resource_type] || 'file';
 
@@ -1392,6 +1492,19 @@ async function deleteResource(resourceId) {
         state.resources = state.resources.filter(r => r._id !== resourceId);
         renderResourceChips();
         showToast(t('msgDeleted'), 'success');
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+async function deleteAllResources() {
+    if (!state.currentProject) return;
+    if (!confirm(t('msgConfirmDeleteAllRes'))) return;
+    try {
+        await apiDelete('/api/resources/all/' + state.currentProject._id);
+        state.resources = [];
+        renderResourceChips();
+        showToast(t('msgAllResDeleted'), 'success');
     } catch (e) {
         showToast(e.message, 'error');
     }

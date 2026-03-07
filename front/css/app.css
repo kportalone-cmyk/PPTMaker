@@ -132,6 +132,12 @@ body {
 
 .form-field textarea { resize: vertical; }
 
+.url-hint {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    margin-top: 2px;
+}
+
 .selected-user-chip {
     display: flex;
     align-items: center;
@@ -839,6 +845,8 @@ body {
 .resource-dd-icon.file { background: #dbeafe; color: #2563eb; }
 .resource-dd-icon.text { background: #fef3c7; color: #d97706; }
 .resource-dd-icon.web  { background: #d1fae5; color: #059669; }
+.resource-dd-icon.url  { background: #e0e7ff; color: #4f46e5; }
+.resource-dd-icon.youtube { background: #fee2e2; color: #dc2626; }
 
 .resource-dd-info {
     flex: 1;
@@ -875,6 +883,28 @@ body {
 .resource-dd-remove:hover {
     background: rgba(239,68,68,0.1);
     color: var(--danger);
+}
+
+.resource-dd-footer {
+    border-top: 1px solid var(--border);
+    padding: 6px 8px;
+}
+.resource-dd-delete-all {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--danger, #ef4444);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.resource-dd-delete-all:hover {
+    background: rgba(239,68,68,0.1);
 }
 
 .resource-add-btns {
@@ -919,11 +949,81 @@ body {
 .slide-empty {
     text-align: center;
     color: var(--text-tertiary);
-    padding: 20px 24px;
+    padding: 40px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
 }
 
-.slide-empty svg { margin-bottom: 12px; opacity: 0.6; }
-.slide-empty p { font-size: 14px; }
+.empty-icon-wrap {
+    width: 80px;
+    height: 80px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 20px;
+    background: var(--surface-2, #f9fafb);
+    border: 1px solid var(--border);
+}
+
+.empty-title {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    max-width: 300px;
+    line-height: 1.5;
+}
+
+.empty-steps {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.empty-step {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    transition: all var(--transition);
+}
+
+.empty-step:hover {
+    border-color: var(--accent);
+    background: var(--accent-light);
+}
+
+.empty-step-num {
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.empty-step-text {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.empty-step-arrow {
+    color: var(--border);
+    display: flex;
+    align-items: center;
+}
 
 /* 슬라이드 프리뷰 */
 .slide-preview-wrapper {
@@ -2281,6 +2381,8 @@ body {
     .recent-projects { grid-template-columns: 1fr; }
     .slide-text-panel { display: none; }
     .ws-slide-tools { display: none !important; }
+    .empty-steps { flex-direction: column; gap: 6px; }
+    .empty-step-arrow { transform: rotate(90deg); }
 }
 
 /* ============ 확인 다이얼로그 ============ */
