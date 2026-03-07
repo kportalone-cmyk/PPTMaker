@@ -65,7 +65,8 @@ async def create_project(jwt_token: str, data: ProjectCreate):
     doc = {
         "name": data.name,
         "description": data.description,
-        "template_id": data.template_id,
+        "template_id": data.template_id if data.project_type in ("slide", "onlyoffice_pptx") else None,
+        "project_type": data.project_type,
         "instructions": "",
         "user_key": user_key,
         "status": "draft",
@@ -102,10 +103,35 @@ async def get_project(jwt_token: str, project_id: str):
         s["_id"] = str(s["_id"])
         generated_slides.append(s)
 
+    # 엑셀 데이터 조회 (엑셀 프로젝트인 경우)
+    generated_excel = None
+    if project.get("project_type") in ("excel", "onlyoffice_xlsx"):
+        generated_excel = await db.generated_excel.find_one({"project_id": project_id})
+        if generated_excel:
+            generated_excel["_id"] = str(generated_excel["_id"])
+
+    # OnlyOffice 문서 정보 조회
+    onlyoffice_doc = None
+    project_type = project.get("project_type", "")
+    if project_type.startswith("onlyoffice_"):
+        onlyoffice_doc = await db.onlyoffice_documents.find_one({"project_id": project_id})
+        if onlyoffice_doc:
+            onlyoffice_doc["_id"] = str(onlyoffice_doc["_id"])
+
+    # Word 문서 데이터 조회
+    generated_docx = None
+    if project_type == "onlyoffice_docx":
+        generated_docx = await db.generated_docx.find_one({"project_id": project_id})
+        if generated_docx:
+            generated_docx["_id"] = str(generated_docx["_id"])
+
     return {
         "project": project,
         "resources": resources,
-        "generated_slides": generated_slides
+        "generated_slides": generated_slides,
+        "generated_excel": generated_excel,
+        "onlyoffice_doc": onlyoffice_doc,
+        "generated_docx": generated_docx,
     }
 
 
@@ -138,8 +164,13 @@ async def reset_project(jwt_token: str, project_id: str):
     if not project:
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
 
-    # 생성된 슬라이드만 삭제 (리소스는 유지)
+    # 생성된 슬라이드/엑셀/문서 삭제 (리소스는 유지)
     await db.generated_slides.delete_many({"project_id": project_id})
+    await db.generated_excel.delete_many({"project_id": project_id})
+    await db.generated_docx.delete_many({"project_id": project_id})
+    # OnlyOffice 문서 정리 (파일 포함)
+    from services.onlyoffice_service import delete_onlyoffice_document
+    await delete_onlyoffice_document(project_id)
     # 협업 데이터 정리 (Lock/히스토리 리셋)
     await db.slide_locks.delete_many({"project_id": project_id})
     await db.slide_history.delete_many({"project_id": project_id})
@@ -174,6 +205,11 @@ async def delete_project(jwt_token: str, project_id: str):
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
     await db.resources.delete_many({"project_id": project_id})
     await db.generated_slides.delete_many({"project_id": project_id})
+    await db.generated_excel.delete_many({"project_id": project_id})
+    await db.generated_docx.delete_many({"project_id": project_id})
+    # OnlyOffice 문서 정리 (파일 포함)
+    from services.onlyoffice_service import delete_onlyoffice_document
+    await delete_onlyoffice_document(project_id)
     # 협업 데이터 정리
     await db.collaborators.delete_many({"project_id": project_id})
     await db.slide_locks.delete_many({"project_id": project_id})

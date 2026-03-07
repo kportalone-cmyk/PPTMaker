@@ -353,11 +353,21 @@ async function deleteFontItem(fontId, fontName, fontFamily) {
 // ============ 프롬프트 관리 모달 ============
 let _promptList = [];
 let _editingPromptId = null;
+let _availableModels = [];
 
 async function showPromptManageModal() {
-    await loadPromptList();
+    await Promise.all([loadPromptList(), loadAvailableModels()]);
     showPromptList();
     $('#promptManageModal').show();
+}
+
+async function loadAvailableModels() {
+    try {
+        const res = await apiGet('/api/admin/prompts/models');
+        _availableModels = res.models || [];
+    } catch (e) {
+        _availableModels = [];
+    }
 }
 
 async function loadPromptList() {
@@ -368,6 +378,12 @@ async function loadPromptList() {
     } catch (e) {
         showToast('프롬프트 로드 실패: ' + e.message, 'error');
     }
+}
+
+function _getModelDisplayName(modelId) {
+    if (!modelId) return '-';
+    const found = _availableModels.find(function(m) { return m.id === modelId; });
+    return found ? found.name : modelId;
 }
 
 function renderPromptList() {
@@ -381,14 +397,18 @@ function renderPromptList() {
 
     _promptList.forEach(function(p) {
         const updatedAt = p.updated_at ? new Date(p.updated_at).toLocaleString('ko-KR') : '';
+        const modelName = _getModelDisplayName(p.model);
         container.append(`
             <div class="prompt-list-item" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #f0f0f0;cursor:pointer;" onclick="editPrompt('${p._id}')">
-                <div>
+                <div style="flex:1;min-width:0;">
                     <div style="font-size:14px;font-weight:500;color:#333;">${escapeHtml(p.name)}</div>
                     <div style="font-size:11px;color:#999;margin-top:2px;">${escapeHtml(p.description || '')}</div>
                     <div style="font-size:11px;color:#bbb;margin-top:2px;">Key: ${escapeHtml(p.key)} | 수정: ${updatedAt}</div>
                 </div>
-                <div style="color:#2d5a8e;font-size:12px;white-space:nowrap;margin-left:12px;">편집 →</div>
+                <div style="display:flex;align-items:center;gap:8px;margin-left:12px;flex-shrink:0;">
+                    <span style="font-size:11px;padding:3px 8px;border-radius:10px;background:#eef2ff;color:#4338ca;font-weight:500;white-space:nowrap;">${escapeHtml(modelName)}</span>
+                    <span style="color:#2d5a8e;font-size:12px;white-space:nowrap;">편집 →</span>
+                </div>
             </div>
         `);
     });
@@ -409,6 +429,14 @@ function editPrompt(promptId) {
     $('#promptEditDesc').text(p.description || '');
     $('#promptEditContent').val(p.content);
 
+    // 모델 셀렉트 박스 구성
+    const select = $('#promptEditModel');
+    select.empty();
+    _availableModels.forEach(function(m) {
+        const selected = m.id === (p.model || '') ? ' selected' : '';
+        select.append(`<option value="${escapeHtml(m.id)}"${selected}>${escapeHtml(m.name)} - ${escapeHtml(m.description)}</option>`);
+    });
+
     $('#promptListView').hide();
     $('#promptEditView').css('display', 'flex').show();
 }
@@ -416,9 +444,10 @@ function editPrompt(promptId) {
 async function savePrompt() {
     if (!_editingPromptId) return;
     const content = $('#promptEditContent').val();
+    const model = $('#promptEditModel').val();
 
     try {
-        await apiPut('/api/admin/prompts/' + _editingPromptId, { content });
+        await apiPut('/api/admin/prompts/' + _editingPromptId, { content, model });
         showToast('프롬프트가 저장되었습니다', 'success');
         await loadPromptList();
         showPromptList();
@@ -434,6 +463,9 @@ async function resetPrompt() {
     try {
         const res = await apiPost('/api/admin/prompts/' + _editingPromptId + '/reset', {});
         $('#promptEditContent').val(res.content);
+        if (res.model) {
+            $('#promptEditModel').val(res.model);
+        }
         showToast('기본값으로 복원되었습니다', 'success');
         await loadPromptList();
     } catch (e) {

@@ -6,6 +6,7 @@ class ProjectCreate(BaseModel):
     name: str
     description: str = ""
     template_id: Optional[str] = None
+    project_type: str = "slide"  # "slide", "excel", "onlyoffice_pptx", "onlyoffice_xlsx", "onlyoffice_docx"
 
 
 class ProjectUpdate(BaseModel):
@@ -44,3 +45,17 @@ class SlideTextRequest(BaseModel):
     instruction: str
     template_slide_id: str = ""
     current_content: Optional[dict] = None
+
+
+class ExcelGenerateRequest(BaseModel):
+    project_id: str
+    instructions: str = ""
+    lang: str = ""
+    sheet_count: str = "auto"
+
+
+class DocxGenerateRequest(BaseModel):
+    project_id: str
+    instructions: str = ""
+    lang: str = ""
+    section_count: str = "auto"

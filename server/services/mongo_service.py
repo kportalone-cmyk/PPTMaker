@@ -44,6 +44,16 @@ async def init_indexes():
     await db.generated_slides.create_index("project_id")
     await db.generated_slides.create_index([("project_id", 1), ("order", 1)])
 
+    # generated_excel 컬렉션
+    await db.generated_excel.create_index("project_id", unique=True)
+
+    # onlyoffice_documents 컬렉션
+    await db.onlyoffice_documents.create_index("project_id", unique=True)
+    await db.onlyoffice_documents.create_index("document_key")
+
+    # generated_docx 컬렉션
+    await db.generated_docx.create_index("project_id", unique=True)
+
     # fonts 컬렉션
     await db.fonts.create_index("name", unique=True)
 

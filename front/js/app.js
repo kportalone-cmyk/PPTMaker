@@ -43,6 +43,14 @@ const state = {
     editAutoSaveInterval: null,
     projectPage: 0,         // 프로젝트 목록 현재 페이지 (0-based)
     projectPageSize: 10,    // 페이지당 프로젝트 수
+    // 엑셀 상태
+    selectedProjectType: 'slide',
+    generatedExcel: null,
+    univerAPI: null,
+    // OnlyOffice 상태
+    onlyofficeDoc: null,
+    onlyofficeEditor: null,
+    generatedDocx: null,
 };
 
 let _animationCancelled = false;
@@ -148,6 +156,23 @@ const I18N = {
         statusGenerated: '생성 완료',
         statusStopped: '중단됨',
         noDesc: '설명 없음',
+        projectType: '프로젝트 유형',
+        typeSlide: '슬라이드',
+        typeExcel: '엑셀',
+        generateExcel: '엑셀 생성',
+        downloadXlsx: 'XLSX 다운로드',
+        excelGenerating: 'AI가 데이터를 구조화하고 있습니다...',
+        excelSearching: '인터넷에서 자료를 검색하고 있습니다...',
+        excelSearchDone: '검색 완료! 데이터를 생성합니다...',
+        excelPreparing: '리소스를 분석하고 있습니다...',
+        excelStreaming: '데이터를 생성하고 있습니다...',
+        excelStreamingDetail: '{sheets}개 시트 · {rows}개 행 수집',
+        excelFinalizing: '데이터를 정리하고 있습니다...',
+        msgExcelGenerated: '엑셀 데이터가 생성되었습니다',
+        msgNoExcelData: '생성된 엑셀 데이터가 없습니다',
+        excelCharts: '차트',
+        resourceHint: '리소스를 추가하면 참고하여 생성하고, 없으면 웹 검색으로 자료를 수집합니다.',
+        msgEnterInstructions: '지침을 입력하세요 (리소스가 없으면 인터넷 검색으로 자료를 수집합니다)',
         typeFile: '파일',
         typeText: '텍스트',
         typeWeb: '웹 검색',
@@ -277,6 +302,23 @@ const I18N = {
         statusGenerated: 'Generated',
         statusStopped: 'Stopped',
         noDesc: 'No description',
+        projectType: 'Project Type',
+        typeSlide: 'Slides',
+        typeExcel: 'Excel',
+        generateExcel: 'Generate Excel',
+        downloadXlsx: 'Download XLSX',
+        excelGenerating: 'AI is structuring data...',
+        excelSearching: 'Searching the internet for data...',
+        excelSearchDone: 'Search complete! Generating data...',
+        excelPreparing: 'Analyzing resources...',
+        excelStreaming: 'Generating data...',
+        excelStreamingDetail: '{sheets} sheets · {rows} rows collected',
+        excelFinalizing: 'Finalizing data...',
+        msgExcelGenerated: 'Excel data has been generated',
+        msgNoExcelData: 'No generated Excel data',
+        excelCharts: 'Charts',
+        resourceHint: 'Add resources to use as reference, or leave empty to generate from web search.',
+        msgEnterInstructions: 'Enter instructions (internet search will be used if no resources)',
         typeFile: 'File',
         typeText: 'Text',
         typeWeb: 'Web',
@@ -406,6 +448,23 @@ const I18N = {
         statusGenerated: '完了',
         statusStopped: '中断',
         noDesc: '説明なし',
+        projectType: 'プロジェクトタイプ',
+        typeSlide: 'スライド',
+        typeExcel: 'エクセル',
+        generateExcel: 'エクセル生成',
+        downloadXlsx: 'XLSXダウンロード',
+        excelGenerating: 'AIがデータを構造化しています...',
+        excelSearching: 'インターネットで資料を検索中...',
+        excelSearchDone: '検索完了！データを生成中...',
+        excelPreparing: 'リソースを分析中...',
+        excelStreaming: 'データを生成中...',
+        excelStreamingDetail: '{sheets}シート · {rows}行取得',
+        excelFinalizing: 'データを整理中...',
+        msgExcelGenerated: 'エクセルデータが生成されました',
+        msgNoExcelData: '生成されたデータがありません',
+        excelCharts: 'チャート',
+        resourceHint: 'リソースを追加すると参考にして生成し、なければウェブ検索で資料を収集します。',
+        msgEnterInstructions: '指示を入力してください（リソースがない場合はインターネット検索を使用）',
         typeFile: 'ファイル',
         typeText: 'テキスト',
         typeWeb: 'ウェブ',
@@ -535,6 +594,23 @@ const I18N = {
         statusGenerated: '已完成',
         statusStopped: '已停止',
         noDesc: '无描述',
+        projectType: '项目类型',
+        typeSlide: '幻灯片',
+        typeExcel: '电子表格',
+        generateExcel: '生成表格',
+        downloadXlsx: '下载XLSX',
+        excelGenerating: 'AI正在整理数据...',
+        excelSearching: '正在从互联网搜索资料...',
+        excelSearchDone: '搜索完成！正在生成数据...',
+        excelPreparing: '正在分析资源...',
+        excelStreaming: '正在生成数据...',
+        excelStreamingDetail: '{sheets}个工作表 · {rows}行已收集',
+        excelFinalizing: '正在整理数据...',
+        msgExcelGenerated: '表格数据已生成',
+        msgNoExcelData: '没有生成的数据',
+        excelCharts: '图表',
+        resourceHint: '添加资源将作为参考生成，未添加则通过网络搜索收集资料。',
+        msgEnterInstructions: '请输入指令（如无资源将通过网络搜索收集资料）',
         typeFile: '文件',
         typeText: '文本',
         typeWeb: '网页',
@@ -660,6 +736,11 @@ function applyI18n() {
     $('.i18n-searchQuery').text(t('searchQuery'));
     $('.i18n-searchBtn').text(t('searchBtn'));
     $('.i18n-searchResult').text(t('searchResult'));
+
+    // 리소스/엑셀
+    $('.i18n-resourceHint').text(t('resourceHint'));
+    $('.i18n-excelCharts').text(t('excelCharts'));
+    $('.i18n-addUrl').text(t('addUrl'));
 
     // placeholder
     $('#newProjectName').attr('placeholder', t('projectNamePlaceholder'));
@@ -1047,9 +1128,12 @@ function renderRecentProjects() {
         const sharedBadge = p._isShared
             ? `<span class="rc-shared-role">${p._collab_role === 'editor' ? t('editor','편집자') : t('viewer','뷰어')}</span>`
             : '';
+        const typeBadge = _getProjectTypeBadge(p.project_type);
+        const deleteBtn = p._isShared ? '' : `<button class="rc-delete-btn" onclick="deleteProjectById('${p._id}', event)" title="${t('delete','삭제')}"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 4h8M5 4V3a1 1 0 011-1h2a1 1 0 011 1v1M10 4v7a1 1 0 01-1 1H5a1 1 0 01-1-1V4"/></svg></button>`;
         grid.append(`
             <div class="recent-card" onclick="openProject('${p._id}')">
-                <div class="rc-title">${escapeHtml(p.name)}${collabIndicator}</div>
+                ${deleteBtn}
+                <div class="rc-title">${escapeHtml(p.name)}${collabIndicator}${typeBadge}</div>
                 <div class="rc-desc">${escapeHtml(p.description || t('noDesc'))}</div>
                 <div class="rc-meta">
                     <span class="rc-date">${date}${sharedBadge}</span>
@@ -1141,15 +1225,21 @@ function renderProjectList() {
             const collabBadge = collabCount > 0
                 ? `<span class="proj-collab-badge" onclick="event.stopPropagation();openProject('${p._id}');setTimeout(showCollabModal,300)" title="${t('collaboration','협업')} (${collabCount})"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="4.5" cy="4.5" r="2.2"/><circle cx="9" cy="5.5" r="1.8"/><path d="M.5 10.5c0-2 1.5-3.5 4-3.5s2.5.8 3 1.5"/></svg><span>${collabCount}</span></span>`
                 : '';
+            const projTypeIcon = p.project_type === 'excel'
+                ? '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="2"/><line x1="2" y1="6" x2="14" y2="6"/><line x1="2" y1="10" x2="14" y2="10"/><line x1="6" y1="2" x2="6" y2="14"/><line x1="10" y1="2" x2="10" y2="14"/></svg>'
+                : '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 6h6M5 9h4"/></svg>';
             list.append(`
                 <div class="project-item ${isActive ? 'active' : ''}" onclick="openProject('${p._id}')">
                     <div class="proj-icon">
-                        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 6h6M5 9h4"/></svg>
+                        ${projTypeIcon}
                     </div>
                     <div class="proj-info">
                         <div class="proj-name">${escapeHtml(p.name)}${collabBadge}</div>
                         <div class="proj-date">${date}</div>
                     </div>
+                    <button class="proj-delete-btn" onclick="deleteProjectById('${p._id}', event)" title="${t('delete','삭제')}">
+                        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 4h8M5 4V3a1 1 0 011-1h2a1 1 0 011 1v1M10 4v7a1 1 0 01-1 1H5a1 1 0 01-1-1V4"/></svg>
+                    </button>
                     <div class="proj-status-dot ${p.status || 'draft'}"></div>
                 </div>
             `);
@@ -1184,7 +1274,16 @@ function goProjectPage(page) {
 function showNewProjectModal() {
     $('#newProjectName').val('');
     $('#newProjectDesc').val('');
+    state.selectedProjectType = 'slide';
+    $('.type-option').removeClass('active');
+    $('[data-type="slide"]').addClass('active');
     $('#newProjectModal').show();
+}
+
+function selectProjectType(type) {
+    state.selectedProjectType = type;
+    $('.type-option').removeClass('active');
+    $(`[data-type="${type}"]`).addClass('active');
 }
 
 async function createProject() {
@@ -1195,6 +1294,7 @@ async function createProject() {
         const res = await apiPost('/api/projects', {
             name: name,
             description: $('#newProjectDesc').val().trim(),
+            project_type: state.selectedProjectType,
         });
         closeModal('newProjectModal');
         showToast(t('msgProjectCreated'), 'success');
@@ -1214,13 +1314,17 @@ async function openProject(projectId) {
     try {
         showLoading(t('msgLoadingProject'));
 
-        // 이전 프로젝트의 폴링 중지
+        // 이전 프로젝트의 폴링 중지 및 OnlyOffice 에디터 정리
         stopCollabPolling();
+        destroyOnlyOfficeEditor();
 
         const res = await apiGet('/api/projects/' + projectId);
         state.currentProject = res.project;
         state.resources = res.resources || [];
         state.generatedSlides = res.generated_slides || [];
+        state.generatedExcel = res.generated_excel || null;
+        state.onlyofficeDoc = res.onlyoffice_doc || null;
+        state.generatedDocx = res.generated_docx || null;
         state.currentSlideIndex = 0;
         state.collabRole = res.project._collab_role || 'owner';
 
@@ -1252,8 +1356,71 @@ function renderProjectWorkspace() {
     // 리소스 칩
     renderResourceChips();
 
-    // 슬라이드 영역
-    renderSlideArea();
+    const projectType = state.currentProject.project_type || 'slide';
+    const isExcel = (projectType === 'excel');
+    const isOnlyOffice = projectType.startsWith('onlyoffice_');
+
+    // 모든 워크스페이스 숨기기
+    $('#excelWorkspace').hide();
+    $('#onlyofficeWorkspace').hide();
+
+    if (isOnlyOffice) {
+        // OnlyOffice 모드
+        destroyOnlyOfficeEditor();
+        $('#slideEmpty').hide();
+        $('#slidePreview').hide();
+        $('#onlyofficeWorkspace').show();
+        $('#templateSelectBtn').hide();
+        $('#slideCountSelect').hide();
+        $('#btnAddSlide').hide();
+
+        const ooLabels = {
+            'onlyoffice_pptx': 'PPT 생성',
+            'onlyoffice_xlsx': 'Excel 생성',
+            'onlyoffice_docx': 'Word 생성',
+        };
+        const ooTitles = {
+            'onlyoffice_pptx': '프레젠테이션',
+            'onlyoffice_xlsx': '스프레드시트',
+            'onlyoffice_docx': '문서',
+        };
+        const ooPlaceholders = {
+            'onlyoffice_pptx': '프레젠테이션 내용에 대한 지침을 입력하세요...',
+            'onlyoffice_xlsx': '스프레드시트에 정리할 내용에 대한 지침을 입력하세요...',
+            'onlyoffice_docx': '문서에 작성할 내용에 대한 지침을 입력하세요...',
+        };
+        $('#btnGenerate span').text(ooLabels[projectType] || '생성');
+        $('#onlyofficeTitle').text(ooTitles[projectType] || '문서');
+        $('#instructionsInput').attr('placeholder', ooPlaceholders[projectType] || '지침을 입력하세요...');
+
+        // onlyoffice_pptx는 템플릿 선택 필요
+        if (projectType === 'onlyoffice_pptx') {
+            $('#templateSelectBtn').show();
+            $('#slideCountSelect').show();
+        }
+
+        // OnlyOffice 워크스페이스 초기화
+        initOnlyOfficeWorkspace();
+    } else if (isExcel) {
+        // 엑셀 모드
+        $('#slideEmpty').hide();
+        $('#slidePreview').hide();
+        $('#excelWorkspace').show();
+        $('#templateSelectBtn').hide();
+        $('#slideCountSelect').hide();
+        $('#btnAddSlide').hide();
+        $('#btnGenerate span').text(t('generateExcel'));
+        $('#instructionsInput').attr('placeholder', '엑셀에 정리할 내용에 대한 지침을 입력하세요...');
+        initExcelWorkspace();
+    } else {
+        // 슬라이드 모드
+        $('#templateSelectBtn').show();
+        $('#slideCountSelect').show();
+        $('#btnAddSlide').show();
+        $('#btnGenerate span').text(t('generateBtn'));
+        $('#instructionsInput').attr('placeholder', t('instructionsPlaceholder'));
+        renderSlideArea();
+    }
 
     // 지침 복원
     if (state.currentProject.instructions) {
@@ -1263,13 +1430,18 @@ function renderProjectWorkspace() {
         $('#instructionsInput').val('');
     }
 
-    // 템플릿 선택 복원
-    state.selectedTemplateId = state.currentProject.template_id || null;
-    updateTemplateButtonLabel();
+    if (!isExcel && !isOnlyOffice) {
+        // 템플릿 선택 복원
+        state.selectedTemplateId = state.currentProject.template_id || null;
+        updateTemplateButtonLabel();
 
-    // 수동 모드 상태 복원
-    state.manualMode = !!state.currentProject.manual_mode;
-    updateManualModeUI();
+        // 수동 모드 상태 복원
+        state.manualMode = !!state.currentProject.manual_mode;
+        updateManualModeUI();
+    } else if (projectType === 'onlyoffice_pptx') {
+        state.selectedTemplateId = state.currentProject.template_id || null;
+        updateTemplateButtonLabel();
+    }
 
     // 협업 UI 업데이트
     updateCollabUI();
@@ -1307,6 +1479,23 @@ async function deleteProject() {
         state.currentProject = null;
         await loadProjects();
         showEmptyState();
+    } catch (e) {
+        showToast(e.message, 'error');
+    }
+}
+
+async function deleteProjectById(projectId, event) {
+    if (event) { event.stopPropagation(); event.preventDefault(); }
+    if (!confirm(t('msgConfirmDelete'))) return;
+    try {
+        await apiDelete('/api/projects/' + projectId);
+        showToast(t('msgProjectDeleted'), 'success');
+        if (state.currentProject && state.currentProject._id === projectId) {
+            state.currentProject = null;
+            showEmptyState();
+        }
+        await loadProjects();
+        renderRecentProjects();
     } catch (e) {
         showToast(e.message, 'error');
     }
@@ -2530,20 +2719,38 @@ function _showStopButton() {
 
 function _showGenerateOrRestartButton() {
     const $btn = $('#btnStop').length ? $('#btnStop') : $('#btnGenerate');
-    const hasSlides = state.generatedSlides.length > 0;
+    const projectType = state.currentProject ? state.currentProject.project_type : 'slide';
+    const isExcel = projectType === 'excel';
+    const isOnlyOffice = projectType && projectType.startsWith('onlyoffice_');
+
+    let hasContent, genLabel, restartLabel;
+    if (isOnlyOffice) {
+        hasContent = !!state.onlyofficeDoc;
+        const ooLabels = { 'onlyoffice_pptx': 'PPT 생성', 'onlyoffice_xlsx': 'Excel 생성', 'onlyoffice_docx': 'Word 생성' };
+        genLabel = ooLabels[projectType] || '생성';
+        restartLabel = genLabel;
+    } else if (isExcel) {
+        hasContent = !!state.generatedExcel;
+        genLabel = t('generateExcel');
+        restartLabel = t('generateExcel');
+    } else {
+        hasContent = state.generatedSlides.length > 0;
+        genLabel = t('generateBtn');
+        restartLabel = t('restartBtn');
+    }
 
     $btn.attr('id', 'btnGenerate')
-        .attr('onclick', 'generatePPT()')
+        .attr('onclick', 'handleGenerate()')
         .removeClass('btn-stop')
         .addClass('btn-generate')
         .prop('disabled', false)
-        .html(hasSlides
+        .html(hasContent
             ? `<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
                </svg>
-               <span class="i18n-generateBtn">${t('restartBtn')}</span>`
+               <span class="i18n-generateBtn">${restartLabel}</span>`
             : `<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 3L5 8.5l8 5.5V3z"/></svg>
-               <span class="i18n-generateBtn">${t('generateBtn')}</span>`
+               <span class="i18n-generateBtn">${genLabel}</span>`
         );
 }
 
@@ -5160,6 +5367,7 @@ async function revertHistory(historyId) {
 
 window.addEventListener('beforeunload', function() {
     stopCollabPolling();
+    destroyOnlyOfficeEditor();
 });
 
 // 협업 검색 초기화 (DOM ready 시)
@@ -5184,4 +5392,1112 @@ function showLoading(text) {
 
 function hideLoading() {
     $('#loadingOverlay').hide();
+}
+
+
+// ============ 엑셀 워크스페이스 ============
+
+let _univerScriptsLoaded = false;
+let _univerScriptsLoading = false;
+
+// Progressive Excel streaming state
+let _excelStreamBuffer = '';
+let _excelSheetStates = []; // [{name, columnsSet, parsedRowCount}] per sheet
+
+async function loadUniverScripts() {
+    if (_univerScriptsLoaded) return;
+    if (_univerScriptsLoading) {
+        // 이미 로딩 중이면 완료될 때까지 대기
+        while (_univerScriptsLoading) {
+            await new Promise(r => setTimeout(r, 100));
+        }
+        return;
+    }
+    _univerScriptsLoading = true;
+
+    const scripts = [
+        'https://unpkg.com/react@18.3.1/umd/react.production.min.js',
+        'https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js',
+        'https://unpkg.com/rxjs/dist/bundles/rxjs.umd.min.js',
+        'https://unpkg.com/@univerjs/presets/lib/umd/index.js',
+        'https://unpkg.com/@univerjs/preset-sheets-core/lib/umd/index.js',
+        'https://unpkg.com/@univerjs/preset-sheets-core/lib/umd/locales/en-US.js',
+    ];
+
+    for (const src of scripts) {
+        // 이미 로드된 스크립트 건너뛰기
+        if (document.querySelector(`script[src="${src}"]`)) continue;
+        await new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = src;
+            s.onload = resolve;
+            s.onerror = reject;
+            document.head.appendChild(s);
+        });
+    }
+
+    // CSS 로드
+    if (!document.querySelector('link[href*="preset-sheets-core"]')) {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = 'https://unpkg.com/@univerjs/preset-sheets-core/lib/index.css';
+        document.head.appendChild(link);
+    }
+
+    _univerScriptsLoaded = true;
+    _univerScriptsLoading = false;
+}
+
+async function initExcelWorkspace() {
+    try {
+        await loadUniverScripts();
+
+        // 기존 생성 데이터가 있으면 스타일 포함하여 채우기
+        if (state.generatedExcel && state.generatedExcel.sheets) {
+            populateUniverFromData(state.generatedExcel);
+            renderExcelCharts(state.generatedExcel);
+            $('#btnDownloadXlsx').show();
+            if (state.generatedExcel.meta && state.generatedExcel.meta.title) {
+                $('#excelTitle').text(state.generatedExcel.meta.title);
+            }
+        } else {
+            initUniver();
+            $('#btnDownloadXlsx').hide();
+            $('#excelTitle').text(t('typeExcel'));
+        }
+    } catch (e) {
+        console.error('[Excel] Univer 로딩 실패:', e);
+        $('#univerContainer').html('<div style="padding:40px;text-align:center;color:#999;">스프레드시트 컴포넌트를 불러오지 못했습니다.</div>');
+    }
+}
+
+/**
+ * Univer 인스턴스 초기화
+ * @param {Object} [workbookData] - 스타일 포함 워크북 데이터. 없으면 빈 워크북 생성
+ */
+function initUniver(workbookData) {
+    let container = document.getElementById('univerContainer');
+    if (!container) return;
+
+    // 이전 인스턴스 안전 정리
+    if (state.univerAPI) {
+        const oldAPI = state.univerAPI;
+        state.univerAPI = null;
+
+        // 새 컨테이너 먼저 준비 (DOM 교체 전에 dispose하면 React contains 에러 발생)
+        const fresh = container.cloneNode(false);
+        container.parentNode.replaceChild(fresh, container);
+        container = fresh;
+
+        // DOM 분리 후 dispose (에러가 나도 old DOM에서만 발생, 새 DOM에 영향 없음)
+        try { oldAPI.dispose(); } catch(e) {}
+    } else {
+        container.innerHTML = '';
+    }
+
+    const { createUniver } = UniverPresets;
+    const { LocaleType, mergeLocales } = UniverCore;
+    const { UniverSheetsCorePreset } = UniverPresetSheetsCore;
+
+    const { univerAPI } = createUniver({
+        locale: LocaleType.EN_US,
+        locales: {
+            [LocaleType.EN_US]: mergeLocales(UniverPresetSheetsCoreEnUS),
+        },
+        presets: [
+            UniverSheetsCorePreset({ container }),
+        ],
+    });
+
+    state.univerAPI = univerAPI;
+    const defaultWb = workbookData || {
+        name: 'Workbook',
+        sheetOrder: ['sheet1'],
+        sheets: {
+            sheet1: {
+                id: 'sheet1',
+                name: 'Sheet1',
+                defaultColumnWidth: 100,
+                defaultRowHeight: 24,
+                rowCount: 200,
+                columnCount: 26,
+            },
+        },
+    };
+    univerAPI.createWorkbook(defaultWb);
+}
+
+/**
+ * 엑셀 데이터로 스타일 포함 워크북 생성
+ * (다운로드 XLSX와 동일한 스타일: 파란 헤더, 교차 행 색상, 테두리)
+ */
+function populateUniverFromData(excelData) {
+    if (!excelData) return;
+    const workbookData = _buildStyledWorkbookData(excelData);
+    if (!workbookData) return;
+    initUniver(workbookData);
+}
+
+// 공통 셀 스타일 정의 (다운로드 XLSX와 동일)
+const _EXCEL_STYLES = {
+    header: {
+        bg: { rgb: '#4472C4' },
+        cl: { rgb: '#FFFFFF' },
+        bl: 1,
+        fs: 11,
+        ff: 'Arial',
+        ht: 2,
+        vt: 2,
+        tb: 3,
+        bd: {
+            t: { s: 1, cl: { rgb: '#D9D9D9' } },
+            b: { s: 1, cl: { rgb: '#D9D9D9' } },
+            l: { s: 1, cl: { rgb: '#D9D9D9' } },
+            r: { s: 1, cl: { rgb: '#D9D9D9' } },
+        },
+    },
+    cell: {
+        vt: 2,
+        tb: 3,
+        bd: {
+            t: { s: 1, cl: { rgb: '#D9D9D9' } },
+            b: { s: 1, cl: { rgb: '#D9D9D9' } },
+            l: { s: 1, cl: { rgb: '#D9D9D9' } },
+            r: { s: 1, cl: { rgb: '#D9D9D9' } },
+        },
+    },
+    cellAlt: {
+        bg: { rgb: '#F2F7FB' },
+        vt: 2,
+        tb: 3,
+        bd: {
+            t: { s: 1, cl: { rgb: '#D9D9D9' } },
+            b: { s: 1, cl: { rgb: '#D9D9D9' } },
+            l: { s: 1, cl: { rgb: '#D9D9D9' } },
+            r: { s: 1, cl: { rgb: '#D9D9D9' } },
+        },
+    },
+};
+
+/**
+ * 엑셀 데이터 → Univer IWorkbookData 변환 (스타일, 열 너비, 시트 탭 포함)
+ */
+function _buildStyledWorkbookData(excelData) {
+    const sheets = excelData.sheets || [];
+    if (sheets.length === 0) return null;
+
+    const sheetConfigs = {};
+    const sheetOrder = [];
+
+    for (let si = 0; si < sheets.length; si++) {
+        const sheetData = sheets[si];
+        const columns = sheetData.columns || [];
+        const rows = sheetData.rows || [];
+        const cellData = {};
+
+        // 헤더 행 (row 0)
+        cellData[0] = {};
+        for (let c = 0; c < columns.length; c++) {
+            cellData[0][c] = { v: columns[c], s: _EXCEL_STYLES.header };
+        }
+
+        // 데이터 행
+        for (let r = 0; r < rows.length; r++) {
+            const rowIdx = r + 1;
+            cellData[rowIdx] = {};
+            const style = (rowIdx % 2 === 0) ? _EXCEL_STYLES.cellAlt : _EXCEL_STYLES.cell;
+            for (let c = 0; c < rows[r].length; c++) {
+                cellData[rowIdx][c] = { v: rows[r][c], s: style };
+            }
+        }
+
+        // 열 너비 자동 계산 (한글 2배 너비)
+        const columnData = {};
+        const allRows = [columns, ...rows];
+        for (let c = 0; c < columns.length; c++) {
+            let maxLen = 0;
+            for (let r = 0; r < Math.min(allRows.length, 50); r++) {
+                if (allRows[r] && allRows[r][c] != null) {
+                    const val = String(allRows[r][c]);
+                    const charLen = [...val].reduce((sum, ch) => sum + (ch.charCodeAt(0) > 127 ? 2 : 1), 0);
+                    maxLen = Math.max(maxLen, charLen);
+                }
+            }
+            columnData[c] = { w: Math.min(Math.max((maxLen + 4) * 8, 80), 480) };
+        }
+
+        const sheetId = `sheet_${si}`;
+        sheetOrder.push(sheetId);
+        sheetConfigs[sheetId] = {
+            id: sheetId,
+            name: (sheetData.name || `Sheet${si + 1}`).substring(0, 31),
+            cellData: cellData,
+            columnData: columnData,
+            defaultColumnWidth: 100,
+            defaultRowHeight: 24,
+            rowCount: Math.max(rows.length + 100, 200),
+            columnCount: Math.max(columns.length + 10, 26),
+        };
+    }
+
+    return {
+        name: excelData.meta?.title || 'Workbook',
+        sheetOrder: sheetOrder,
+        sheets: sheetConfigs,
+    };
+}
+
+/**
+ * 스트리밍 중 수신된 텍스트를 점진적으로 파싱하여 Univer 시트에 데이터 추가
+ * 다중 시트 지원: "sheets" 배열 내 각 시트 블록을 개별 파싱
+ */
+function _tryProgressiveExcelPopulate() {
+    if (!state.univerAPI) return;
+
+    const workbook = state.univerAPI.getActiveWorkbook();
+    if (!workbook) return;
+
+    const text = _excelStreamBuffer;
+
+    // "sheets": [ 위치 찾기
+    const sheetsArrayMatch = text.match(/"sheets"\s*:\s*\[/);
+    if (!sheetsArrayMatch) return;
+    const sheetsArrayStart = text.indexOf(sheetsArrayMatch[0]) + sheetsArrayMatch[0].length;
+    const sheetsText = text.substring(sheetsArrayStart);
+
+    // 각 시트 오브젝트의 시작 위치 찾기 ({ ... "name": ... })
+    const sheetStarts = [];
+    let searchFrom = 0;
+    while (true) {
+        const nameIdx = sheetsText.indexOf('"name"', searchFrom);
+        if (nameIdx < 0) break;
+        // "name" 앞의 { 찾기
+        let braceIdx = nameIdx;
+        while (braceIdx > searchFrom && sheetsText[braceIdx] !== '{') braceIdx--;
+        if (sheetsText[braceIdx] === '{') {
+            sheetStarts.push(braceIdx);
+        }
+        searchFrom = nameIdx + 6;
+    }
+
+    if (sheetStarts.length === 0) return;
+
+    // 각 시트 블록 처리
+    for (let si = 0; si < sheetStarts.length; si++) {
+        const blockStart = sheetStarts[si];
+        const blockEnd = si < sheetStarts.length - 1 ? sheetStarts[si + 1] : sheetsText.length;
+        const sheetBlock = sheetsText.substring(blockStart, blockEnd);
+
+        // 새 시트 감지 → 상태 초기화 + Univer 시트 탭 생성
+        if (si >= _excelSheetStates.length) {
+            _excelSheetStates.push({ name: '', columnsSet: false, parsedRowCount: 0 });
+
+            // 첫 번째 시트는 이미 존재, 두 번째부터 새 시트 생성
+            if (si > 0) {
+                try {
+                    const tempName = 'Sheet' + (si + 1);
+                    const newSheet = workbook.create(tempName);
+                    if (newSheet && newSheet.activate) {
+                        newSheet.activate();
+                    }
+                } catch (e) {
+                    console.log('[Excel] 시트 생성:', e.message);
+                }
+            }
+        }
+
+        const ss = _excelSheetStates[si];
+
+        // 현재 시트가 아닌 이전 시트는 스킵 (이미 처리 완료)
+        if (si < _excelSheetStates.length - 1) continue;
+
+        // 활성 시트 가져오기
+        const sheet = workbook.getActiveSheet();
+        if (!sheet) continue;
+
+        // 시트 이름 추출
+        if (!ss.name) {
+            const nameMatch = sheetBlock.match(/"name"\s*:\s*"([^"]+)"/);
+            if (nameMatch) {
+                ss.name = nameMatch[1];
+                try { sheet.setName(ss.name); } catch (e) {}
+            }
+        }
+
+        // 컬럼 헤더 추출 + 스타일 + 열 너비 적용
+        if (!ss.columnsSet) {
+            const colMatch = sheetBlock.match(/"columns"\s*:\s*\[([^\]]*)\]/);
+            if (colMatch) {
+                try {
+                    const columns = JSON.parse('[' + colMatch[1] + ']');
+                    if (columns.length > 0) {
+                        for (let c = 0; c < columns.length; c++) {
+                            try { sheet.getRange(0, c, 1, 1).setValue(columns[c]); } catch (e2) {}
+                            // 열 너비 설정 (헤더 텍스트 기반, 최소 100px)
+                            try {
+                                const hdrLen = [...String(columns[c])].reduce((s, ch) => s + (ch.charCodeAt(0) > 127 ? 2 : 1), 0);
+                                const w = Math.min(Math.max((hdrLen + 4) * 8, 100), 480);
+                                sheet.setColumnWidth(c, w);
+                            } catch (e2) {}
+                        }
+                        try {
+                            sheet.getRange(0, 0, 1, columns.length)
+                                .setFontWeight('bold').setFontColor('#FFFFFF').setFontSize(11);
+                        } catch (e2) {}
+                        try {
+                            sheet.setRowDefaultStyle(0, { bg: { rgb: '#4472C4' }, ht: 2, vt: 2 });
+                        } catch (e2) {}
+                        ss.columnsSet = true;
+                    }
+                } catch (e) {}
+            }
+        }
+
+        // rows 데이터를 점진적으로 추출
+        if (ss.columnsSet) {
+            const rowsMatch = sheetBlock.match(/"rows"\s*:\s*\[/);
+            if (rowsMatch) {
+                const rowsStartIdx = sheetBlock.indexOf(rowsMatch[0]) + rowsMatch[0].length;
+                const rowsText = sheetBlock.substring(rowsStartIdx);
+                const rows = _extractCompleteRows(rowsText);
+
+                if (rows.length > ss.parsedRowCount) {
+                    for (let i = ss.parsedRowCount; i < rows.length; i++) {
+                        const rowIdx = i + 1;
+                        for (let c = 0; c < rows[i].length; c++) {
+                            try { sheet.getRange(rowIdx, c, 1, 1).setValue(rows[i][c]); } catch (e) {}
+                        }
+                        if (rowIdx % 2 === 0) {
+                            try { sheet.setRowDefaultStyle(rowIdx, { bg: { rgb: '#F2F7FB' } }); } catch (e) {}
+                        }
+                    }
+                    ss.parsedRowCount = rows.length;
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 부분 텍스트에서 완성된 JSON 배열([...])을 추출
+ * "rows": [ 뒤의 텍스트를 받아 각 [...] 행을 파싱
+ */
+function _extractCompleteRows(text) {
+    const rows = [];
+    let depth = 0;
+    let startIdx = -1;
+    let inString = false;
+    let escapeNext = false;
+
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+
+        if (escapeNext) {
+            escapeNext = false;
+            continue;
+        }
+
+        if (ch === '\\' && inString) {
+            escapeNext = true;
+            continue;
+        }
+
+        if (ch === '"') {
+            inString = !inString;
+            continue;
+        }
+
+        if (inString) continue;
+
+        if (ch === '[') {
+            if (depth === 0) startIdx = i;
+            depth++;
+        } else if (ch === ']') {
+            depth--;
+            if (depth === 0 && startIdx >= 0) {
+                // 완성된 행 배열 발견
+                const rowStr = text.substring(startIdx, i + 1);
+                try {
+                    const row = JSON.parse(rowStr);
+                    if (Array.isArray(row)) {
+                        // 문자열 숫자를 실제 숫자로 변환
+                        for (let c = 0; c < row.length; c++) {
+                            if (typeof row[c] === 'string') {
+                                const num = Number(row[c]);
+                                if (!isNaN(num) && row[c].trim() !== '') {
+                                    row[c] = num;
+                                }
+                            }
+                        }
+                        rows.push(row);
+                    }
+                } catch (e) {}
+                startIdx = -1;
+            }
+            if (depth < 0) break; // rows 배열 종료
+        }
+    }
+
+    return rows;
+}
+
+function handleGenerate() {
+    const type = state.currentProject ? state.currentProject.project_type : 'slide';
+    if (type === 'excel') {
+        generateExcel();
+    } else if (type === 'onlyoffice_pptx') {
+        generateOnlyOfficePptx();
+    } else if (type === 'onlyoffice_xlsx') {
+        generateOnlyOfficeXlsx();
+    } else if (type === 'onlyoffice_docx') {
+        generateOnlyOfficeDocx();
+    } else {
+        generatePPT();
+    }
+}
+
+async function generateExcel() {
+    const instructions = $('#instructionsInput').val().trim();
+    const lang = $('#langSelect').val();
+
+    // 리소스가 없으면 지침(instructions)이 필수 (인터넷 검색에 사용)
+    if (state.resources.length === 0 && !instructions) {
+        showToast(t('msgEnterInstructions'), 'error');
+        return;
+    }
+
+    _isGenerating = true;
+    state.generatedExcel = null;
+    $('#btnDownloadXlsx').hide();
+
+    // 기존 차트 정리
+    _destroyExcelCharts();
+
+    // 생성 중 상태 표시
+    _showStopButton();
+    _showExcelProgress(t('excelPreparing'), '');
+
+    // Progressive parsing 상태 초기화
+    _excelStreamBuffer = '';
+    _excelSheetStates = [];
+
+    // Univer를 빈 시트로 즉시 초기화 (실시간 데이터 표시용)
+    initUniver();
+
+    _abortController = new AbortController();
+
+    try {
+        const response = await fetch(`/${state.jwtToken}/api/generate/excel/stream`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                project_id: state.currentProject._id,
+                instructions: instructions,
+                lang: lang,
+            }),
+            signal: _abortController.signal,
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Generation failed');
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                try {
+                    const evt = JSON.parse(line.slice(6));
+                    _handleExcelSSEEvent(evt);
+                } catch (e) { /* ignore parse errors */ }
+            }
+        }
+
+        // 남은 버퍼 처리
+        if (buffer.startsWith('data: ')) {
+            try {
+                const evt = JSON.parse(buffer.slice(6));
+                _handleExcelSSEEvent(evt);
+            } catch (e) {}
+        }
+
+    } catch (e) {
+        if (e.name !== 'AbortError') {
+            console.error('[Excel] 생성 실패:', e);
+            showToast(e.message || '엑셀 생성 실패', 'error');
+        }
+    } finally {
+        _isGenerating = false;
+        _abortController = null;
+        _hideExcelProgress();
+        _showGenerateOrRestartButton();
+    }
+}
+
+function _handleExcelSSEEvent(evt) {
+    const eventType = evt.event;
+
+    switch (eventType) {
+        case 'start':
+            _showExcelProgress(t('excelPreparing'), '');
+            break;
+
+        case 'searching':
+            // 인터넷 검색 중 상태 표시
+            _showExcelProgress(t('excelSearching'), '');
+            {
+                const oldAPI = state.univerAPI;
+                state.univerAPI = null;
+                // 컨테이너 먼저 교체 후 dispose (React contains 에러 방지)
+                const oldC = document.getElementById('univerContainer');
+                if (oldC) {
+                    const freshC = oldC.cloneNode(false);
+                    oldC.parentNode.replaceChild(freshC, oldC);
+                    freshC.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:16px;color:#888;">' +
+                        '<div class="dot-loading"><span></span><span></span><span></span></div>' +
+                        '<p>' + t('excelSearching') + '</p></div>';
+                }
+                if (oldAPI) {
+                    try { oldAPI.dispose(); } catch(e) {}
+                }
+            }
+            break;
+
+        case 'search_done':
+            // 검색 완료 → Univer 다시 초기화하여 실시간 스트리밍 준비
+            _showExcelProgress(t('excelSearchDone'), '');
+            _excelStreamBuffer = '';
+            _excelSheetStates = [];
+            initUniver();
+            break;
+
+        case 'delta':
+            // AI 스트리밍 텍스트 → 실시간 파싱하여 Univer에 점진적으로 표시
+            _excelStreamBuffer += (evt.text || '');
+            _tryProgressiveExcelPopulate();
+            // 진행 상태 업데이트
+            _updateExcelStreamProgress();
+            break;
+
+        case 'parsing':
+            _showExcelProgress(t('excelFinalizing'), '');
+            break;
+
+        case 'excel_data':
+            // 최종 데이터 수신 → 스타일 포함 워크북으로 갱신
+            _hideExcelProgress();
+            state.generatedExcel = evt.excel;
+            state.currentProject.status = 'generated';
+            $('#wsProjectStatus').text(t('statusGenerated')).attr('class', 'ws-status generated');
+
+            // 최종 데이터로 스타일 포함 워크북 재생성
+            populateUniverFromData(state.generatedExcel);
+
+            // 차트 렌더링
+            renderExcelCharts(state.generatedExcel);
+
+            // 다운로드 버튼 표시
+            $('#btnDownloadXlsx').show();
+            if (state.generatedExcel.meta && state.generatedExcel.meta.title) {
+                $('#excelTitle').text(state.generatedExcel.meta.title);
+            }
+            break;
+
+        case 'complete':
+            _hideExcelProgress();
+            showToast(t('msgExcelGenerated'), 'success');
+            break;
+
+        case 'stopped':
+            _hideExcelProgress();
+            showToast(evt.message || t('statusStopped'), 'info');
+            state.currentProject.status = 'stopped';
+            $('#wsProjectStatus').text(t('statusStopped')).attr('class', 'ws-status stopped');
+            break;
+
+        case 'error':
+            _hideExcelProgress();
+            showToast(evt.message || '생성 실패', 'error');
+            break;
+    }
+}
+
+// ============ 엑셀 진행 상태 UI ============
+
+function _showExcelProgress(msg, detail) {
+    $('#excelProgressMsg').text(msg);
+    $('#excelProgressDetail').text(detail || '');
+    $('#excelProgressBar').removeClass('determinate');
+    $('#excelProgressOverlay').show();
+}
+
+function _hideExcelProgress() {
+    $('#excelProgressOverlay').hide();
+}
+
+function _updateExcelStreamProgress() {
+    const sheetCount = _excelSheetStates.length || 0;
+    let totalRows = 0;
+    for (const ss of _excelSheetStates) {
+        totalRows += (ss.parsedRowCount || 0);
+    }
+
+    if (sheetCount === 0 && totalRows === 0) {
+        _showExcelProgress(t('excelGenerating'), '');
+    } else {
+        const detail = t('excelStreamingDetail')
+            .replace('{sheets}', sheetCount)
+            .replace('{rows}', totalRows);
+        _showExcelProgress(t('excelStreaming'), detail);
+    }
+}
+
+function downloadXLSX() {
+    if (!state.currentProject || !state.generatedExcel) {
+        showToast(t('msgNoExcelData'), 'error');
+        return;
+    }
+    window.open(`/${state.jwtToken}/api/generate/${state.currentProject._id}/download/xlsx`, '_blank');
+}
+
+
+// ============ OnlyOffice 통합 ============
+
+function _getProjectTypeBadge(projectType) {
+    const badges = {
+        'excel': '<span class="rc-type-badge excel">Excel</span>',
+        'onlyoffice_pptx': '<span class="rc-type-badge oo-pptx">OO PPT</span>',
+        'onlyoffice_xlsx': '<span class="rc-type-badge oo-xlsx">OO Excel</span>',
+        'onlyoffice_docx': '<span class="rc-type-badge oo-docx">OO Word</span>',
+    };
+    return badges[projectType] || '';
+}
+
+let _onlyofficeScriptLoaded = false;
+
+async function loadOnlyOfficeScript(onlyofficeUrl) {
+    if (_onlyofficeScriptLoaded) return;
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = `${onlyofficeUrl}/web-apps/apps/api/documents/api.js`;
+        script.onload = () => { _onlyofficeScriptLoaded = true; resolve(); };
+        script.onerror = () => reject(new Error('OnlyOffice api.js 로드 실패'));
+        document.head.appendChild(script);
+    });
+}
+
+function destroyOnlyOfficeEditor() {
+    if (state.onlyofficeEditor) {
+        try { state.onlyofficeEditor.destroyEditor(); } catch (e) { }
+        state.onlyofficeEditor = null;
+    }
+    $('#onlyofficeContainer').empty();
+}
+
+async function openOnlyOfficeEditor(projectId) {
+    try {
+        const res = await apiGet(`/api/onlyoffice/${projectId}/config`);
+        const config = res.config;
+        const onlyofficeUrl = res.onlyoffice_url;
+
+        await loadOnlyOfficeScript(onlyofficeUrl);
+        destroyOnlyOfficeEditor();
+
+        // 에디터 컨테이너 준비
+        $('#onlyofficeContainer').html('<div id="ooEditorDiv" style="width:100%;height:100%;"></div>');
+
+        // 이벤트 핸들러 추가
+        config.events = {
+            onAppReady: function () {
+                console.log('[OnlyOffice] 에디터 준비 완료');
+            },
+            onDocumentReady: function () {
+                console.log('[OnlyOffice] 문서 로드 완료');
+                $('#btnDownloadOO').show();
+            },
+            onError: function (event) {
+                console.error('[OnlyOffice] 에디터 오류:', event.data);
+                showToast('OnlyOffice 에디터 오류가 발생했습니다', 'error');
+            },
+        };
+
+        state.onlyofficeEditor = new DocsAPI.DocEditor('ooEditorDiv', config);
+    } catch (e) {
+        console.error('[OnlyOffice] 에디터 열기 실패:', e);
+        showToast('OnlyOffice 에디터를 열 수 없습니다: ' + e.message, 'error');
+    }
+}
+
+async function initOnlyOfficeWorkspace() {
+    if (state.onlyofficeDoc) {
+        await openOnlyOfficeEditor(state.currentProject._id);
+    }
+}
+
+function downloadOnlyOfficeDoc() {
+    if (!state.currentProject || !state.onlyofficeDoc) {
+        showToast('다운로드할 문서가 없습니다', 'error');
+        return;
+    }
+    window.open(`/${state.jwtToken}/api/generate/${state.currentProject._id}/download/onlyoffice`, '_blank');
+}
+
+// OnlyOffice SSE 진행 상태 표시
+function _showOnlyOfficeProgress(msg, detail) {
+    $('#onlyofficeProgressOverlay').show();
+    $('#onlyofficeProgressMsg').text(msg || '준비 중...');
+    $('#onlyofficeProgressDetail').text(detail || '');
+}
+
+function _hideOnlyOfficeProgress() {
+    $('#onlyofficeProgressOverlay').hide();
+    $('#onlyofficeProgressBar').css('width', '0%');
+}
+
+async function _onlyofficeStreamGenerate(url, body) {
+    _showOnlyOfficeProgress('AI가 콘텐츠를 생성하고 있습니다...');
+    _showStopButton();
+
+    state.currentProject.status = 'generating';
+    $('#wsProjectStatus').text(t('statusGenerating')).attr('class', 'ws-status generating');
+
+    try {
+        const response = await fetch(`/${state.jwtToken}${url}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let llmText = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                let evt;
+                try { evt = JSON.parse(line.substring(6)); } catch { continue; }
+
+                switch (evt.event) {
+                    case 'searching':
+                        _showOnlyOfficeProgress('인터넷에서 자료를 검색하고 있습니다...');
+                        break;
+                    case 'search_done':
+                        _showOnlyOfficeProgress('검색 완료! 콘텐츠를 생성합니다...');
+                        break;
+                    case 'start':
+                        _showOnlyOfficeProgress(evt.message || 'AI가 콘텐츠를 생성하고 있습니다...');
+                        break;
+                    case 'delta':
+                        llmText += evt.text || '';
+                        const progress = Math.min(llmText.length / 5000 * 70, 70);
+                        $('#onlyofficeProgressBar').css('width', progress + '%');
+                        break;
+                    case 'parsing':
+                        _showOnlyOfficeProgress(evt.message || '콘텐츠를 구성하고 있습니다...');
+                        $('#onlyofficeProgressBar').css('width', '75%');
+                        break;
+                    case 'file_creating':
+                        _showOnlyOfficeProgress(evt.message || '파일을 생성하고 있습니다...');
+                        $('#onlyofficeProgressBar').css('width', '85%');
+                        break;
+                    case 'onlyoffice_ready':
+                        _showOnlyOfficeProgress('OnlyOffice 에디터를 열고 있습니다...');
+                        $('#onlyofficeProgressBar').css('width', '95%');
+                        state.onlyofficeDoc = evt.document || null;
+                        break;
+                    case 'complete':
+                        _hideOnlyOfficeProgress();
+                        _showGenerateOrRestartButton();
+                        state.currentProject.status = 'generated';
+                        $('#wsProjectStatus').text(t('statusGenerated')).attr('class', 'ws-status generated');
+                        showToast('생성 완료!', 'success');
+                        // 에디터 열기
+                        if (state.onlyofficeDoc) {
+                            await openOnlyOfficeEditor(state.currentProject._id);
+                        }
+                        break;
+                    case 'stopped':
+                        _hideOnlyOfficeProgress();
+                        _showGenerateOrRestartButton();
+                        state.currentProject.status = 'stopped';
+                        $('#wsProjectStatus').text(t('statusStopped')).attr('class', 'ws-status stopped');
+                        showToast(evt.message || '중단됨', 'info');
+                        break;
+                    case 'error':
+                        _hideOnlyOfficeProgress();
+                        _showGenerateOrRestartButton();
+                        showToast(evt.message || '생성 실패', 'error');
+                        break;
+                }
+            }
+        }
+    } catch (e) {
+        _hideOnlyOfficeProgress();
+        _showGenerateOrRestartButton();
+        showToast('생성 중 오류: ' + e.message, 'error');
+    }
+}
+
+async function generateOnlyOfficePptx() {
+    const templateId = state.selectedTemplateId;
+    if (!templateId) {
+        showToast(t('msgSelectTemplate'), 'error');
+        return;
+    }
+    const instructions = $('#instructionsInput').val().trim();
+    const lang = $('#langSelect').val();
+    const slideCount = $('#slideCountSelect').val();
+
+    await _onlyofficeStreamGenerate('/api/generate/onlyoffice/pptx/stream', {
+        project_id: state.currentProject._id,
+        template_id: templateId,
+        instructions,
+        lang,
+        slide_count: slideCount,
+    });
+}
+
+async function generateOnlyOfficeXlsx() {
+    const instructions = $('#instructionsInput').val().trim();
+    const lang = $('#langSelect').val();
+
+    if (state.resources.length === 0 && !instructions) {
+        showToast('리소스 또는 지침을 입력하세요.', 'error');
+        return;
+    }
+
+    await _onlyofficeStreamGenerate('/api/generate/onlyoffice/xlsx/stream', {
+        project_id: state.currentProject._id,
+        instructions,
+        lang,
+    });
+}
+
+async function generateOnlyOfficeDocx() {
+    const instructions = $('#instructionsInput').val().trim();
+    const lang = $('#langSelect').val();
+
+    if (state.resources.length === 0 && !instructions) {
+        showToast('리소스 또는 지침을 입력하세요.', 'error');
+        return;
+    }
+
+    await _onlyofficeStreamGenerate('/api/generate/onlyoffice/docx/stream', {
+        project_id: state.currentProject._id,
+        instructions,
+        lang,
+    });
+}
+
+
+// ============ 엑셀 차트 렌더링 (Chart.js) ============
+
+let _chartJsLoaded = false;
+let _chartJsLoading = false;
+let _activeExcelCharts = [];
+
+async function loadChartJsScript() {
+    if (_chartJsLoaded) return;
+    if (_chartJsLoading) {
+        while (_chartJsLoading) await new Promise(r => setTimeout(r, 100));
+        return;
+    }
+    _chartJsLoading = true;
+    try {
+        await new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js';
+            s.onload = resolve;
+            s.onerror = reject;
+            document.head.appendChild(s);
+        });
+        _chartJsLoaded = true;
+    } finally {
+        _chartJsLoading = false;
+    }
+}
+
+function _destroyExcelCharts() {
+    _activeExcelCharts.forEach(c => { try { c.destroy(); } catch(e) {} });
+    _activeExcelCharts = [];
+    const grid = document.getElementById('excelChartsGrid');
+    if (grid) grid.innerHTML = '';
+    $('#excelChartsContainer').hide();
+}
+
+async function renderExcelCharts(excelData) {
+    if (!excelData || !excelData.sheets) return;
+
+    // 차트 정의가 있는지 확인
+    let hasCharts = false;
+    for (const sheet of excelData.sheets) {
+        if (sheet.charts && sheet.charts.length > 0) {
+            hasCharts = true;
+            break;
+        }
+    }
+    if (!hasCharts) {
+        _destroyExcelCharts();
+        return;
+    }
+
+    await loadChartJsScript();
+    _destroyExcelCharts();
+
+    const grid = document.getElementById('excelChartsGrid');
+    if (!grid) return;
+
+    const multiSheet = excelData.sheets.filter(s => s.charts && s.charts.length > 0).length > 1;
+
+    for (const sheet of excelData.sheets) {
+        const charts = sheet.charts || [];
+        if (charts.length === 0) continue;
+
+        for (const chartDef of charts) {
+            const config = _buildChartJsConfig(chartDef, sheet);
+            if (!config) continue;
+
+            const card = document.createElement('div');
+            card.className = 'excel-chart-card';
+
+            // 다중 시트일 때 시트명 표시
+            if (multiSheet) {
+                const label = document.createElement('div');
+                label.style.cssText = 'font-size:11px;color:#888;margin-bottom:4px;text-align:center;';
+                label.textContent = sheet.name;
+                card.appendChild(label);
+            }
+
+            const canvas = document.createElement('canvas');
+            card.appendChild(canvas);
+            grid.appendChild(card);
+
+            const instance = new Chart(canvas.getContext('2d'), config);
+            _activeExcelCharts.push(instance);
+        }
+    }
+
+    $('#excelChartsContainer').show();
+}
+
+const _CHART_PALETTE = ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47', '#264478', '#9B57A0'];
+
+function _buildChartJsConfig(chartDef, sheetData) {
+    const rows = sheetData.rows || [];
+    const columns = sheetData.columns || [];
+    const dr = chartDef.data_range || {};
+    const labelsCol = dr.labels_column || 0;
+    const rowStart = dr.row_start || 0;
+    const rowEnd = (dr.row_end != null) ? dr.row_end : rows.length - 1;
+
+    // 라벨 추출
+    const labels = [];
+    for (let r = rowStart; r <= rowEnd && r < rows.length; r++) {
+        labels.push(rows[r][labelsCol] != null ? String(rows[r][labelsCol]) : '');
+    }
+
+    // 데이터셋 구성
+    const datasets = [];
+    const seriesDefs = dr.series || [];
+    for (let si = 0; si < seriesDefs.length; si++) {
+        const sDef = seriesDefs[si];
+        const data = [];
+        for (let r = rowStart; r <= rowEnd && r < rows.length; r++) {
+            const v = rows[r][sDef.column];
+            data.push(typeof v === 'number' ? v : (parseFloat(v) || 0));
+        }
+
+        const color = _CHART_PALETTE[si % _CHART_PALETTE.length];
+        const ds = {
+            label: sDef.name || columns[sDef.column] || ('Series ' + (si + 1)),
+            data: data,
+            backgroundColor: chartDef.type === 'line' || chartDef.type === 'radar'
+                ? color + '33'  // 투명도 추가
+                : (chartDef.type === 'pie' || chartDef.type === 'doughnut')
+                    ? _CHART_PALETTE.slice(0, data.length)
+                    : color,
+            borderColor: (chartDef.type === 'pie' || chartDef.type === 'doughnut')
+                ? '#fff'
+                : color,
+            borderWidth: (chartDef.type === 'pie' || chartDef.type === 'doughnut') ? 2 : 2,
+        };
+
+        // area = line + fill
+        if (chartDef.type === 'area') {
+            ds.fill = true;
+            ds.backgroundColor = color + '44';
+            ds.borderColor = color;
+            ds.tension = 0.3;
+        }
+
+        if (chartDef.type === 'line') {
+            ds.tension = 0.3;
+        }
+
+        datasets.push(ds);
+    }
+
+    // Chart.js 타입 매핑
+    const typeMap = {
+        bar: 'bar', line: 'line', pie: 'pie',
+        area: 'line', scatter: 'scatter',
+        doughnut: 'doughnut', radar: 'radar',
+    };
+    const chartType = typeMap[chartDef.type] || 'bar';
+
+    const config = {
+        type: chartType,
+        data: { labels, datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+                title: {
+                    display: !!chartDef.title,
+                    text: chartDef.title || '',
+                    font: { size: 14, weight: '600' },
+                    padding: { bottom: 12 },
+                },
+                legend: {
+                    display: chartDef.options?.show_legend !== false,
+                    position: 'bottom',
+                    labels: { padding: 12, usePointStyle: true },
+                },
+            },
+        },
+    };
+
+    // 스택 bar
+    if (chartDef.type === 'bar' && chartDef.options?.stacked) {
+        config.options.scales = {
+            x: { stacked: true },
+            y: { stacked: true },
+        };
+    }
+
+    // pie/doughnut 에서 scales 제거
+    if (chartDef.type === 'pie' || chartDef.type === 'doughnut') {
+        delete config.options.scales;
+    }
+
+    return config;
 }

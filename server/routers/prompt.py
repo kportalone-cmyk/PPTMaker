@@ -1,5 +1,7 @@
+import hashlib
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from typing import Optional
 from services.mongo_service import get_db
 from services import redis_service
 from bson import ObjectId
@@ -7,9 +9,17 @@ from datetime import datetime
 
 router = APIRouter(tags=["prompts"])
 
+# 솔루션에서 제공하는 LLM 모델 목록
+AVAILABLE_MODELS = [
+    {"id": "claude-opus-4-6", "name": "Claude Opus 4.6", "description": "최고 성능 모델 (정밀도 높은 작업)"},
+    {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "description": "균형 잡힌 모델 (속도 + 성능)"},
+    {"id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5", "description": "빠른 응답 모델 (간단한 작업)"},
+]
+
 
 class PromptUpdate(BaseModel):
-    content: str
+    content: Optional[str] = None
+    model: Optional[str] = None
 
 
 # ── 기본 프롬프트 정의 (DB 초기화용) ──
@@ -19,6 +29,7 @@ DEFAULT_PROMPTS = [
         "key": "slide_generation_system",
         "name": "슬라이드 생성 시스템 프롬프트",
         "description": "리소스를 분석하여 슬라이드 구조를 설계하는 시스템 프롬프트. 변수: {lang_instruction}, {slide_count_instruction}",
+        "model": "claude-sonnet-4-6",
         "content": """당신은 기업용 프레젠테이션 구조 설계 및 콘텐츠 전문가입니다.
 주어진 리소스 자료를 분석하여 전문적인 프레젠테이션을 설계합니다.
 
@@ -72,6 +83,7 @@ DEFAULT_PROMPTS = [
         "key": "slide_generation_user",
         "name": "슬라이드 생성 사용자 프롬프트",
         "description": "리소스와 템플릿 카탈로그를 포함한 사용자 프롬프트. 변수: {lang_instruction}, {instructions}, {resources_text}, {slides_description}",
+        "model": "claude-sonnet-4-6",
         "content": """아래 리소스 자료를 분석하여 프레젠테이션을 설계하고 콘텐츠를 생성해주세요.
 
 ## 출력 언어
@@ -147,18 +159,209 @@ DEFAULT_PROMPTS = [
 }}
 ```""",
     },
+    {
+        "key": "excel_generation_system",
+        "name": "엑셀 생성 시스템 프롬프트",
+        "description": "리소스를 분석하여 구조화된 스프레드시트 데이터를 생성하는 시스템 프롬프트. 변수: {lang_instruction}, {sheet_count_instruction}",
+        "model": "claude-opus-4-6",
+        "content": """당신은 데이터 분석 및 구조화 전문가입니다.
+주어진 리소스 자료를 분석하여 구조화된 스프레드시트 데이터를 생성합니다.
+
+## 출력 규칙
+1. 데이터를 논리적 시트(탭)로 분류합니다. 관련 데이터끼리 같은 시트에 배치하세요.
+2. 각 시트는 명확하고 구체적인 열 헤더를 포함합니다.
+3. 데이터는 정확한 셀 값으로 정리합니다:
+   - 숫자 데이터는 숫자 타입으로 (문자열 X)
+   - 날짜는 "YYYY-MM-DD" 형식
+   - 빈 셀은 빈 문자열("")
+4. 각 시트는 최소 2개 열, 최소 3개 행의 데이터를 포함해야 합니다.
+5. 열 헤더는 내용을 명확히 설명하는 이름으로 작성합니다.
+6. 데이터는 논리적 순서로 정렬합니다 (날짜순, 가나다순, 크기순 등).
+7. {lang_instruction}
+8. 반드시 JSON 형식으로만 응답합니다.{sheet_count_instruction}
+
+## 차트 생성 규칙
+데이터가 시각화에 적합한 경우, 해당 시트에 charts 배열을 추가하세요.
+1. 숫자 데이터가 2개 이상의 행과 비교 가능한 열이 있으면 차트를 생성합니다.
+2. 지원 차트 타입: bar(막대), line(선), pie(원형), area(영역), scatter(산점도), doughnut(도넛), radar(레이더)
+3. 데이터 특성에 맞는 차트 타입을 선택하세요:
+   - 항목 간 비교: bar
+   - 시계열/추세 변화: line 또는 area
+   - 비율/구성: pie 또는 doughnut
+   - 상관관계: scatter
+   - 다차원 비교: radar
+4. 한 시트에 최대 3개까지 차트를 생성할 수 있습니다.
+5. pie/doughnut 차트는 series에 하나의 열만 포함하세요.
+6. 차트가 적합하지 않은 데이터(텍스트만 있는 시트 등)에는 charts를 생략하세요.
+7. labels_column은 카테고리/라벨 역할을 하는 열의 인덱스(0부터)입니다.
+8. series의 column은 숫자 데이터가 있는 열의 인덱스(0부터)입니다.""",
+    },
+    {
+        "key": "excel_generation_user",
+        "name": "엑셀 생성 사용자 프롬프트",
+        "description": "리소스를 포함한 엑셀 생성 사용자 프롬프트. 변수: {lang_instruction}, {instructions}, {resources_text}",
+        "model": "claude-opus-4-6",
+        "content": """아래 리소스 자료를 분석하여 구조화된 스프레드시트 데이터를 생성해주세요.
+
+## 출력 언어
+{lang_instruction}
+
+## 사용자 지침
+{instructions}
+
+## 리소스 자료
+{resources_text}
+
+## 응답 형식
+반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요.
+
+```json
+{{
+    "meta": {{
+        "title": "스프레드시트 제목",
+        "description": "데이터 설명"
+    }},
+    "sheets": [
+        {{
+            "name": "시트명 (최대 31자)",
+            "columns": ["열1", "열2", "열3"],
+            "rows": [
+                ["값1", 100, "2024-01-01"],
+                ["값2", 200, "2024-02-01"]
+            ],
+            "charts": [
+                {{
+                    "type": "bar",
+                    "title": "차트 제목",
+                    "data_range": {{
+                        "labels_column": 0,
+                        "series": [
+                            {{"name": "시리즈명", "column": 1}},
+                            {{"name": "시리즈명2", "column": 2}}
+                        ],
+                        "row_start": 0,
+                        "row_end": null
+                    }},
+                    "options": {{
+                        "stacked": false,
+                        "show_legend": true
+                    }}
+                }}
+            ]
+        }}
+    ]
+}}
+```
+charts는 선택적입니다. 숫자 데이터가 시각화에 적합한 경우에만 포함하세요. 텍스트만 있는 시트에는 생략합니다.""",
+    },
+    {
+        "key": "docx_generation_system",
+        "name": "문서 생성 시스템 프롬프트",
+        "description": "리소스를 분석하여 구조화된 Word 문서를 생성하는 시스템 프롬프트. 변수: {lang_instruction}, {section_count_instruction}",
+        "model": "claude-opus-4-6",
+        "content": """당신은 전문 문서 작성 및 구조화 전문가입니다.
+주어진 리소스 자료를 분석하여 체계적이고 전문적인 문서를 작성합니다.
+
+## 출력 규칙
+1. 문서를 논리적 섹션으로 구성합니다.
+2. 각 섹션은 제목(title)과 본문(content)을 포함합니다.
+3. 본문은 Markdown 형식으로 작성합니다:
+   - **굵게**, *기울임*, ~~취소선~~ 지원
+   - 불릿 리스트(- 또는 *)와 번호 리스트(1. 2. 3.)
+   - 표(| col1 | col2 |)
+   - 인용(> 텍스트)
+4. level은 문서 구조의 깊이입니다 (1=대제목, 2=소제목, 3=하위제목).
+5. 전문적이고 읽기 쉬운 문서를 작성합니다.
+6. 충분한 분량의 본문 내용을 작성합니다. 각 섹션의 content는 최소 3문장 이상이어야 합니다.
+7. {lang_instruction}
+8. 반드시 JSON 형식으로만 응답합니다.{section_count_instruction}""",
+    },
+    {
+        "key": "docx_generation_user",
+        "name": "문서 생성 사용자 프롬프트",
+        "description": "리소스를 포함한 문서 생성 사용자 프롬프트. 변수: {lang_instruction}, {instructions}, {resources_text}",
+        "model": "claude-opus-4-6",
+        "content": """아래 리소스 자료를 분석하여 전문 문서를 작성해주세요.
+
+## 출력 언어
+{lang_instruction}
+
+## 사용자 지침
+{instructions}
+
+## 리소스 자료
+{resources_text}
+
+## 응답 형식
+반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요.
+
+```json
+{{
+    "meta": {{
+        "title": "문서 제목",
+        "description": "문서 설명"
+    }},
+    "sections": [
+        {{
+            "title": "섹션 제목",
+            "level": 1,
+            "content": "Markdown 형식의 본문 내용...\\n\\n여러 문단을 포함할 수 있습니다."
+        }},
+        {{
+            "title": "하위 섹션",
+            "level": 2,
+            "content": "상세 내용...\\n\\n- 불릿 항목 1\\n- 불릿 항목 2"
+        }}
+    ]
+}}
+```""",
+    },
 ]
 
 
+def _content_hash(content: str) -> str:
+    """프롬프트 content의 해시값 계산"""
+    return hashlib.md5(content.strip().encode()).hexdigest()
+
+
 async def ensure_default_prompts():
-    """DB에 기본 프롬프트가 없으면 삽입"""
+    """DB에 기본 프롬프트가 없으면 삽입, content가 변경되었으면 업데이트"""
     db = get_db()
     for prompt in DEFAULT_PROMPTS:
+        new_hash = _content_hash(prompt["content"])
         existing = await db.prompts.find_one({"key": prompt["key"]})
         if not existing:
-            doc = {**prompt, "created_at": datetime.utcnow(), "updated_at": datetime.utcnow()}
+            doc = {
+                **prompt,
+                "content_hash": new_hash,
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }
             await db.prompts.insert_one(doc)
             print(f"[Prompt] 기본 프롬프트 등록: {prompt['key']}")
+        else:
+            update_fields = {}
+            # content 변경 감지 (관리자가 수동 수정하지 않은 경우에만 업데이트)
+            old_hash = existing.get("content_hash", "")
+            existing_content_hash = _content_hash(existing.get("content", ""))
+            # 관리자가 수동 수정한 경우: old_hash != existing_content_hash
+            # 기본값 그대로인 경우: old_hash == existing_content_hash (또는 old_hash 없음)
+            admin_modified = old_hash and old_hash != existing_content_hash
+            if not admin_modified and old_hash != new_hash:
+                update_fields["content"] = prompt["content"]
+                update_fields["content_hash"] = new_hash
+                print(f"[Prompt] content 업데이트: {prompt['key']}")
+            # model 필드 동기화
+            if "model" not in existing or existing.get("model") != prompt.get("model", ""):
+                update_fields["model"] = prompt.get("model", "")
+            if update_fields:
+                update_fields["updated_at"] = datetime.utcnow()
+                await db.prompts.update_one(
+                    {"_id": existing["_id"]},
+                    {"$set": update_fields},
+                )
+                # Redis 캐시 무효화
+                await redis_service.cache_delete(f"prompt:{prompt['key']}")
 
 
 async def get_prompt_content(key: str) -> str:
@@ -180,6 +383,25 @@ async def get_prompt_content(key: str) -> str:
     return ""
 
 
+async def get_prompt_model(key: str) -> str:
+    """DB에서 프롬프트에 설정된 모델 조회. 없으면 기본값 반환"""
+    cache_key = f"prompt_model:{key}"
+    cached = await redis_service.cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    db = get_db()
+    doc = await db.prompts.find_one({"key": key}, {"model": 1})
+    if doc and doc.get("model"):
+        await redis_service.cache_set(cache_key, doc["model"], ttl=86400)
+        return doc["model"]
+    # DB에 없으면 기본 프롬프트에서 찾기
+    for p in DEFAULT_PROMPTS:
+        if p["key"] == key:
+            return p.get("model", "")
+    return ""
+
+
 # ── API 엔드포인트 ──
 
 @router.get("/{jwt_token}/api/admin/prompts")
@@ -192,6 +414,12 @@ async def list_prompts(jwt_token: str):
         p["_id"] = str(p["_id"])
         prompts.append(p)
     return {"prompts": prompts}
+
+
+@router.get("/{jwt_token}/api/admin/prompts/models")
+async def list_available_models(jwt_token: str):
+    """사용 가능한 LLM 모델 목록 조회"""
+    return {"models": AVAILABLE_MODELS}
 
 
 @router.get("/{jwt_token}/api/admin/prompts/{prompt_id}")
@@ -207,18 +435,24 @@ async def get_prompt(jwt_token: str, prompt_id: str):
 
 @router.put("/{jwt_token}/api/admin/prompts/{prompt_id}")
 async def update_prompt(jwt_token: str, prompt_id: str, body: PromptUpdate):
-    """프롬프트 내용 수정"""
+    """프롬프트 내용/모델 수정"""
     db = get_db()
     # 캐시 무효화를 위해 key 조회
     doc = await db.prompts.find_one({"_id": ObjectId(prompt_id)}, {"key": 1})
+    update_fields = {"updated_at": datetime.utcnow()}
+    if body.content is not None:
+        update_fields["content"] = body.content
+    if body.model is not None:
+        update_fields["model"] = body.model
     result = await db.prompts.update_one(
         {"_id": ObjectId(prompt_id)},
-        {"$set": {"content": body.content, "updated_at": datetime.utcnow()}}
+        {"$set": update_fields}
     )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="프롬프트를 찾을 수 없습니다")
     if doc:
         await redis_service.cache_delete(f"prompt:{doc['key']}")
+        await redis_service.cache_delete(f"prompt_model:{doc['key']}")
     return {"success": True}
 
 
@@ -230,11 +464,13 @@ async def reset_prompt(jwt_token: str, prompt_id: str):
     if not doc:
         raise HTTPException(status_code=404, detail="프롬프트를 찾을 수 없습니다")
 
-    # 기본 프롬프트에서 해당 key의 content 찾기
+    # 기본 프롬프트에서 해당 key의 content와 model 찾기
     default_content = ""
+    default_model = ""
     for p in DEFAULT_PROMPTS:
         if p["key"] == doc["key"]:
             default_content = p["content"]
+            default_model = p.get("model", "")
             break
 
     if not default_content:
@@ -242,7 +478,8 @@ async def reset_prompt(jwt_token: str, prompt_id: str):
 
     await db.prompts.update_one(
         {"_id": ObjectId(prompt_id)},
-        {"$set": {"content": default_content, "updated_at": datetime.utcnow()}}
+        {"$set": {"content": default_content, "model": default_model, "updated_at": datetime.utcnow()}}
     )
     await redis_service.cache_delete(f"prompt:{doc['key']}")
-    return {"success": True, "content": default_content}
+    await redis_service.cache_delete(f"prompt_model:{doc['key']}")
+    return {"success": True, "content": default_content, "model": default_model}

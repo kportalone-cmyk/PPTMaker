@@ -2,14 +2,18 @@ from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse, StreamingResponse
 from bson import ObjectId
 from datetime import datetime
-from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest
+from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, DocxGenerateRequest
 from services.mongo_service import get_db
 from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible, get_user_by_key
 from services import redis_service
 from routers.collaboration import check_project_access
 from services.template_service import recommend_slide, get_template_slides
 from services.ppt_service import generate_pptx
-from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content
+from services.excel_service import generate_xlsx
+from services.word_service import generate_docx
+from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content, generate_excel_content_stream, generate_docx_content_stream
+from services.search_service import search_web
+from services.onlyoffice_service import create_onlyoffice_document
 from config import settings
 import os
 import uuid
@@ -864,6 +868,17 @@ async def switch_template_slide(jwt_token: str, data: dict):
 
     # 새 템플릿으로 오브젝트 재매핑
     analyzed = _analyze_template_slides([dict(new_tmpl)])
+
+    # items를 새 템플릿의 subtitle/description placeholder에 매핑
+    if items and analyzed:
+        sub_phs = [p["placeholder"] for p in analyzed[0].get("placeholders", []) if p["role"] == "subtitle"]
+        desc_phs = [p["placeholder"] for p in analyzed[0].get("placeholders", []) if p["role"] == "description"]
+        for i, item in enumerate(items):
+            if i < len(sub_phs):
+                contents[sub_phs[i]] = item.get("heading", "")
+            if i < len(desc_phs):
+                contents[desc_phs[i]] = item.get("detail", "")
+
     gen_objects = _build_gen_objects(dict(new_tmpl), contents)
 
     # DB 업데이트
@@ -886,11 +901,663 @@ async def switch_template_slide(jwt_token: str, data: dict):
     return {"switched": True, "slide": updated, "new_template_slide_id": new_tmpl_id}
 
 
+# ============ 엑셀 생성 ============
+
+@router.post("/{jwt_token}/api/generate/excel/stream")
+async def generate_excel_stream(jwt_token: str, data: ExcelGenerateRequest):
+    """SSE 스트리밍으로 엑셀 데이터 생성 - 실시간 진행 표시"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    # 기존 생성 데이터 삭제
+    await db.generated_excel.delete_many({"project_id": data.project_id})
+
+    # 리소스 텍스트 수집
+    cursor = db.resources.find({"project_id": data.project_id})
+    all_content = []
+    async for r in cursor:
+        if r.get("content"):
+            all_content.append(r["content"])
+        elif r.get("title"):
+            all_content.append(f"[{r['title']}]")
+    combined_text = "\n\n".join(all_content)
+
+    # 리소스가 없으면 instructions 필수 (인터넷 검색에 사용)
+    needs_web_search = not combined_text.strip()
+    if needs_web_search and not data.instructions.strip():
+        raise HTTPException(status_code=400, detail="리소스가 없으면 지침을 입력해야 합니다.")
+
+    generation_id = str(uuid.uuid4())
+    await redis_service.clear_generation_cancel(data.project_id)
+
+    # 프로젝트 상태 업데이트
+    await db.projects.update_one(
+        {"_id": ObjectId(data.project_id)},
+        {"$set": {
+            "instructions": data.instructions,
+            "status": "generating",
+            "generation_id": generation_id,
+            "updated_at": datetime.utcnow(),
+        }}
+    )
+
+    def _sse(event: str, payload: dict) -> str:
+        return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False, default=str)}\n\n"
+
+    async def event_stream():
+        nonlocal combined_text, needs_web_search
+        try:
+            # 리소스가 없으면 인터넷 검색으로 자료 수집
+            if needs_web_search:
+                yield _sse("searching", {"message": "인터넷에서 자료를 검색하고 있습니다..."})
+
+                search_result = await search_web(data.instructions)
+                pages = search_result.get("pages", [])
+
+                if pages:
+                    search_contents = []
+                    for page in pages:
+                        title = page.get("title", "")
+                        content = page.get("content", "")
+                        url = page.get("url", "")
+                        search_contents.append(f"[{title}]\n{content}\n(출처: {url})")
+                    combined_text = "\n\n".join(search_contents)
+                else:
+                    # 검색 결과가 없으면 instructions만으로 진행
+                    combined_text = data.instructions
+
+                yield _sse("search_done", {"message": "검색 완료! 데이터를 생성합니다...", "result_count": len(pages)})
+
+            yield _sse("start", {"message": "AI가 데이터를 구조화하고 있습니다..."})
+
+            if await _check_cancelled(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            llm_result = None
+            chunk_count = 0
+            cancelled = False
+            async for event_type, event_data in generate_excel_content_stream(
+                combined_text, data.instructions, data.lang,
+                sheet_count=data.sheet_count,
+            ):
+                if event_type == "delta":
+                    yield _sse("delta", {"text": event_data})
+                    chunk_count += 1
+                    if chunk_count % 50 == 0:
+                        if await _check_cancelled(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
+                elif event_type == "result":
+                    llm_result = event_data
+
+            if cancelled:
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            if not llm_result:
+                yield _sse("error", {"message": "데이터 생성 실패"})
+                return
+
+            yield _sse("parsing", {"message": "데이터를 정리하고 있습니다..."})
+
+            # MongoDB에 저장
+            excel_doc = {
+                "project_id": data.project_id,
+                "sheets": llm_result.get("sheets", []),
+                "meta": llm_result.get("meta", {}),
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }
+            await db.generated_excel.insert_one(excel_doc)
+            excel_doc["_id"] = str(excel_doc["_id"])
+
+            # 프로젝트 업데이트
+            update_fields = {
+                "status": "generated",
+                "updated_at": datetime.utcnow(),
+            }
+            meta = llm_result.get("meta", {})
+            if meta:
+                update_fields["presentation_meta"] = meta
+
+            await db.projects.update_one(
+                {"_id": ObjectId(data.project_id)},
+                {"$set": update_fields}
+            )
+
+            yield _sse("excel_data", {"excel": excel_doc})
+            yield _sse("complete", {"total_sheets": len(llm_result.get("sheets", []))})
+
+        except Exception as e:
+            print(f"[SSE-Excel] Stream error: {e}")
+            project = await db.projects.find_one(
+                {"_id": ObjectId(data.project_id)}, {"status": 1}
+            )
+            if project and project.get("status") in ("stop_requested", "stopped"):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+            else:
+                yield _sse("error", {"message": str(e)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@router.get("/{jwt_token}/api/generate/{project_id}/excel")
+async def get_generated_excel(jwt_token: str, project_id: str):
+    """생성된 엑셀 데이터 조회"""
+    await get_user_key(jwt_token)
+    db = get_db()
+    doc = await db.generated_excel.find_one({"project_id": project_id})
+    if not doc:
+        return {"excel": None}
+    doc["_id"] = str(doc["_id"])
+    return {"excel": doc}
+
+
+@router.put("/{jwt_token}/api/generate/{project_id}/excel")
+async def update_excel_data(jwt_token: str, project_id: str, data: dict):
+    """편집된 엑셀 데이터 저장"""
+    await get_user_key(jwt_token)
+    db = get_db()
+    await db.generated_excel.update_one(
+        {"project_id": project_id},
+        {"$set": {
+            "sheets": data.get("sheets", []),
+            "updated_at": datetime.utcnow(),
+        }},
+        upsert=True
+    )
+    return {"success": True}
+
+
+@router.get("/{jwt_token}/api/generate/{project_id}/download/xlsx")
+async def download_xlsx(jwt_token: str, project_id: str):
+    """XLSX 파일 다운로드"""
+    await get_user_key(jwt_token)
+    try:
+        file_url = await generate_xlsx(project_id)
+        file_path = os.path.join(".", file_url.lstrip("/"))
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=500, detail="파일 생성 실패")
+
+        db = get_db()
+        project = await db.projects.find_one({"_id": ObjectId(project_id)})
+        filename = f"{project.get('name', 'data')}.xlsx"
+
+        return FileResponse(
+            path=file_path,
+            filename=filename,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/{jwt_token}/api/generate/{project_id}/download/pdf")
 async def download_pdf(jwt_token: str, project_id: str):
     """PDF 다운로드 (미구현)"""
     await get_user_key(jwt_token)
     raise HTTPException(status_code=501, detail="PDF 변환 기능은 준비 중입니다")
+
+
+# ============ OnlyOffice 생성 ============
+
+@router.post("/{jwt_token}/api/generate/onlyoffice/pptx/stream")
+async def generate_onlyoffice_pptx_stream(jwt_token: str, data: GenerateRequest):
+    """OnlyOffice PPTX: AI 슬라이드 생성 → PPTX 파일 → OnlyOffice 에디터"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    # 기존 데이터 정리
+    await db.generated_slides.delete_many({"project_id": data.project_id})
+
+    # 리소스 수집
+    cursor = db.resources.find({"project_id": data.project_id})
+    all_content = []
+    async for r in cursor:
+        if r.get("content"):
+            all_content.append(r["content"])
+        elif r.get("title"):
+            all_content.append(f"[{r['title']}]")
+    combined_text = "\n\n".join(all_content)
+
+    if not combined_text.strip() and not data.instructions.strip():
+        raise HTTPException(status_code=400, detail="리소스 또는 지침이 필요합니다.")
+
+    # 템플릿 슬라이드 분석
+    slides = await get_template_slides(data.template_id)
+    if not slides:
+        raise HTTPException(status_code=400, detail="템플릿 슬라이드가 없습니다")
+
+    slides_meta = await _analyze_template_slides_cached(data.template_id, slides)
+
+    generation_id = str(uuid.uuid4())
+    await redis_service.clear_generation_cancel(data.project_id)
+
+    await db.projects.update_one(
+        {"_id": ObjectId(data.project_id)},
+        {"$set": {
+            "instructions": data.instructions,
+            "template_id": data.template_id,
+            "status": "generating",
+            "generation_id": generation_id,
+            "updated_at": datetime.utcnow(),
+        }}
+    )
+
+    def _sse(event: str, payload: dict) -> str:
+        return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False, default=str)}\n\n"
+
+    async def event_stream():
+        try:
+            # 슬라이드 카탈로그 설명
+            type_availability = _get_type_availability(slides_meta)
+            slides_description = _build_slides_description(slides_meta, type_availability)
+
+            yield _sse("start", {"message": "AI가 프레젠테이션을 설계하고 있습니다..."})
+
+            llm_result = None
+            chunk_count = 0
+            cancelled = False
+            async for event_type, event_data in generate_slide_content_stream(
+                combined_text, data.instructions, slides_meta,
+                lang=data.lang, slide_count=data.slide_count,
+            ):
+                if event_type == "delta":
+                    yield _sse("delta", {"text": event_data})
+                    chunk_count += 1
+                    if chunk_count % 50 == 0:
+                        if await _check_cancelled(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
+                elif event_type == "result":
+                    llm_result = event_data
+
+            if cancelled:
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            if not llm_result or not llm_result.get("slides"):
+                yield _sse("error", {"message": "슬라이드 생성 실패"})
+                return
+
+            yield _sse("parsing", {"message": "슬라이드를 구성하고 있습니다..."})
+
+            # 리치 스키마 결과 처리 (기존 generate_slides_stream과 동일 패턴)
+            llm_slides = llm_result.get("slides", [])
+            template_lookup = {idx: slide for idx, slide in enumerate(slides)}
+
+            for output_order, item in enumerate(llm_slides):
+                template_idx = item.get("template_index", 0)
+                if template_idx not in template_lookup:
+                    template_idx = _find_fallback_template(slides)
+
+                template_slide = template_lookup[template_idx]
+                contents = item.get("contents", {})
+                gen_objects = _build_gen_objects(template_slide, contents)
+
+                slide_bg = template_slide.get("background_image", "")
+
+                gen_slide_doc = {
+                    "project_id": data.project_id,
+                    "template_slide_id": str(template_slide.get("_id", "")),
+                    "order": output_order + 1,
+                    "objects": gen_objects,
+                    "items": item.get("items", []),
+                    "background_image": slide_bg,
+                    "created_at": datetime.utcnow(),
+                    "updated_at": datetime.utcnow(),
+                }
+                await db.generated_slides.insert_one(gen_slide_doc)
+
+            # 프로젝트 메타 업데이트
+            meta = llm_result.get("meta", {})
+            update_fields = {"status": "generated", "updated_at": datetime.utcnow()}
+            if meta:
+                update_fields["presentation_meta"] = meta
+            sources = llm_result.get("sources", [])
+            if sources:
+                update_fields["presentation_sources"] = sources
+            await db.projects.update_one(
+                {"_id": ObjectId(data.project_id)},
+                {"$set": update_fields}
+            )
+
+            # PPTX 파일 생성 + OnlyOffice 등록
+            yield _sse("file_creating", {"message": "파일을 생성하고 있습니다..."})
+            try:
+                file_url = await generate_pptx(data.project_id)
+                oo_doc = await create_onlyoffice_document(data.project_id, "pptx", file_url)
+                yield _sse("onlyoffice_ready", {"project_id": data.project_id, "document": oo_doc})
+            except Exception as e:
+                print(f"[OnlyOffice-PPTX] 파일 생성 실패: {e}")
+                yield _sse("error", {"message": f"파일 생성 실패: {str(e)}"})
+                return
+
+            yield _sse("complete", {"total_slides": len(generated_slides_data)})
+
+        except Exception as e:
+            print(f"[SSE-OO-PPTX] Stream error: {e}")
+            import traceback
+            traceback.print_exc()
+            yield _sse("error", {"message": str(e)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
+
+
+@router.post("/{jwt_token}/api/generate/onlyoffice/xlsx/stream")
+async def generate_onlyoffice_xlsx_stream(jwt_token: str, data: ExcelGenerateRequest):
+    """OnlyOffice XLSX: AI 엑셀 생성 → XLSX 파일 → OnlyOffice 에디터"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    await db.generated_excel.delete_many({"project_id": data.project_id})
+
+    cursor = db.resources.find({"project_id": data.project_id})
+    all_content = []
+    async for r in cursor:
+        if r.get("content"):
+            all_content.append(r["content"])
+        elif r.get("title"):
+            all_content.append(f"[{r['title']}]")
+    combined_text = "\n\n".join(all_content)
+
+    needs_web_search = not combined_text.strip()
+    if needs_web_search and not data.instructions.strip():
+        raise HTTPException(status_code=400, detail="리소스가 없으면 지침을 입력해야 합니다.")
+
+    generation_id = str(uuid.uuid4())
+    await redis_service.clear_generation_cancel(data.project_id)
+
+    await db.projects.update_one(
+        {"_id": ObjectId(data.project_id)},
+        {"$set": {
+            "instructions": data.instructions,
+            "status": "generating",
+            "generation_id": generation_id,
+            "updated_at": datetime.utcnow(),
+        }}
+    )
+
+    def _sse(event: str, payload: dict) -> str:
+        return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False, default=str)}\n\n"
+
+    async def event_stream():
+        nonlocal combined_text, needs_web_search
+        try:
+            if needs_web_search:
+                yield _sse("searching", {"message": "인터넷에서 자료를 검색하고 있습니다..."})
+                search_result = await search_web(data.instructions)
+                pages = search_result.get("pages", [])
+                if pages:
+                    search_contents = []
+                    for page in pages:
+                        search_contents.append(f"[{page.get('title', '')}]\n{page.get('content', '')}\n(출처: {page.get('url', '')})")
+                    combined_text = "\n\n".join(search_contents)
+                else:
+                    combined_text = data.instructions
+                yield _sse("search_done", {"message": "검색 완료!", "result_count": len(pages)})
+
+            yield _sse("start", {"message": "AI가 데이터를 구조화하고 있습니다..."})
+
+            if await _check_cancelled(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            llm_result = None
+            chunk_count = 0
+            cancelled = False
+            async for event_type, event_data in generate_excel_content_stream(
+                combined_text, data.instructions, data.lang,
+                sheet_count=data.sheet_count,
+            ):
+                if event_type == "delta":
+                    yield _sse("delta", {"text": event_data})
+                    chunk_count += 1
+                    if chunk_count % 50 == 0:
+                        if await _check_cancelled(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
+                elif event_type == "result":
+                    llm_result = event_data
+
+            if cancelled:
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            if not llm_result:
+                yield _sse("error", {"message": "데이터 생성 실패"})
+                return
+
+            yield _sse("parsing", {"message": "데이터를 정리하고 있습니다..."})
+
+            excel_doc = {
+                "project_id": data.project_id,
+                "sheets": llm_result.get("sheets", []),
+                "meta": llm_result.get("meta", {}),
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }
+            await db.generated_excel.insert_one(excel_doc)
+
+            update_fields = {"status": "generated", "updated_at": datetime.utcnow()}
+            meta = llm_result.get("meta", {})
+            if meta:
+                update_fields["presentation_meta"] = meta
+            await db.projects.update_one(
+                {"_id": ObjectId(data.project_id)},
+                {"$set": update_fields}
+            )
+
+            # XLSX 파일 생성 + OnlyOffice 등록
+            yield _sse("file_creating", {"message": "파일을 생성하고 있습니다..."})
+            try:
+                file_url = await generate_xlsx(data.project_id)
+                oo_doc = await create_onlyoffice_document(data.project_id, "xlsx", file_url)
+                yield _sse("onlyoffice_ready", {"project_id": data.project_id, "document": oo_doc})
+            except Exception as e:
+                print(f"[OnlyOffice-XLSX] 파일 생성 실패: {e}")
+                yield _sse("error", {"message": f"파일 생성 실패: {str(e)}"})
+                return
+
+            yield _sse("complete", {"total_sheets": len(llm_result.get("sheets", []))})
+
+        except Exception as e:
+            print(f"[SSE-OO-XLSX] Stream error: {e}")
+            import traceback
+            traceback.print_exc()
+            yield _sse("error", {"message": str(e)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
+
+
+@router.post("/{jwt_token}/api/generate/onlyoffice/docx/stream")
+async def generate_onlyoffice_docx_stream(jwt_token: str, data: DocxGenerateRequest):
+    """OnlyOffice DOCX: AI 문서 생성 → DOCX 파일 → OnlyOffice 에디터"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    await db.generated_docx.delete_many({"project_id": data.project_id})
+
+    cursor = db.resources.find({"project_id": data.project_id})
+    all_content = []
+    async for r in cursor:
+        if r.get("content"):
+            all_content.append(r["content"])
+        elif r.get("title"):
+            all_content.append(f"[{r['title']}]")
+    combined_text = "\n\n".join(all_content)
+
+    needs_web_search = not combined_text.strip()
+    if needs_web_search and not data.instructions.strip():
+        raise HTTPException(status_code=400, detail="리소스가 없으면 지침을 입력해야 합니다.")
+
+    generation_id = str(uuid.uuid4())
+    await redis_service.clear_generation_cancel(data.project_id)
+
+    await db.projects.update_one(
+        {"_id": ObjectId(data.project_id)},
+        {"$set": {
+            "instructions": data.instructions,
+            "status": "generating",
+            "generation_id": generation_id,
+            "updated_at": datetime.utcnow(),
+        }}
+    )
+
+    def _sse(event: str, payload: dict) -> str:
+        return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False, default=str)}\n\n"
+
+    async def event_stream():
+        nonlocal combined_text, needs_web_search
+        try:
+            if needs_web_search:
+                yield _sse("searching", {"message": "인터넷에서 자료를 검색하고 있습니다..."})
+                search_result = await search_web(data.instructions)
+                pages = search_result.get("pages", [])
+                if pages:
+                    search_contents = []
+                    for page in pages:
+                        search_contents.append(f"[{page.get('title', '')}]\n{page.get('content', '')}\n(출처: {page.get('url', '')})")
+                    combined_text = "\n\n".join(search_contents)
+                else:
+                    combined_text = data.instructions
+                yield _sse("search_done", {"message": "검색 완료!", "result_count": len(pages)})
+
+            yield _sse("start", {"message": "AI가 문서를 작성하고 있습니다..."})
+
+            if await _check_cancelled(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            llm_result = None
+            chunk_count = 0
+            cancelled = False
+            async for event_type, event_data in generate_docx_content_stream(
+                combined_text, data.instructions, data.lang,
+                section_count=data.section_count,
+            ):
+                if event_type == "delta":
+                    yield _sse("delta", {"text": event_data})
+                    chunk_count += 1
+                    if chunk_count % 50 == 0:
+                        if await _check_cancelled(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
+                elif event_type == "result":
+                    llm_result = event_data
+
+            if cancelled:
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            if not llm_result:
+                yield _sse("error", {"message": "문서 생성 실패"})
+                return
+
+            yield _sse("parsing", {"message": "문서를 구성하고 있습니다..."})
+
+            docx_doc = {
+                "project_id": data.project_id,
+                "sections": llm_result.get("sections", []),
+                "meta": llm_result.get("meta", {}),
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }
+            await db.generated_docx.insert_one(docx_doc)
+
+            update_fields = {"status": "generated", "updated_at": datetime.utcnow()}
+            meta = llm_result.get("meta", {})
+            if meta:
+                update_fields["presentation_meta"] = meta
+            await db.projects.update_one(
+                {"_id": ObjectId(data.project_id)},
+                {"$set": update_fields}
+            )
+
+            # DOCX 파일 생성 + OnlyOffice 등록
+            yield _sse("file_creating", {"message": "파일을 생성하고 있습니다..."})
+            try:
+                file_url = await generate_docx(data.project_id)
+                oo_doc = await create_onlyoffice_document(data.project_id, "docx", file_url)
+                yield _sse("onlyoffice_ready", {"project_id": data.project_id, "document": oo_doc})
+            except Exception as e:
+                print(f"[OnlyOffice-DOCX] 파일 생성 실패: {e}")
+                yield _sse("error", {"message": f"파일 생성 실패: {str(e)}"})
+                return
+
+            yield _sse("complete", {"total_sections": len(llm_result.get("sections", []))})
+
+        except Exception as e:
+            print(f"[SSE-OO-DOCX] Stream error: {e}")
+            import traceback
+            traceback.print_exc()
+            yield _sse("error", {"message": str(e)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
+
+
+@router.get("/{jwt_token}/api/generate/{project_id}/download/onlyoffice")
+async def download_onlyoffice_document(jwt_token: str, project_id: str):
+    """OnlyOffice 문서 다운로드 (최신 편집본)"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    oo_doc = await db.onlyoffice_documents.find_one({"project_id": project_id})
+    if not oo_doc:
+        raise HTTPException(status_code=404, detail="OnlyOffice 문서가 없습니다")
+
+    file_path = oo_doc.get("file_path", "")
+    if file_path.startswith("/uploads/"):
+        abs_path = os.path.join(settings.UPLOAD_DIR, file_path[len("/uploads/"):])
+    else:
+        abs_path = file_path
+
+    if not os.path.exists(abs_path):
+        raise HTTPException(status_code=404, detail="파일을 찾을 수 없습니다")
+
+    project = await db.projects.find_one({"_id": ObjectId(project_id)})
+    project_name = project.get("name", "document") if project else "document"
+    file_type = oo_doc.get("file_type", "docx")
+
+    mime_map = {
+        "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+
+    return FileResponse(
+        path=abs_path,
+        filename=f"{project_name}.{file_type}",
+        media_type=mime_map.get(file_type, "application/octet-stream"),
+    )
 
 
 # ============ 프레젠테이션 공유 ============
@@ -948,7 +1615,7 @@ async def _record_slide_history(
     user_key: str, user_name: str, before_snapshot: dict,
     after_snapshot: dict, description: str
 ):
-    """슬라이드 변경 히스토리 기록"""
+    """슬라이드 변경 히스토리 기록 (슬라이드당 최근 10개만 유지)"""
     await db.slide_history.insert_one({
         "project_id": project_id,
         "slide_id": slide_id,
@@ -960,6 +1627,15 @@ async def _record_slide_history(
         "description": description,
         "created_at": datetime.utcnow(),
     })
+
+    # 슬라이드당 최근 10개만 유지, 나머지 삭제
+    cursor = db.slide_history.find(
+        {"slide_id": slide_id},
+        {"_id": 1}
+    ).sort("created_at", -1).skip(10)
+    old_ids = [doc["_id"] async for doc in cursor]
+    if old_ids:
+        await db.slide_history.delete_many({"_id": {"$in": old_ids}})
 
 
 async def _normalize_slide_order(db, project_id: str):

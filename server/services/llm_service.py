@@ -10,7 +10,7 @@ import re
 import random
 import httpx
 from config import settings
-from routers.prompt import get_prompt_content
+from routers.prompt import get_prompt_content, get_prompt_model
 
 
 # ============ 슬라이드 타입 ↔ content_type 매핑 ============
@@ -55,9 +55,13 @@ async def generate_slide_content(
         resources_text, instructions, slides_meta, lang, slide_count=slide_count,
     )
 
+    # 프롬프트별 모델 설정 조회 (DB 우선, 없으면 config 기본값)
+    prompt_model = await get_prompt_model("slide_generation_system")
+    effective_model = prompt_model or settings.ANTHROPIC_OUTLINE_MODEL
+
     try:
-        result = await _call_claude_api(system_prompt, user_prompt, model=settings.ANTHROPIC_OUTLINE_MODEL)
-        print(f"[LLM] API 응답 길이: {len(result)} chars (model: {settings.ANTHROPIC_OUTLINE_MODEL})")
+        result = await _call_claude_api(system_prompt, user_prompt, model=effective_model)
+        print(f"[LLM] API 응답 길이: {len(result)} chars (model: {effective_model})")
         parsed = _parse_rich_schema(result, slides_meta)
         if parsed:
             print(f"[LLM] 파싱 성공 - slides: {len(parsed.get('slides', []))}개")
@@ -1053,8 +1057,9 @@ subtitle 역할의 placeholder는 items의 heading에 대응하고, description 
 """
 
     try:
-        result = await _call_claude_api(system_prompt, user_prompt, model=settings.ANTHROPIC_MODEL)
-        print(f"[LLM] 단일 슬라이드 응답 길이: {len(result)} chars")
+        single_model = await get_prompt_model("slide_generation_system") or settings.ANTHROPIC_MODEL
+        result = await _call_claude_api(system_prompt, user_prompt, model=single_model)
+        print(f"[LLM] 단일 슬라이드 응답 길이: {len(result)} chars (model: {single_model})")
         parsed = _extract_json(result)
         if parsed and "contents" in parsed:
             return parsed
@@ -1320,13 +1325,17 @@ async def generate_slide_content_stream(
         slide_count=slide_count,
     )
 
+    # 프롬프트별 모델 설정 조회
+    prompt_model = await get_prompt_model("slide_generation_system")
+    effective_model = prompt_model or settings.ANTHROPIC_OUTLINE_MODEL
+
     try:
         full_text = ""
-        async for delta in _stream_claude_api(system_prompt, user_prompt, model=settings.ANTHROPIC_OUTLINE_MODEL):
+        async for delta in _stream_claude_api(system_prompt, user_prompt, model=effective_model):
             full_text += delta
             yield ("delta", delta)
 
-        print(f"[LLM] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {settings.ANTHROPIC_OUTLINE_MODEL})")
+        print(f"[LLM] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {effective_model})")
         parsed = _parse_rich_schema(full_text, slides_meta)
         if parsed:
             slide_count_result = len(parsed.get("slides", []))
@@ -1349,3 +1358,392 @@ async def generate_slide_content_stream(
             "meta": {},
             "sources": [],
         })
+
+
+# ============ 엑셀 콘텐츠 생성 ============
+
+async def generate_excel_content_stream(
+    resources_text: str,
+    instructions: str,
+    lang: str = "",
+    sheet_count: str = "auto",
+):
+    """스트리밍 방식 엑셀 콘텐츠 생성
+
+    Yields:
+        ("delta", str)   - Claude에서 스트리밍된 텍스트 청크
+        ("result", dict) - 최종 파싱 결과: {"sheets": [...], "meta": {...}}
+    """
+    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+        yield ("result", _excel_fallback(resources_text))
+        return
+
+    system_prompt, user_prompt = await _build_excel_generation_prompts(
+        resources_text, instructions, lang, sheet_count=sheet_count,
+    )
+
+    # 프롬프트별 모델 설정 조회
+    prompt_model = await get_prompt_model("excel_generation_system")
+    effective_model = prompt_model or settings.ANTHROPIC_MODEL
+
+    try:
+        full_text = ""
+        async for delta in _stream_claude_api(system_prompt, user_prompt, model=effective_model):
+            full_text += delta
+            yield ("delta", delta)
+
+        print(f"[LLM-Excel] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {effective_model})")
+        parsed = _parse_excel_schema(full_text)
+        if parsed:
+            sheet_count_result = len(parsed.get("sheets", []))
+            print(f"[LLM-Excel] 파싱 성공 - sheets: {sheet_count_result}개")
+            yield ("result", parsed)
+        else:
+            print(f"[LLM-Excel] 파싱 실패 → 폴백 사용")
+            yield ("result", _excel_fallback(resources_text))
+    except Exception as e:
+        import traceback
+        print(f"[LLM-Excel] Streaming 호출 실패: {e}")
+        traceback.print_exc()
+        yield ("result", _excel_fallback(resources_text))
+
+
+async def _build_excel_generation_prompts(
+    resources_text: str, instructions: str, lang: str = "",
+    sheet_count: str = "auto",
+) -> tuple[str, str]:
+    """엑셀 생성용 프롬프트 빌드"""
+    if sheet_count and sheet_count != "auto":
+        sheet_count_instruction = f"\n9. **[필수] 시트를 정확히 {sheet_count}개 생성하세요.**"
+    else:
+        sheet_count_instruction = ""
+
+    output_lang = lang or (settings.SUPPORTED_LANGS[0] if settings.SUPPORTED_LANGS else "ko")
+    lang_instruction = {
+        "ko": "모든 콘텐츠를 한국어로 작성하세요.",
+        "en": "Write all content in English.",
+        "ja": "すべてのコンテンツを日本語で作成してください。",
+        "zh": "请用中文撰写所有内容。",
+    }.get(output_lang, "모든 콘텐츠를 한국어로 작성하세요.")
+
+    system_template = await get_prompt_content("excel_generation_system")
+    user_template = await get_prompt_content("excel_generation_user")
+
+    system_prompt = system_template.format(
+        lang_instruction=lang_instruction,
+        sheet_count_instruction=sheet_count_instruction,
+    )
+
+    user_prompt = user_template.format(
+        lang_instruction=lang_instruction,
+        instructions=instructions if instructions else "리소스 내용을 분석하여 핵심 데이터를 표 형태로 정리해주세요.",
+        resources_text=resources_text[:12000],
+    )
+
+    return system_prompt, user_prompt
+
+
+def _parse_excel_schema(response_text: str) -> dict | None:
+    """LLM 응답에서 엑셀 JSON 스키마를 파싱"""
+    text = response_text.strip()
+
+    # ```json ... ``` 블록 추출
+    if "```json" in text:
+        start = text.index("```json") + 7
+        try:
+            end = text.index("```", start)
+            text = text[start:end].strip()
+        except ValueError:
+            text = text[start:].strip()
+    elif "```" in text:
+        start = text.index("```") + 3
+        try:
+            end = text.index("```", start)
+            text = text[start:end].strip()
+        except ValueError:
+            text = text[start:].strip()
+
+    parsed = None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        for start_char, end_char in [("{", "}"), ("[", "]")]:
+            if start_char in text:
+                try:
+                    s = text.index(start_char)
+                    e = text.rindex(end_char) + 1
+                    parsed = json.loads(text[s:e])
+                    break
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+    if parsed is None:
+        return None
+
+    if isinstance(parsed, dict):
+        sheets = parsed.get("sheets", [])
+        if isinstance(sheets, list) and sheets:
+            for sheet in sheets:
+                _coerce_sheet_types(sheet)
+                _normalize_charts(sheet)
+            return {
+                "meta": parsed.get("meta", {}),
+                "sheets": sheets,
+            }
+
+    return None
+
+
+def _coerce_sheet_types(sheet: dict):
+    """시트의 rows 내 값을 적절한 타입으로 변환"""
+    rows = sheet.get("rows", [])
+    for row_idx, row in enumerate(rows):
+        if not isinstance(row, list):
+            continue
+        for col_idx, val in enumerate(row):
+            if isinstance(val, str):
+                try:
+                    rows[row_idx][col_idx] = int(val)
+                    continue
+                except (ValueError, TypeError):
+                    pass
+                try:
+                    rows[row_idx][col_idx] = float(val)
+                    continue
+                except (ValueError, TypeError):
+                    pass
+
+
+def _normalize_charts(sheet: dict):
+    """차트 정의 검증 및 정규화"""
+    charts = sheet.get("charts")
+    if not charts or not isinstance(charts, list):
+        sheet.pop("charts", None)
+        return
+
+    columns = sheet.get("columns", [])
+    rows = sheet.get("rows", [])
+    num_cols = len(columns)
+    num_rows = len(rows)
+
+    if num_cols == 0 or num_rows == 0:
+        sheet.pop("charts", None)
+        return
+
+    valid_types = {"bar", "line", "pie", "area", "scatter", "doughnut", "radar"}
+    normalized = []
+
+    for chart in charts[:3]:  # 시트당 최대 3개
+        if not isinstance(chart, dict):
+            continue
+        if chart.get("type") not in valid_types:
+            continue
+
+        dr = chart.get("data_range", {})
+        if not isinstance(dr, dict) or not dr.get("series"):
+            continue
+
+        # labels_column 범위 검증
+        labels_col = dr.get("labels_column", 0)
+        if not isinstance(labels_col, int) or labels_col < 0 or labels_col >= num_cols:
+            dr["labels_column"] = 0
+
+        # series 열 인덱스 범위 검증
+        valid_series = []
+        for s in dr["series"]:
+            if not isinstance(s, dict):
+                continue
+            col = s.get("column", -1)
+            if isinstance(col, int) and 0 <= col < num_cols:
+                valid_series.append(s)
+        if not valid_series:
+            continue
+        dr["series"] = valid_series
+
+        # pie/doughnut은 시리즈 1개만
+        if chart["type"] in ("pie", "doughnut"):
+            dr["series"] = dr["series"][:1]
+
+        # row 범위 정규화
+        dr.setdefault("row_start", 0)
+        if dr["row_start"] < 0:
+            dr["row_start"] = 0
+        if dr.get("row_end") is not None:
+            dr["row_end"] = min(dr["row_end"], num_rows - 1)
+
+        # options 기본값
+        chart.setdefault("options", {})
+        normalized.append(chart)
+
+    if normalized:
+        sheet["charts"] = normalized
+    else:
+        sheet.pop("charts", None)
+
+
+def _excel_fallback(resources_text: str) -> dict:
+    """AI 호출 실패 시 폴백 엑셀 데이터"""
+    lines = resources_text.strip().split("\n")[:20]
+    rows = []
+    for i, line in enumerate(lines):
+        text = line.strip()
+        if text:
+            rows.append([i + 1, text])
+
+    return {
+        "meta": {"title": "데이터 정리", "description": "리소스 내용 정리"},
+        "sheets": [
+            {
+                "name": "데이터",
+                "columns": ["번호", "내용"],
+                "rows": rows if rows else [[1, "데이터가 없습니다"]],
+            }
+        ],
+    }
+
+
+# ============ Word 문서 콘텐츠 생성 ============
+
+async def generate_docx_content_stream(
+    resources_text: str,
+    instructions: str,
+    lang: str = "",
+    section_count: str = "auto",
+):
+    """스트리밍 방식 Word 문서 콘텐츠 생성
+
+    Yields:
+        ("delta", str)   - Claude에서 스트리밍된 텍스트 청크
+        ("result", dict) - 최종 파싱 결과: {"sections": [...], "meta": {...}}
+    """
+    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+        yield ("result", _docx_fallback(resources_text))
+        return
+
+    system_prompt, user_prompt = await _build_docx_generation_prompts(
+        resources_text, instructions, lang, section_count=section_count,
+    )
+
+    prompt_model = await get_prompt_model("docx_generation_system")
+    effective_model = prompt_model or settings.ANTHROPIC_MODEL
+
+    try:
+        full_text = ""
+        async for delta in _stream_claude_api(system_prompt, user_prompt, model=effective_model):
+            full_text += delta
+            yield ("delta", delta)
+
+        print(f"[LLM-Docx] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {effective_model})")
+        parsed = _parse_docx_schema(full_text)
+        if parsed:
+            section_count_result = len(parsed.get("sections", []))
+            print(f"[LLM-Docx] 파싱 성공 - sections: {section_count_result}개")
+            yield ("result", parsed)
+        else:
+            print(f"[LLM-Docx] 파싱 실패 → 폴백 사용")
+            yield ("result", _docx_fallback(resources_text))
+    except Exception as e:
+        import traceback
+        print(f"[LLM-Docx] Streaming 호출 실패: {e}")
+        traceback.print_exc()
+        yield ("result", _docx_fallback(resources_text))
+
+
+async def _build_docx_generation_prompts(
+    resources_text: str, instructions: str, lang: str = "",
+    section_count: str = "auto",
+) -> tuple[str, str]:
+    """Word 문서 생성용 프롬프트 빌드"""
+    if section_count and section_count != "auto":
+        section_count_instruction = f"\n9. **[필수] 섹션을 정확히 {section_count}개 생성하세요.**"
+    else:
+        section_count_instruction = ""
+
+    output_lang = lang or (settings.SUPPORTED_LANGS[0] if settings.SUPPORTED_LANGS else "ko")
+    lang_instruction = {
+        "ko": "모든 콘텐츠를 한국어로 작성하세요.",
+        "en": "Write all content in English.",
+        "ja": "すべてのコンテンツを日本語で作成してください。",
+        "zh": "请用中文撰写所有内容。",
+    }.get(output_lang, "모든 콘텐츠를 한국어로 작성하세요.")
+
+    system_template = await get_prompt_content("docx_generation_system")
+    user_template = await get_prompt_content("docx_generation_user")
+
+    system_prompt = system_template.format(
+        lang_instruction=lang_instruction,
+        section_count_instruction=section_count_instruction,
+    )
+
+    user_prompt = user_template.format(
+        lang_instruction=lang_instruction,
+        instructions=instructions if instructions else "리소스 내용을 분석하여 체계적인 문서로 정리해주세요.",
+        resources_text=resources_text[:12000],
+    )
+
+    return system_prompt, user_prompt
+
+
+def _parse_docx_schema(response_text: str) -> dict | None:
+    """LLM 응답에서 Word 문서 JSON 스키마를 파싱"""
+    text = response_text.strip()
+
+    # ```json ... ``` 블록 추출
+    if "```json" in text:
+        start = text.index("```json") + 7
+        try:
+            end = text.index("```", start)
+            text = text[start:end].strip()
+        except ValueError:
+            text = text[start:].strip()
+    elif "```" in text:
+        start = text.index("```") + 3
+        try:
+            end = text.index("```", start)
+            text = text[start:end].strip()
+        except ValueError:
+            text = text[start:].strip()
+
+    parsed = None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        for start_char, end_char in [("{", "}"), ("[", "]")]:
+            if start_char in text:
+                try:
+                    s = text.index(start_char)
+                    e = text.rindex(end_char) + 1
+                    parsed = json.loads(text[s:e])
+                    break
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+    if parsed is None:
+        return None
+
+    if isinstance(parsed, dict):
+        sections = parsed.get("sections", [])
+        if isinstance(sections, list) and sections:
+            return {
+                "meta": parsed.get("meta", {}),
+                "sections": sections,
+            }
+
+    return None
+
+
+def _docx_fallback(resources_text: str) -> dict:
+    """AI 호출 실패 시 폴백 Word 데이터"""
+    lines = resources_text.strip().split("\n")[:30]
+    content = "\n".join(line.strip() for line in lines if line.strip())
+
+    return {
+        "meta": {"title": "문서 정리", "description": "리소스 내용 정리"},
+        "sections": [
+            {
+                "title": "내용 정리",
+                "level": 1,
+                "content": content if content else "데이터가 없습니다.",
+            }
+        ],
+    }

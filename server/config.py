@@ -53,6 +53,10 @@ class Settings:
     REDIS_DB: int = int(os.getenv("REDIS_DB", "0"))
     REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD", "")
 
+    # OnlyOffice
+    ONLYOFFICE_URL: str = os.getenv("ONLYOFFICE_URL", "")
+    ONLYOFFICE_JWT_SECRET: str = os.getenv("ONLYOFFICE_JWT_SECRET", "")
+
     # SSL
     SSL_CERTFILE: str = os.getenv("SSL_CERTFILE", "")
     SSL_KEYFILE: str = os.getenv("SSL_KEYFILE", "")
