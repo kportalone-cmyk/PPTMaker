@@ -9,7 +9,7 @@ from services import redis_service
 from routers.collaboration import check_project_access
 from services.template_service import recommend_slide, get_template_slides
 from services.ppt_service import generate_pptx
-from services.excel_service import generate_xlsx, auto_generate_chart_definition, render_chart_to_file
+from services.excel_service import generate_xlsx, auto_generate_chart_definition
 from services.word_service import generate_docx
 from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content, generate_excel_content_stream, modify_excel_content_stream, generate_docx_content_stream
 from services.search_service import search_web
@@ -108,6 +108,21 @@ async def generate_slides(jwt_token: str, data: GenerateRequest):
             all_content.append(f"[{r['title']}]")
 
     combined_text = "\n\n".join(all_content)
+
+    # 리소스가 없으면 지침으로 자동 웹 검색
+    if not combined_text.strip():
+        if not data.instructions.strip():
+            raise HTTPException(status_code=400, detail="리소스 또는 지침을 입력하세요.")
+        search_result = await search_web(data.instructions)
+        pages = search_result.get("pages", [])
+        if pages:
+            search_contents = []
+            for page in pages:
+                title = page.get("title", "")
+                content = page.get("content", "")
+                if content:
+                    search_contents.append(f"[{title}]\n{content}")
+            combined_text = "\n\n".join(search_contents)
 
     if not combined_text.strip():
         raise HTTPException(status_code=400, detail="리소스에 텍스트 내용이 없습니다.")
@@ -216,6 +231,37 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
             all_content.append(f"[{r['title']}]")
     combined_text = "\n\n".join(all_content)
 
+    # 리소스가 없으면 지침(instructions)으로 자동 웹 검색
+    web_search_performed = False
+    if not combined_text.strip():
+        if not data.instructions.strip():
+            raise HTTPException(status_code=400, detail="리소스 또는 지침을 입력하세요.")
+        search_result = await search_web(data.instructions)
+        pages = search_result.get("pages", [])
+        if pages:
+            search_contents = []
+            search_sources = []
+            for page in pages:
+                title = page.get("title", "")
+                content = page.get("content", "")
+                url = page.get("url", "")
+                if content:
+                    search_contents.append(f"[{title}]\n{content}")
+                    if url:
+                        search_sources.append(url)
+            combined_text = "\n\n".join(search_contents)
+            # 검색 결과를 리소스로 자동 저장
+            if combined_text.strip():
+                await db.resources.insert_one({
+                    "project_id": data.project_id,
+                    "resource_type": "web",
+                    "title": f"자동 웹 검색: {data.instructions[:50]}",
+                    "content": combined_text,
+                    "sources": search_sources,
+                    "created_at": datetime.utcnow(),
+                })
+                web_search_performed = True
+
     if not combined_text.strip():
         raise HTTPException(status_code=400, detail="리소스에 텍스트 내용이 없습니다.")
 
@@ -257,7 +303,10 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
             type_availability = _get_type_availability(slides_meta)
             yield _sse("template_analysis", {"types": type_availability})
 
-            yield _sse("start", {"message": "AI가 슬라이드를 설계하고 있습니다..."})
+            if web_search_performed:
+                yield _sse("start", {"message": "웹 검색으로 자료를 수집하여 슬라이드를 설계하고 있습니다..."})
+            else:
+                yield _sse("start", {"message": "AI가 슬라이드를 설계하고 있습니다..."})
 
             # 취소 체크
             if await _check_cancelled(db, data.project_id, generation_id):
@@ -1263,11 +1312,6 @@ async def generate_excel_chart(jwt_token: str, data: ExcelChartRequest):
     if not chart_def:
         raise HTTPException(status_code=400, detail="차트 생성 불가: 숫자 데이터가 있는 열이 없습니다")
 
-    # matplotlib 이미지 렌더링 → 파일 저장
-    image_url = render_chart_to_file(chart_def, sheet)
-    if image_url:
-        chart_def["image_url"] = image_url
-
     # 시트에 차트 추가
     if "charts" not in sheet:
         sheet["charts"] = []
@@ -1289,7 +1333,7 @@ async def generate_excel_chart(jwt_token: str, data: ExcelChartRequest):
     excel_doc = await db.generated_excel.find_one({"project_id": data.project_id})
     excel_doc["_id"] = str(excel_doc["_id"])
 
-    return {"success": True, "excel": excel_doc, "chart_image_url": image_url}
+    return {"success": True, "excel": excel_doc}
 
 
 @router.get("/{jwt_token}/api/generate/{project_id}/excel")
@@ -1374,6 +1418,32 @@ async def generate_onlyoffice_pptx_stream(jwt_token: str, data: GenerateRequest)
     if not combined_text.strip() and not data.instructions.strip():
         raise HTTPException(status_code=400, detail="리소스 또는 지침이 필요합니다.")
 
+    # 리소스가 없으면 지침으로 자동 웹 검색
+    if not combined_text.strip() and data.instructions.strip():
+        search_result = await search_web(data.instructions)
+        pages = search_result.get("pages", [])
+        if pages:
+            search_contents = []
+            search_sources = []
+            for page in pages:
+                title = page.get("title", "")
+                content = page.get("content", "")
+                url = page.get("url", "")
+                if content:
+                    search_contents.append(f"[{title}]\n{content}")
+                    if url:
+                        search_sources.append(url)
+            combined_text = "\n\n".join(search_contents)
+            if combined_text.strip():
+                await db.resources.insert_one({
+                    "project_id": data.project_id,
+                    "resource_type": "web",
+                    "title": f"자동 웹 검색: {data.instructions[:50]}",
+                    "content": combined_text,
+                    "sources": search_sources,
+                    "created_at": datetime.utcnow(),
+                })
+
     # 템플릿 슬라이드 분석
     slides = await get_template_slides(data.template_id)
     if not slides:
@@ -1435,6 +1505,22 @@ async def generate_onlyoffice_pptx_stream(jwt_token: str, data: GenerateRequest)
             template_lookup = {idx: slide for idx, slide in enumerate(slides)}
 
             for output_order, item in enumerate(llm_slides):
+                # Extract slide title
+                contents = item.get("contents", {})
+                slide_title = ""
+                if isinstance(contents, dict):
+                    title_obj = contents.get("title", {})
+                    if isinstance(title_obj, dict):
+                        slide_title = title_obj.get("text", "")
+                    elif isinstance(title_obj, str):
+                        slide_title = title_obj
+                yield _sse("item_progress", {
+                    "current": output_order + 1,
+                    "total": len(llm_slides),
+                    "title": slide_title or f"슬라이드 {output_order + 1}",
+                    "type": "slide"
+                })
+
                 template_idx = item.get("template_index", 0)
                 if template_idx not in template_lookup:
                     template_idx = _find_fallback_template(slides)
@@ -1584,6 +1670,22 @@ async def generate_onlyoffice_xlsx_stream(jwt_token: str, data: ExcelGenerateReq
 
             yield _sse("parsing", {"message": "데이터를 정리하고 있습니다..."})
 
+            sheets = llm_result.get("sheets", [])
+            for idx, sheet in enumerate(sheets):
+                row_count = len(sheet.get("rows", []))
+                col_count = len(sheet.get("columns", []))
+                chart_count = len(sheet.get("charts", []))
+                detail_parts = [f"{row_count}행 x {col_count}열"]
+                if chart_count > 0:
+                    detail_parts.append(f"차트 {chart_count}개")
+                yield _sse("item_progress", {
+                    "current": idx + 1,
+                    "total": len(sheets),
+                    "title": sheet.get("name", f"시트 {idx + 1}"),
+                    "type": "sheet",
+                    "detail": ", ".join(detail_parts)
+                })
+
             excel_doc = {
                 "project_id": data.project_id,
                 "sheets": llm_result.get("sheets", []),
@@ -1719,6 +1821,15 @@ async def generate_onlyoffice_docx_stream(jwt_token: str, data: DocxGenerateRequ
                 return
 
             yield _sse("parsing", {"message": "문서를 구성하고 있습니다..."})
+
+            sections = llm_result.get("sections", [])
+            for idx, section in enumerate(sections):
+                yield _sse("item_progress", {
+                    "current": idx + 1,
+                    "total": len(sections),
+                    "title": section.get("title", f"섹션 {idx + 1}"),
+                    "type": "section"
+                })
 
             docx_doc = {
                 "project_id": data.project_id,

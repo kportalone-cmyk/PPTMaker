@@ -69,7 +69,7 @@ document.addEventListener('visibilitychange', () => {
 // ============ 다국어 사전 ============
 const I18N = {
     ko: {
-        appTitle: 'PPTMaker',
+        appTitle: 'OfficeCoWork',
         appSubtitle: '기업용 파워포인트 자동 생성 솔루션',
         login: '로그인',
         logout: '로그아웃',
@@ -211,6 +211,8 @@ const I18N = {
         stopBtn: '중단',
         restartBtn: '재생성',
         msgStopped: '생성이 중단되었습니다',
+        msgResetting: '초기화 중...',
+        msgResetDone: '프로젝트가 초기화되었습니다',
         adminPage: '관리자 페이지',
         authChecking: '접속정보 확인중입니다',
         authCheckingSub: '잠시만 기다려주세요...',
@@ -218,7 +220,7 @@ const I18N = {
         authErrorDesc: '접속 링크가 만료되었거나 잘못된 인증정보입니다.\n관리자에게 문의하거나 다시 시도해주세요.',
     },
     en: {
-        appTitle: 'PPTMaker',
+        appTitle: 'OfficeCoWork',
         appSubtitle: 'Enterprise PowerPoint Auto-Generation',
         login: 'Login',
         logout: 'Logout',
@@ -360,6 +362,8 @@ const I18N = {
         stopBtn: 'Stop',
         restartBtn: 'Regenerate',
         msgStopped: 'Generation stopped',
+        msgResetting: 'Resetting...',
+        msgResetDone: 'Project has been reset',
         adminPage: 'Admin',
         authChecking: 'Verifying access...',
         authCheckingSub: 'Please wait a moment...',
@@ -367,7 +371,7 @@ const I18N = {
         authErrorDesc: 'The access link has expired or is invalid.\nPlease contact your administrator or try again.',
     },
     ja: {
-        appTitle: 'PPTMaker',
+        appTitle: 'OfficeCoWork',
         appSubtitle: '企業向けPPT自動生成',
         login: 'ログイン',
         logout: 'ログアウト',
@@ -509,6 +513,8 @@ const I18N = {
         stopBtn: '中断',
         restartBtn: '再生成',
         msgStopped: '生成が中断されました',
+        msgResetting: '初期化中...',
+        msgResetDone: 'プロジェクトが初期化されました',
         adminPage: '管理者ページ',
         authChecking: 'アクセス情報を確認中です',
         authCheckingSub: 'しばらくお待ちください...',
@@ -516,7 +522,7 @@ const I18N = {
         authErrorDesc: 'アクセスリンクの有効期限が切れているか、無効です。\n管理者にお問い合わせください。',
     },
     zh: {
-        appTitle: 'PPTMaker',
+        appTitle: 'OfficeCoWork',
         appSubtitle: '企业级PPT自动生成',
         login: '登录',
         logout: '退出',
@@ -658,6 +664,8 @@ const I18N = {
         stopBtn: '停止',
         restartBtn: '重新生成',
         msgStopped: '生成已停止',
+        msgResetting: '正在初始化...',
+        msgResetDone: '项目已初始化',
         adminPage: '管理后台',
         authChecking: '正在验证访问信息',
         authCheckingSub: '请稍候...',
@@ -1355,6 +1363,64 @@ async function openProject(projectId) {
     }
 }
 
+// ---- 프로젝트 제목 인라인 편집 ----
+var _titleSaving = false;
+
+function startTitleEdit() {
+    if ($('#titleEditInput').length) return; // 이미 편집 중
+    var $title = $('#wsProjectTitle');
+    var currentName = state.currentProject.name;
+    var $input = $('<input type="text" id="titleEditInput" class="ws-title-edit">');
+    $input.val(currentName);
+    $title.hide().after($input);
+    $input.focus();
+    $input[0].select();
+
+    $input.on('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            saveTitleEdit($input, currentName);
+        }
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            cancelTitleEdit($input);
+        }
+    });
+    $input.on('blur', function() {
+        if (!_titleSaving) {
+            saveTitleEdit($input, currentName);
+        }
+    });
+}
+
+async function saveTitleEdit($input, originalName) {
+    if (_titleSaving) return;
+    var newName = $input.val().trim();
+    if (!newName || newName === originalName) {
+        cancelTitleEdit($input);
+        return;
+    }
+    _titleSaving = true;
+    try {
+        await apiPut('/api/projects/' + state.currentProject._id, { name: newName });
+        state.currentProject.name = newName;
+        $('#wsProjectTitle').text(newName).show();
+        $input.remove();
+        showToast(t('msgUpdated'), 'success');
+        await loadProjects();
+    } catch (e) {
+        showToast(e.message, 'error');
+        cancelTitleEdit($input);
+    } finally {
+        _titleSaving = false;
+    }
+}
+
+function cancelTitleEdit($input) {
+    $('#wsProjectTitle').show();
+    $input.remove();
+}
+
 function renderProjectWorkspace() {
     $('#emptyState').hide();
     $('#btnAdminMain').hide();
@@ -1364,6 +1430,11 @@ function renderProjectWorkspace() {
     $('#wsProjectTitle').text(state.currentProject.name);
     const statusLabel = { draft: t('statusDraft'), preparing: t('statusPreparing'), generating: t('statusGenerating'), generated: t('statusGenerated'), stop_requested: t('statusStopped'), stopped: t('statusStopped') }[state.currentProject.status] || t('statusDraft');
     $('#wsProjectStatus').text(statusLabel).attr('class', 'ws-status ' + (state.currentProject.status || 'draft'));
+
+    // 제목 클릭 인라인 편집
+    $('#wsProjectTitle').off('click').on('click', function() {
+        startTitleEdit();
+    });
 
     // 리소스 칩
     renderResourceChips();
@@ -1375,6 +1446,10 @@ function renderProjectWorkspace() {
     // 모든 워크스페이스 숨기기
     $('#excelWorkspace').hide();
     $('#onlyofficeWorkspace').hide();
+    // 전체화면 상태 해제
+    $('#appView').removeClass('canvas-fullscreen');
+    $('.canvas-fullscreen-exit').remove();
+    $('#btnCanvasFullscreen').hide();
 
     if (isOnlyOffice) {
         // OnlyOffice 모드
@@ -1423,6 +1498,7 @@ function renderProjectWorkspace() {
         $('#btnAddSlide').hide();
         $('#btnGenerate span').text(t('generateExcel'));
         $('#instructionsInput').attr('placeholder', '엑셀에 정리할 내용에 대한 지침을 입력하세요...');
+        $('#btnCanvasFullscreen').show();
         initExcelWorkspace();
     } else {
         // 슬라이드 모드
@@ -1431,6 +1507,7 @@ function renderProjectWorkspace() {
         $('#btnAddSlide').show();
         $('#btnGenerate span').text(t('generateBtn'));
         $('#instructionsInput').attr('placeholder', t('instructionsPlaceholder'));
+        $('#btnCanvasFullscreen').show();
         renderSlideArea();
     }
 
@@ -1526,6 +1603,9 @@ async function executeProjectReset() {
         showLoading(t('msgResetting') || '초기화 중...');
         await apiPost('/api/projects/' + state.currentProject._id + '/reset', {});
         state.generatedSlides = [];
+        state.generatedExcel = null;
+        state.onlyofficeDoc = null;
+        state.generatedDocx = null;
         state.currentProject.status = 'draft';
         state.currentProject.template_id = null;
         state.selectedTemplateId = null;
@@ -2391,7 +2471,7 @@ async function generatePPT() {
     const slideCount = $('#slideCountSelect').val();
 
     if (!templateId) { showToast(t('msgSelectTemplate'), 'error'); return; }
-    if (state.resources.length === 0) { showToast(t('msgAddResources'), 'error'); return; }
+    if (state.resources.length === 0 && !instructions) { showToast(t('msgEnterInstructions', '지침을 입력하세요'), 'error'); return; }
 
     _isGenerating = true;
     _animationCancelled = true;
@@ -4269,22 +4349,178 @@ function setEditTool(tool) {
     }
 }
 
+// ---- Shape Catalog ----
+var SHAPE_CATEGORIES = [
+    { name: '직사각형', shapes: ['rectangle','rounded_rectangle','snip_1_rect','snip_2_diag_rect','round_1_rect','round_2_diag_rect'] },
+    { name: '기본 도형', shapes: ['ellipse','triangle','right_triangle','parallelogram','trapezoid','diamond','pentagon','hexagon','heptagon','octagon','decagon','dodecagon','cross','donut','no_smoking','block_arc','heart','lightning_bolt','sun','moon','cloud','smiley_face','folded_corner','frame','teardrop','plaque','brace_pair','bracket_pair'] },
+    { name: '블록 화살표', shapes: ['right_arrow','left_arrow','up_arrow','down_arrow','left_right_arrow','up_down_arrow','quad_arrow','notched_right_arrow','chevron','home_plate','striped_right_arrow','bent_arrow','u_turn_arrow','circular_arrow'] },
+    { name: '수학', shapes: ['math_plus','math_minus','math_multiply','math_divide','math_equal','math_not_equal'] },
+    { name: '별 및 현수막', shapes: ['star_4_point','star_5_point','star_6_point','star_8_point','star_10_point','star_12_point','star_16_point','star_24_point','star_32_point','explosion_1','explosion_2','wave','double_wave','ribbon'] },
+    { name: '설명선', shapes: ['wedge_rect_callout','wedge_round_rect_callout','wedge_ellipse_callout','cloud_callout','border_callout_1','border_callout_2','border_callout_3'] },
+    { name: '선', shapes: ['line','arrow'] },
+];
+
+function _regPolygonPts(cx, cy, r, n, rotDeg) {
+    var pts = [];
+    var startAngle = (rotDeg || -90) * Math.PI / 180;
+    for (var i = 0; i < n; i++) {
+        var a = startAngle + (2 * Math.PI * i / n);
+        pts.push((cx + r * Math.cos(a)).toFixed(1) + ',' + (cy + r * Math.sin(a)).toFixed(1));
+    }
+    return pts.join(' ');
+}
+
+function _starPts(cx, cy, outerR, innerR, points) {
+    var pts = [];
+    var startAngle = -Math.PI / 2;
+    for (var i = 0; i < points * 2; i++) {
+        var a = startAngle + (Math.PI * i / points);
+        var r = (i % 2 === 0) ? outerR : innerR;
+        pts.push((cx + r * Math.cos(a)).toFixed(1) + ',' + (cy + r * Math.sin(a)).toFixed(1));
+    }
+    return pts.join(' ');
+}
+
+function _getShapeIconSVG(type) {
+    var s = 'stroke="#444" stroke-width="1.2" fill="none"';
+    switch(type) {
+        // 직사각형
+        case 'rectangle': return '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" '+s+'/></svg>';
+        case 'rounded_rectangle': return '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="4" '+s+'/></svg>';
+        case 'snip_1_rect': return '<svg viewBox="0 0 24 24"><path d="M3 5h14l4 4v10H3z" '+s+'/></svg>';
+        case 'snip_2_diag_rect': return '<svg viewBox="0 0 24 24"><path d="M7 5h14v10l-4 4H3V9z" '+s+'/></svg>';
+        case 'round_1_rect': return '<svg viewBox="0 0 24 24"><path d="M3 5h14a4 4 0 014 4v10H3z" '+s+'/></svg>';
+        case 'round_2_diag_rect': return '<svg viewBox="0 0 24 24"><path d="M7 5h14v10a4 4 0 01-4 4H3V9a4 4 0 014-4z" '+s+'/></svg>';
+        // 기본 도형
+        case 'ellipse': return '<svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="9" ry="7" '+s+'/></svg>';
+        case 'triangle': return '<svg viewBox="0 0 24 24"><polygon points="12,3 22,21 2,21" '+s+'/></svg>';
+        case 'right_triangle': return '<svg viewBox="0 0 24 24"><polygon points="3,21 3,3 21,21" '+s+'/></svg>';
+        case 'parallelogram': return '<svg viewBox="0 0 24 24"><polygon points="7,5 22,5 17,19 2,19" '+s+'/></svg>';
+        case 'trapezoid': return '<svg viewBox="0 0 24 24"><polygon points="6,5 18,5 22,19 2,19" '+s+'/></svg>';
+        case 'diamond': return '<svg viewBox="0 0 24 24"><polygon points="12,2 22,12 12,22 2,12" '+s+'/></svg>';
+        case 'pentagon': return '<svg viewBox="0 0 24 24"><polygon points="'+_regPolygonPts(12,12,10,5)+'" '+s+'/></svg>';
+        case 'hexagon': return '<svg viewBox="0 0 24 24"><polygon points="'+_regPolygonPts(12,12,10,6)+'" '+s+'/></svg>';
+        case 'heptagon': return '<svg viewBox="0 0 24 24"><polygon points="'+_regPolygonPts(12,12,10,7)+'" '+s+'/></svg>';
+        case 'octagon': return '<svg viewBox="0 0 24 24"><polygon points="'+_regPolygonPts(12,12,10,8)+'" '+s+'/></svg>';
+        case 'decagon': return '<svg viewBox="0 0 24 24"><polygon points="'+_regPolygonPts(12,12,10,10)+'" '+s+'/></svg>';
+        case 'dodecagon': return '<svg viewBox="0 0 24 24"><polygon points="'+_regPolygonPts(12,12,10,12)+'" '+s+'/></svg>';
+        case 'cross': return '<svg viewBox="0 0 24 24"><polygon points="8,2 16,2 16,8 22,8 22,16 16,16 16,22 8,22 8,16 2,16 2,8 8,8" '+s+'/></svg>';
+        case 'donut': return '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" '+s+'/><circle cx="12" cy="12" r="5" '+s+'/></svg>';
+        case 'no_smoking': return '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" '+s+'/><line x1="5" y1="5" x2="19" y2="19" '+s+'/></svg>';
+        case 'block_arc': return '<svg viewBox="0 0 24 24"><path d="M4 20A10 10 0 0122 12h-4a6 6 0 00-12 0v8z" '+s+'/></svg>';
+        case 'heart': return '<svg viewBox="0 0 24 24"><path d="M12 21C12 21 3 14 3 8.5C3 5.4 5.4 3 8.5 3c1.7 0 3.3.8 3.5 2 .2-1.2 1.8-2 3.5-2C18.6 3 21 5.4 21 8.5 21 14 12 21 12 21z" '+s+'/></svg>';
+        case 'lightning_bolt': return '<svg viewBox="0 0 24 24"><polygon points="13,2 4,14 11,14 10,22 20,10 13,10" '+s+'/></svg>';
+        case 'sun': return '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5" '+s+'/><line x1="12" y1="2" x2="12" y2="5" '+s+'/><line x1="12" y1="19" x2="12" y2="22" '+s+'/><line x1="2" y1="12" x2="5" y2="12" '+s+'/><line x1="19" y1="12" x2="22" y2="12" '+s+'/><line x1="4.9" y1="4.9" x2="6.8" y2="6.8" '+s+'/><line x1="17.2" y1="17.2" x2="19.1" y2="19.1" '+s+'/><line x1="4.9" y1="19.1" x2="6.8" y2="17.2" '+s+'/><line x1="17.2" y1="6.8" x2="19.1" y2="4.9" '+s+'/></svg>';
+        case 'moon': return '<svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" '+s+'/></svg>';
+        case 'cloud': return '<svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 01-.8-7.9A5.5 5.5 0 0117 9.6 3.5 3.5 0 0120 13a3.5 3.5 0 01-3.5 3.5H6z" '+s+'/></svg>';
+        case 'smiley_face': return '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" '+s+'/><path d="M8 14s1.5 2 4 2 4-2 4-2" '+s+'/><circle cx="9" cy="9" r="1" fill="#444" stroke="none"/><circle cx="15" cy="9" r="1" fill="#444" stroke="none"/></svg>';
+        case 'folded_corner': return '<svg viewBox="0 0 24 24"><path d="M3 3h18v13l-5 5H3z" '+s+'/><path d="M16 16v5l5-5z" '+s+'/></svg>';
+        case 'frame': return '<svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" '+s+'/><rect x="5" y="5" width="14" height="14" '+s+'/></svg>';
+        case 'teardrop': return '<svg viewBox="0 0 24 24"><path d="M12 3C12 3 5 11 5 15a7 7 0 0014 0c0-4-7-12-7-12z" '+s+'/></svg>';
+        case 'plaque': return '<svg viewBox="0 0 24 24"><path d="M4 4c2 2 2 4 0 6s-2 4 0 6c0 2 2 4 4 4 2-2 4-2 6 0s4 2 6 0c2 0 4-2 4-4-2-2-2-4 0-6s2-4 0-6c0-2-2-4-4-4-2 2-4 2-6 0s-4-2-6 0C6 0 4 2 4 4z" '+s+'/></svg>';
+        case 'brace_pair': return '<svg viewBox="0 0 24 24"><path d="M8 3c-3 0-4 1-4 4v2c0 2-1 3-2 3 1 0 2 1 2 3v2c0 3 1 4 4 4" '+s+'/><path d="M16 3c3 0 4 1 4 4v2c0 2 1 3 2 3-1 0-2 1-2 3v2c0 3-1 4-4 4" '+s+'/></svg>';
+        case 'bracket_pair': return '<svg viewBox="0 0 24 24"><path d="M8 3H5v18h3" '+s+'/><path d="M16 3h3v18h-3" '+s+'/></svg>';
+        // 블록 화살표
+        case 'right_arrow': return '<svg viewBox="0 0 24 24"><polygon points="2,7 15,7 15,3 22,12 15,21 15,17 2,17" '+s+'/></svg>';
+        case 'left_arrow': return '<svg viewBox="0 0 24 24"><polygon points="22,7 9,7 9,3 2,12 9,21 9,17 22,17" '+s+'/></svg>';
+        case 'up_arrow': return '<svg viewBox="0 0 24 24"><polygon points="7,22 7,9 3,9 12,2 21,9 17,9 17,22" '+s+'/></svg>';
+        case 'down_arrow': return '<svg viewBox="0 0 24 24"><polygon points="7,2 7,15 3,15 12,22 21,15 17,15 17,2" '+s+'/></svg>';
+        case 'left_right_arrow': return '<svg viewBox="0 0 24 24"><polygon points="7,3 7,7 17,7 17,3 22,12 17,21 17,17 7,17 7,21 2,12" '+s+'/></svg>';
+        case 'up_down_arrow': return '<svg viewBox="0 0 24 24"><polygon points="3,7 12,2 21,7 17,7 17,17 21,17 12,22 3,17 7,17 7,7" '+s+'/></svg>';
+        case 'quad_arrow': return '<svg viewBox="0 0 24 24"><polygon points="12,1 16,5 14,5 14,10 19,10 19,8 23,12 19,16 19,14 14,14 14,19 16,19 12,23 8,19 10,19 10,14 5,14 5,16 1,12 5,8 5,10 10,10 10,5 8,5" '+s+'/></svg>';
+        case 'notched_right_arrow': return '<svg viewBox="0 0 24 24"><polygon points="2,7 15,7 15,3 22,12 15,21 15,17 2,17 5,12" '+s+'/></svg>';
+        case 'chevron': return '<svg viewBox="0 0 24 24"><polygon points="2,3 17,3 22,12 17,21 2,21 7,12" '+s+'/></svg>';
+        case 'home_plate': return '<svg viewBox="0 0 24 24"><polygon points="2,3 17,3 22,12 17,21 2,21" '+s+'/></svg>';
+        case 'striped_right_arrow': return '<svg viewBox="0 0 24 24"><polygon points="8,7 15,7 15,3 22,12 15,21 15,17 8,17" '+s+'/><line x1="4" y1="7" x2="4" y2="17" '+s+'/><line x1="6" y1="7" x2="6" y2="17" '+s+'/></svg>';
+        case 'bent_arrow': return '<svg viewBox="0 0 24 24"><path d="M3 21V10h9V5l6 7-6 7v-5H7v7z" '+s+'/></svg>';
+        case 'u_turn_arrow': return '<svg viewBox="0 0 24 24"><path d="M6 21V10a6 6 0 0112 0v4h3l-5 6-5-6h3v-4a2 2 0 00-4 0v11z" '+s+'/></svg>';
+        case 'circular_arrow': return '<svg viewBox="0 0 24 24"><path d="M12 4a8 8 0 017.6 5.5" '+s+'/><path d="M20 4v6h-6" '+s+'/><path d="M12 20a8 8 0 01-7.6-5.5" '+s+'/></svg>';
+        // 수학
+        case 'math_plus': return '<svg viewBox="0 0 24 24"><line x1="12" y1="4" x2="12" y2="20" '+s+'/><line x1="4" y1="12" x2="20" y2="12" '+s+'/></svg>';
+        case 'math_minus': return '<svg viewBox="0 0 24 24"><line x1="4" y1="12" x2="20" y2="12" '+s+'/></svg>';
+        case 'math_multiply': return '<svg viewBox="0 0 24 24"><line x1="5" y1="5" x2="19" y2="19" '+s+'/><line x1="19" y1="5" x2="5" y2="19" '+s+'/></svg>';
+        case 'math_divide': return '<svg viewBox="0 0 24 24"><line x1="4" y1="12" x2="20" y2="12" '+s+'/><circle cx="12" cy="7" r="1.5" fill="#444" stroke="none"/><circle cx="12" cy="17" r="1.5" fill="#444" stroke="none"/></svg>';
+        case 'math_equal': return '<svg viewBox="0 0 24 24"><line x1="4" y1="9" x2="20" y2="9" '+s+'/><line x1="4" y1="15" x2="20" y2="15" '+s+'/></svg>';
+        case 'math_not_equal': return '<svg viewBox="0 0 24 24"><line x1="4" y1="9" x2="20" y2="9" '+s+'/><line x1="4" y1="15" x2="20" y2="15" '+s+'/><line x1="16" y1="4" x2="8" y2="20" '+s+'/></svg>';
+        // 별 및 현수막
+        case 'star_4_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,3.8,4)+'" '+s+'/></svg>';
+        case 'star_5_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,3.8,5)+'" '+s+'/></svg>';
+        case 'star_6_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,5,6)+'" '+s+'/></svg>';
+        case 'star_8_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,5,8)+'" '+s+'/></svg>';
+        case 'star_10_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,6,10)+'" '+s+'/></svg>';
+        case 'star_12_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,6,12)+'" '+s+'/></svg>';
+        case 'star_16_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,7,16)+'" '+s+'/></svg>';
+        case 'star_24_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,7.5,24)+'" '+s+'/></svg>';
+        case 'star_32_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,8,32)+'" '+s+'/></svg>';
+        case 'explosion_1': return '<svg viewBox="0 0 24 24"><polygon points="12,2 14,8 20,4 16,10 23,12 16,14 20,20 14,16 12,22 10,16 4,20 8,14 1,12 8,10 4,4 10,8" '+s+'/></svg>';
+        case 'explosion_2': return '<svg viewBox="0 0 24 24"><polygon points="12,1 13,7 18,3 15,9 22,8 17,12 23,16 16,15 18,21 13,17 12,23 11,17 6,21 8,15 1,16 7,12 2,8 9,9 6,3 11,7" '+s+'/></svg>';
+        case 'wave': return '<svg viewBox="0 0 24 24"><path d="M2 8c3-4 6-4 10 0s7 4 10 0v10c-3 4-6 4-10 0s-7-4-10 0z" '+s+'/></svg>';
+        case 'double_wave': return '<svg viewBox="0 0 24 24"><path d="M2 6c3-3 6-3 10 0s7 3 10 0" '+s+'/><path d="M2 12c3-3 6-3 10 0s7 3 10 0" '+s+'/><path d="M2 18c3-3 6-3 10 0s7 3 10 0" '+s+'/></svg>';
+        case 'ribbon': return '<svg viewBox="0 0 24 24"><path d="M2 7h20v10H2z" '+s+'/><path d="M5 7V4l-3 3M19 7V4l3 3M5 17v3l-3-3M19 17v3l3-3" '+s+'/></svg>';
+        // 설명선
+        case 'wedge_rect_callout': return '<svg viewBox="0 0 24 24"><path d="M2 3h20v13H14l-2 5-2-5H2z" '+s+'/></svg>';
+        case 'wedge_round_rect_callout': return '<svg viewBox="0 0 24 24"><path d="M5 3h14a3 3 0 013 3v7a3 3 0 01-3 3H14l-2 5-2-5H5a3 3 0 01-3-3V6a3 3 0 013-3z" '+s+'/></svg>';
+        case 'wedge_ellipse_callout': return '<svg viewBox="0 0 24 24"><ellipse cx="12" cy="9" rx="10" ry="7" '+s+'/><path d="M10 15l-1 6 4-5" '+s+'/></svg>';
+        case 'cloud_callout': return '<svg viewBox="0 0 24 24"><path d="M6 16a4 4 0 01-.8-7.9A5.5 5.5 0 0117 6.6 3.5 3.5 0 0120 10a3.5 3.5 0 01-3.5 3.5H6z" '+s+'/><circle cx="8" cy="19" r="1.5" '+s+'/><circle cx="5" cy="21" r="1" '+s+'/></svg>';
+        case 'border_callout_1': return '<svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="14" '+s+'/><line x1="8" y1="16" x2="6" y2="22" '+s+'/></svg>';
+        case 'border_callout_2': return '<svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="14" '+s+'/><polyline points="8,16 10,19 6,22" '+s+'/></svg>';
+        case 'border_callout_3': return '<svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="14" '+s+'/><polyline points="8,16 12,18 8,20 6,22" '+s+'/></svg>';
+        // 선
+        case 'line': return '<svg viewBox="0 0 24 24"><line x1="3" y1="19" x2="21" y2="5" '+s+'/></svg>';
+        case 'arrow': return '<svg viewBox="0 0 24 24"><line x1="3" y1="12" x2="18" y2="12" '+s+'/><path d="M15 8l4 4-4 4" '+s+'/></svg>';
+        default: return '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" '+s+'/></svg>';
+    }
+}
+
+function _buildShapePickerHTML() {
+    var html = '';
+    SHAPE_CATEGORIES.forEach(function(cat) {
+        html += '<div class="shape-picker-category">' + cat.name + '</div>';
+        html += '<div class="shape-picker-grid">';
+        cat.shapes.forEach(function(shapeType) {
+            html += '<button class="shape-picker-item" onclick="insertEditShape(\'' + shapeType + '\')" title="' + shapeType + '">';
+            html += _getShapeIconSVG(shapeType);
+            html += '</button>';
+        });
+        html += '</div>';
+    });
+    return html;
+}
+
+var _shapePickerInitialized = false;
+
 function toggleEditShapeMenu() {
-    $('#editShapeMenu').toggle();
+    var $menu = $('#editShapeMenu');
+    if (!_shapePickerInitialized) {
+        $menu.html(_buildShapePickerHTML());
+        _shapePickerInitialized = true;
+    }
+    $menu.toggle();
+    if ($menu.is(':visible')) {
+        setTimeout(function() {
+            $(document).one('click', function(e) {
+                if (!$(e.target).closest('#editShapeMenu, #editToolShape').length) {
+                    $menu.hide();
+                }
+            });
+        }, 0);
+    }
 }
 
 function insertEditShape(shapeType) {
     $('#editShapeMenu').hide();
     const slide = state.generatedSlides[state.currentSlideIndex];
     if (!slide) return;
+    var isLine = (shapeType === 'line' || shapeType === 'arrow');
+    var isBlockArrow = ['right_arrow','left_arrow','up_arrow','down_arrow','left_right_arrow','up_down_arrow','quad_arrow','notched_right_arrow','chevron','home_plate','striped_right_arrow','bent_arrow','u_turn_arrow','circular_arrow'].indexOf(shapeType) >= 0;
     const newObj = {
         obj_id: 'obj_' + Date.now(),
         obj_type: 'shape',
-        x: 330, y: 180, width: 300, height: 180,
+        x: 330, y: 180, width: isBlockArrow ? 300 : 300, height: isLine ? 4 : (isBlockArrow ? 180 : 180),
         shape_style: {
             shape_type: shapeType,
-            fill_color: '#4A90D9',
-            fill_opacity: 0.2,
+            fill_color: isLine ? 'transparent' : '#4A90D9',
+            fill_opacity: isLine ? 0 : 0.2,
             stroke_color: '#2d5a8e',
             stroke_width: 2,
             stroke_dash: 'solid',
@@ -4292,9 +4528,7 @@ function insertEditShape(shapeType) {
             arrow_head: shapeType === 'arrow' ? 'end' : 'none',
         },
     };
-    if (shapeType === 'line' || shapeType === 'arrow') {
-        newObj.height = 4;
-        newObj.width = 300;
+    if (isLine) {
         newObj.y = 270;
     }
     slide.objects.push(newObj);
@@ -4342,23 +4576,387 @@ function _createEditShapeSVG(obj) {
     const dash = s.stroke_dash === 'dashed' ? `stroke-dasharray="${sw * 3} ${sw * 2}"` : (s.stroke_dash === 'dotted' ? `stroke-dasharray="${sw} ${sw}"` : '');
     const half = sw / 2;
     const st = s.shape_type || 'rectangle';
+    const fa = `fill="${fill}" fill-opacity="${opacity}" stroke="${stroke}" stroke-width="${sw}" ${dash}`;
+    const cx = w / 2, cy = h / 2;
     let inner = '';
-    if (st === 'ellipse') {
-        inner = `<ellipse cx="${w / 2}" cy="${h / 2}" rx="${w / 2 - half}" ry="${h / 2 - half}" fill="${fill}" fill-opacity="${opacity}" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
-    } else if (st === 'rounded_rectangle') {
-        const r = s.border_radius || 12;
-        inner = `<rect x="${half}" y="${half}" width="${w - sw}" height="${h - sw}" rx="${r}" fill="${fill}" fill-opacity="${opacity}" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
-    } else if (st === 'line' || st === 'arrow') {
-        const mid = h / 2;
-        let marker = '';
-        if (st === 'arrow') {
-            marker = `<defs><marker id="ah_${obj.obj_id}" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="${stroke}"/></marker></defs>`;
-            inner = `${marker}<line x1="${half}" y1="${mid}" x2="${w - half}" y2="${mid}" stroke="${stroke}" stroke-width="${sw}" ${dash} marker-end="url(#ah_${obj.obj_id})"/>`;
-        } else {
-            inner = `<line x1="${half}" y1="${mid}" x2="${w - half}" y2="${mid}" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+
+    switch(st) {
+        case 'ellipse':
+            inner = `<ellipse cx="${cx}" cy="${cy}" rx="${cx - half}" ry="${cy - half}" ${fa}/>`;
+            break;
+        case 'rounded_rectangle': {
+            const r = s.border_radius || 12;
+            inner = `<rect x="${half}" y="${half}" width="${w - sw}" height="${h - sw}" rx="${r}" ${fa}/>`;
+            break;
         }
-    } else {
-        inner = `<rect x="${half}" y="${half}" width="${w - sw}" height="${h - sw}" fill="${fill}" fill-opacity="${opacity}" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+        case 'snip_1_rect': {
+            const sn = Math.min(w, h) * 0.2;
+            inner = `<path d="M${half} ${half}h${w - sw - sn}l${sn} ${sn}v${h - sw - sn}H${half}z" ${fa}/>`;
+            break;
+        }
+        case 'snip_2_diag_rect': {
+            const sn = Math.min(w, h) * 0.2;
+            inner = `<path d="M${half + sn} ${half}h${w - sw - sn}v${h - sw - sn}l-${sn} ${sn}H${half}V${half + sn}z" ${fa}/>`;
+            break;
+        }
+        case 'round_1_rect': {
+            const rr = Math.min(w, h) * 0.25;
+            inner = `<path d="M${half} ${half}h${w - sw - rr}a${rr} ${rr} 0 01${rr} ${rr}v${h - sw - rr}H${half}z" ${fa}/>`;
+            break;
+        }
+        case 'round_2_diag_rect': {
+            const rr = Math.min(w, h) * 0.25;
+            inner = `<path d="M${half + rr} ${half}h${w - sw - rr}v${h - sw - rr}a${rr} ${rr} 0 01-${rr} ${rr}H${half}V${half + rr}a${rr} ${rr} 0 01${rr}-${rr}z" ${fa}/>`;
+            break;
+        }
+        case 'triangle':
+            inner = `<polygon points="${cx},${half} ${w - half},${h - half} ${half},${h - half}" ${fa}/>`;
+            break;
+        case 'right_triangle':
+            inner = `<polygon points="${half},${h - half} ${half},${half} ${w - half},${h - half}" ${fa}/>`;
+            break;
+        case 'parallelogram': {
+            const off = w * 0.2;
+            inner = `<polygon points="${off},${half} ${w - half},${half} ${w - off},${h - half} ${half},${h - half}" ${fa}/>`;
+            break;
+        }
+        case 'trapezoid': {
+            const off = w * 0.15;
+            inner = `<polygon points="${off},${half} ${w - off},${half} ${w - half},${h - half} ${half},${h - half}" ${fa}/>`;
+            break;
+        }
+        case 'diamond':
+            inner = `<polygon points="${cx},${half} ${w - half},${cy} ${cx},${h - half} ${half},${cy}" ${fa}/>`;
+            break;
+        case 'pentagon':
+            inner = `<polygon points="${_regPolygonPts(cx, cy, Math.min(cx, cy) - half, 5)}" ${fa}/>`;
+            break;
+        case 'hexagon':
+            inner = `<polygon points="${_regPolygonPts(cx, cy, Math.min(cx, cy) - half, 6)}" ${fa}/>`;
+            break;
+        case 'heptagon':
+            inner = `<polygon points="${_regPolygonPts(cx, cy, Math.min(cx, cy) - half, 7)}" ${fa}/>`;
+            break;
+        case 'octagon':
+            inner = `<polygon points="${_regPolygonPts(cx, cy, Math.min(cx, cy) - half, 8)}" ${fa}/>`;
+            break;
+        case 'decagon':
+            inner = `<polygon points="${_regPolygonPts(cx, cy, Math.min(cx, cy) - half, 10)}" ${fa}/>`;
+            break;
+        case 'dodecagon':
+            inner = `<polygon points="${_regPolygonPts(cx, cy, Math.min(cx, cy) - half, 12)}" ${fa}/>`;
+            break;
+        case 'cross': {
+            const t3 = w / 3, t3h = h / 3;
+            inner = `<polygon points="${t3},${half} ${2*t3},${half} ${2*t3},${t3h} ${w-half},${t3h} ${w-half},${2*t3h} ${2*t3},${2*t3h} ${2*t3},${h-half} ${t3},${h-half} ${t3},${2*t3h} ${half},${2*t3h} ${half},${t3h} ${t3},${t3h}" ${fa}/>`;
+            break;
+        }
+        case 'donut': {
+            const or = Math.min(cx, cy) - half;
+            const ir = or * 0.5;
+            inner = `<circle cx="${cx}" cy="${cy}" r="${or}" ${fa}/><circle cx="${cx}" cy="${cy}" r="${ir}" fill="white" fill-opacity="1" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+            break;
+        }
+        case 'no_smoking': {
+            const r = Math.min(cx, cy) - half;
+            inner = `<circle cx="${cx}" cy="${cy}" r="${r}" ${fa}/><line x1="${cx - r * 0.7}" y1="${cy - r * 0.7}" x2="${cx + r * 0.7}" y2="${cy + r * 0.7}" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+            break;
+        }
+        case 'block_arc': {
+            const r = Math.min(w, h) * 0.45;
+            inner = `<path d="M${half} ${h - half}A${r} ${r} 0 01${w - half} ${cy}h-${w * 0.2}a${r * 0.6} ${r * 0.6} 0 00-${w * 0.6 - sw} ${cy - half - (h - half - cy)}v${h * 0.35}z" ${fa}/>`;
+            break;
+        }
+        case 'heart': {
+            const hw = w * 0.5, hh = h * 0.3;
+            inner = `<path d="M${cx} ${h * 0.85}C${cx} ${h * 0.85} ${half} ${h * 0.55} ${half} ${hh + half}C${half} ${half} ${cx * 0.5} ${half} ${cx} ${h * 0.35}C${cx + cx * 0.5} ${half} ${w - half} ${half} ${w - half} ${hh + half}C${w - half} ${h * 0.55} ${cx} ${h * 0.85} ${cx} ${h * 0.85}z" ${fa}/>`;
+            break;
+        }
+        case 'lightning_bolt':
+            inner = `<polygon points="${w*0.55},${half} ${w*0.2},${cy} ${w*0.5},${cy} ${w*0.4},${h-half} ${w*0.85},${cy} ${w*0.55},${cy}" ${fa}/>`;
+            break;
+        case 'sun': {
+            const sr = Math.min(cx, cy) * 0.4;
+            const or2 = Math.min(cx, cy) - half;
+            inner = `<circle cx="${cx}" cy="${cy}" r="${sr}" ${fa}/>`;
+            for (var i = 0; i < 12; i++) {
+                var a = Math.PI * 2 * i / 12;
+                inner += `<line x1="${cx + sr * 1.2 * Math.cos(a)}" y1="${cy + sr * 1.2 * Math.sin(a)}" x2="${cx + or2 * Math.cos(a)}" y2="${cy + or2 * Math.sin(a)}" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+            }
+            break;
+        }
+        case 'moon':
+            inner = `<path d="M${w * 0.7} ${half}a${cy} ${cy} 0 10 0 ${h - sw}A${cx * 0.7} ${cy} 0 01${w * 0.7} ${half}z" ${fa}/>`;
+            break;
+        case 'cloud':
+            inner = `<path d="M${w*0.25} ${h*0.7}a${w*0.15} ${h*0.15} 0 01${w*0.02}-${h*0.3} ${w*0.2} ${h*0.2} 0 01${w*0.38}-${h*0.12} ${w*0.15} ${h*0.12} 0 01${w*0.28} ${h*0.05} ${w*0.12} ${h*0.12} 0 01${w*0.02} ${h*0.22}z" ${fa}/>`;
+            break;
+        case 'smiley_face': {
+            const fr = Math.min(cx, cy) - half;
+            inner = `<circle cx="${cx}" cy="${cy}" r="${fr}" ${fa}/>`;
+            inner += `<circle cx="${cx - fr * 0.3}" cy="${cy - fr * 0.2}" r="${fr * 0.08}" fill="${stroke}" stroke="none"/>`;
+            inner += `<circle cx="${cx + fr * 0.3}" cy="${cy - fr * 0.2}" r="${fr * 0.08}" fill="${stroke}" stroke="none"/>`;
+            inner += `<path d="M${cx - fr * 0.35} ${cy + fr * 0.15}q${fr * 0.35} ${fr * 0.4} ${fr * 0.7} 0" fill="none" stroke="${stroke}" stroke-width="${sw}"/>`;
+            break;
+        }
+        case 'folded_corner': {
+            const fc = Math.min(w, h) * 0.2;
+            inner = `<path d="M${half} ${half}h${w - sw}v${h - sw - fc}l-${fc} ${fc}H${half}z" ${fa}/>`;
+            inner += `<path d="M${w - half - fc} ${h - half}v-${fc}h${fc}z" fill="none" stroke="${stroke}" stroke-width="${sw}"/>`;
+            break;
+        }
+        case 'frame': {
+            const ft = Math.min(w, h) * 0.12;
+            inner = `<rect x="${half}" y="${half}" width="${w - sw}" height="${h - sw}" ${fa}/>`;
+            inner += `<rect x="${ft}" y="${ft}" width="${w - ft * 2}" height="${h - ft * 2}" fill="white" fill-opacity="1" stroke="${stroke}" stroke-width="${sw}"/>`;
+            break;
+        }
+        case 'teardrop':
+            inner = `<path d="M${cx} ${half}C${cx} ${half} ${half} ${cy * 0.8} ${half} ${cy + cy * 0.3}a${cx - half} ${cy * 0.6} 0 00${w - sw} 0C${w - half} ${cy * 0.8} ${cx} ${half} ${cx} ${half}z" ${fa}/>`;
+            break;
+        case 'plaque': {
+            const pr = Math.min(w, h) * 0.15;
+            inner = `<path d="M${half + pr} ${half}h${w - sw - 2 * pr}a${pr} ${pr} 0 00${pr} ${pr}v${h - sw - 2 * pr}a${pr} ${pr} 0 00-${pr} ${pr}H${half + pr}a${pr} ${pr} 0 00-${pr}-${pr}V${half + pr}a${pr} ${pr} 0 00${pr}-${pr}z" ${fa}/>`;
+            break;
+        }
+        case 'brace_pair': {
+            const bw = w * 0.1;
+            inner = `<path d="M${bw + half} ${half}c-${bw} 0-${bw} ${h * 0.1}-${bw} ${h * 0.25}s0 ${h * 0.15}-${bw * 0.5} ${h * 0.25} ${bw * 0.5} ${h * 0.1} ${bw * 0.5} ${h * 0.25}s0 ${h * 0.15} ${bw} ${h * 0.25}" fill="none" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+            inner += `<path d="M${w - bw - half} ${half}c${bw} 0 ${bw} ${h * 0.1} ${bw} ${h * 0.25}s0 ${h * 0.15} ${bw * 0.5} ${h * 0.25}-${bw * 0.5} ${h * 0.1}-${bw * 0.5} ${h * 0.25}s0 ${h * 0.15}-${bw} ${h * 0.25}" fill="none" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+            break;
+        }
+        case 'bracket_pair': {
+            const bkw = w * 0.1;
+            inner = `<path d="M${bkw + half} ${half}H${half}v${h - sw}h${bkw}" fill="none" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+            inner += `<path d="M${w - bkw - half} ${half}H${w - half}v${h - sw}h-${bkw}" fill="none" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+            break;
+        }
+        // 블록 화살표
+        case 'right_arrow': {
+            const sh = h * 0.3, ah = h * 0.5, aw = w * 0.65;
+            inner = `<polygon points="${half},${sh} ${aw},${sh} ${aw},${half} ${w-half},${cy} ${aw},${h-half} ${aw},${h-sh} ${half},${h-sh}" ${fa}/>`;
+            break;
+        }
+        case 'left_arrow': {
+            const sh = h * 0.3, aw = w * 0.35;
+            inner = `<polygon points="${w-half},${sh} ${aw},${sh} ${aw},${half} ${half},${cy} ${aw},${h-half} ${aw},${h-sh} ${w-half},${h-sh}" ${fa}/>`;
+            break;
+        }
+        case 'up_arrow': {
+            const sw2 = w * 0.3, ah2 = h * 0.35;
+            inner = `<polygon points="${sw2},${h-half} ${sw2},${ah2} ${half},${ah2} ${cx},${half} ${w-half},${ah2} ${w-sw2},${ah2} ${w-sw2},${h-half}" ${fa}/>`;
+            break;
+        }
+        case 'down_arrow': {
+            const sw2 = w * 0.3, ah2 = h * 0.65;
+            inner = `<polygon points="${sw2},${half} ${sw2},${ah2} ${half},${ah2} ${cx},${h-half} ${w-half},${ah2} ${w-sw2},${ah2} ${w-sw2},${half}" ${fa}/>`;
+            break;
+        }
+        case 'left_right_arrow': {
+            const sh3 = h * 0.3, aw3 = w * 0.25;
+            inner = `<polygon points="${half},${cy} ${aw3},${half} ${aw3},${sh3} ${w-aw3},${sh3} ${w-aw3},${half} ${w-half},${cy} ${w-aw3},${h-half} ${w-aw3},${h-sh3} ${aw3},${h-sh3} ${aw3},${h-half}" ${fa}/>`;
+            break;
+        }
+        case 'up_down_arrow': {
+            const sw3 = w * 0.3, ah3 = h * 0.25;
+            inner = `<polygon points="${cx},${half} ${w-half},${ah3} ${w-sw3},${ah3} ${w-sw3},${h-ah3} ${w-half},${h-ah3} ${cx},${h-half} ${half},${h-ah3} ${sw3},${h-ah3} ${sw3},${ah3} ${half},${ah3}" ${fa}/>`;
+            break;
+        }
+        case 'quad_arrow': {
+            const qs = Math.min(w, h) * 0.15, qe = Math.min(w, h) * 0.35;
+            inner = `<polygon points="${cx},${half} ${cx+qe},${qe} ${cx+qs},${qe} ${cx+qs},${cy-qs} ${cx+qe},${cy-qs} ${cx+qe},${cy-qe} ${w-half},${cy} ${cx+qe},${cy+qe} ${cx+qe},${cy+qs} ${cx+qs},${cy+qs} ${cx+qs},${cy+qe} ${cx+qe},${cy+qe} ${cx},${h-half} ${cx-qe},${cy+qe} ${cx-qs},${cy+qe} ${cx-qs},${cy+qs} ${cx-qe},${cy+qs} ${cx-qe},${cy+qe} ${half},${cy} ${cx-qe},${cy-qe} ${cx-qe},${cy-qs} ${cx-qs},${cy-qs} ${cx-qs},${cy-qe} ${cx-qe},${cy-qe}" ${fa}/>`;
+            break;
+        }
+        case 'notched_right_arrow': {
+            const sh4 = h * 0.3, aw4 = w * 0.65, notch = w * 0.1;
+            inner = `<polygon points="${half},${sh4} ${aw4},${sh4} ${aw4},${half} ${w-half},${cy} ${aw4},${h-half} ${aw4},${h-sh4} ${half},${h-sh4} ${notch},${cy}" ${fa}/>`;
+            break;
+        }
+        case 'chevron': {
+            const cv = w * 0.25;
+            inner = `<polygon points="${half},${half} ${w - cv},${half} ${w - half},${cy} ${w - cv},${h - half} ${half},${h - half} ${cv},${cy}" ${fa}/>`;
+            break;
+        }
+        case 'home_plate': {
+            const hp = w * 0.2;
+            inner = `<polygon points="${half},${half} ${w - hp},${half} ${w - half},${cy} ${w - hp},${h - half} ${half},${h - half}" ${fa}/>`;
+            break;
+        }
+        case 'striped_right_arrow': {
+            const sh5 = h * 0.3, aw5 = w * 0.65, strL = w * 0.12;
+            inner = `<polygon points="${strL + w * 0.05},${sh5} ${aw5},${sh5} ${aw5},${half} ${w-half},${cy} ${aw5},${h-half} ${aw5},${h-sh5} ${strL + w * 0.05},${h-sh5}" ${fa}/>`;
+            inner += `<line x1="${strL * 0.4}" y1="${sh5}" x2="${strL * 0.4}" y2="${h-sh5}" stroke="${stroke}" stroke-width="${sw}"/>`;
+            inner += `<line x1="${strL * 0.8}" y1="${sh5}" x2="${strL * 0.8}" y2="${h-sh5}" stroke="${stroke}" stroke-width="${sw}"/>`;
+            break;
+        }
+        case 'bent_arrow': {
+            const bh = h * 0.45, baw = w * 0.4;
+            inner = `<path d="M${half} ${h-half}V${bh}h${w*0.4}V${bh*0.6}l-${w*0.12} 0 ${w*0.22}-${bh*0.6+half-half} ${w*0.22} ${bh*0.6}-${w*0.12} 0V${bh+h*0.08}H${half+w*0.15}V${h-half}z" ${fa}/>`;
+            break;
+        }
+        case 'u_turn_arrow': {
+            const ur = w * 0.2;
+            inner = `<path d="M${w*0.25} ${h-half}V${h*0.35}a${ur} ${ur} 0 01${w*0.5} 0v${h*0.2}h${w*0.12}l-${w*0.18} ${h*0.2}-${w*0.18}-${h*0.2}h${w*0.12}v-${h*0.2}a${ur*0.5} ${ur*0.5} 0 00-${w*0.2} 0v${h*0.45}z" ${fa}/>`;
+            break;
+        }
+        case 'circular_arrow': {
+            const cr = Math.min(cx, cy) * 0.7;
+            inner = `<path d="M${cx + cr} ${cy}a${cr} ${cr} 0 11-${cr * 0.3}-${cr * 0.95}" fill="none" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+            inner += `<polygon points="${cx + cr * 0.15},${cy - cr * 0.6} ${cx + cr * 0.15},${cy - cr * 1.2} ${cx + cr * 0.6},${cy - cr * 0.9}" fill="${fill}" fill-opacity="${opacity}" stroke="${stroke}" stroke-width="${sw * 0.5}"/>`;
+            break;
+        }
+        // 수학
+        case 'math_plus': {
+            const mw = w * 0.25, mh = h * 0.25;
+            inner = `<polygon points="${cx-mw},${half} ${cx+mw},${half} ${cx+mw},${cy-mh} ${w-half},${cy-mh} ${w-half},${cy+mh} ${cx+mw},${cy+mh} ${cx+mw},${h-half} ${cx-mw},${h-half} ${cx-mw},${cy+mh} ${half},${cy+mh} ${half},${cy-mh} ${cx-mw},${cy-mh}" ${fa}/>`;
+            break;
+        }
+        case 'math_minus':
+            inner = `<rect x="${half}" y="${cy - h * 0.15}" width="${w - sw}" height="${h * 0.3}" ${fa}/>`;
+            break;
+        case 'math_multiply': {
+            const mt = Math.min(w, h) * 0.12;
+            inner = `<line x1="${half + mt}" y1="${half + mt}" x2="${w - half - mt}" y2="${h - half - mt}" stroke="${stroke}" stroke-width="${sw * 2}" ${dash}/>`;
+            inner += `<line x1="${w - half - mt}" y1="${half + mt}" x2="${half + mt}" y2="${h - half - mt}" stroke="${stroke}" stroke-width="${sw * 2}" ${dash}/>`;
+            break;
+        }
+        case 'math_divide': {
+            const dr = Math.min(w, h) * 0.08;
+            inner = `<rect x="${half}" y="${cy - h * 0.08}" width="${w - sw}" height="${h * 0.16}" ${fa}/>`;
+            inner += `<circle cx="${cx}" cy="${h * 0.22}" r="${dr}" fill="${fill}" fill-opacity="${opacity}" stroke="${stroke}" stroke-width="${sw}"/>`;
+            inner += `<circle cx="${cx}" cy="${h * 0.78}" r="${dr}" fill="${fill}" fill-opacity="${opacity}" stroke="${stroke}" stroke-width="${sw}"/>`;
+            break;
+        }
+        case 'math_equal':
+            inner = `<rect x="${half}" y="${cy - h * 0.25}" width="${w - sw}" height="${h * 0.15}" ${fa}/>`;
+            inner += `<rect x="${half}" y="${cy + h * 0.1}" width="${w - sw}" height="${h * 0.15}" ${fa}/>`;
+            break;
+        case 'math_not_equal':
+            inner = `<rect x="${half}" y="${cy - h * 0.25}" width="${w - sw}" height="${h * 0.12}" ${fa}/>`;
+            inner += `<rect x="${half}" y="${cy + h * 0.13}" width="${w - sw}" height="${h * 0.12}" ${fa}/>`;
+            inner += `<line x1="${w * 0.65}" y1="${half}" x2="${w * 0.35}" y2="${h - half}" stroke="${stroke}" stroke-width="${sw * 1.5}"/>`;
+            break;
+        // 별 및 현수막
+        case 'star_4_point':
+            inner = `<polygon points="${_starPts(cx, cy, Math.min(cx, cy) - half, (Math.min(cx, cy) - half) * 0.38, 4)}" ${fa}/>`;
+            break;
+        case 'star_5_point':
+            inner = `<polygon points="${_starPts(cx, cy, Math.min(cx, cy) - half, (Math.min(cx, cy) - half) * 0.38, 5)}" ${fa}/>`;
+            break;
+        case 'star_6_point':
+            inner = `<polygon points="${_starPts(cx, cy, Math.min(cx, cy) - half, (Math.min(cx, cy) - half) * 0.5, 6)}" ${fa}/>`;
+            break;
+        case 'star_8_point':
+            inner = `<polygon points="${_starPts(cx, cy, Math.min(cx, cy) - half, (Math.min(cx, cy) - half) * 0.5, 8)}" ${fa}/>`;
+            break;
+        case 'star_10_point':
+            inner = `<polygon points="${_starPts(cx, cy, Math.min(cx, cy) - half, (Math.min(cx, cy) - half) * 0.6, 10)}" ${fa}/>`;
+            break;
+        case 'star_12_point':
+            inner = `<polygon points="${_starPts(cx, cy, Math.min(cx, cy) - half, (Math.min(cx, cy) - half) * 0.6, 12)}" ${fa}/>`;
+            break;
+        case 'star_16_point':
+            inner = `<polygon points="${_starPts(cx, cy, Math.min(cx, cy) - half, (Math.min(cx, cy) - half) * 0.7, 16)}" ${fa}/>`;
+            break;
+        case 'star_24_point':
+            inner = `<polygon points="${_starPts(cx, cy, Math.min(cx, cy) - half, (Math.min(cx, cy) - half) * 0.75, 24)}" ${fa}/>`;
+            break;
+        case 'star_32_point':
+            inner = `<polygon points="${_starPts(cx, cy, Math.min(cx, cy) - half, (Math.min(cx, cy) - half) * 0.8, 32)}" ${fa}/>`;
+            break;
+        case 'explosion_1': {
+            var pts1 = [];
+            for (var i1 = 0; i1 < 8; i1++) {
+                var a1 = Math.PI * 2 * i1 / 8 - Math.PI / 2;
+                var or1 = Math.min(cx, cy) - half;
+                var ir1 = or1 * (0.45 + Math.random() * 0.15);
+                pts1.push((cx + or1 * Math.cos(a1)).toFixed(1) + ',' + (cy + or1 * Math.sin(a1)).toFixed(1));
+                var a1b = a1 + Math.PI / 8;
+                pts1.push((cx + ir1 * Math.cos(a1b)).toFixed(1) + ',' + (cy + ir1 * Math.sin(a1b)).toFixed(1));
+            }
+            inner = `<polygon points="${pts1.join(' ')}" ${fa}/>`;
+            break;
+        }
+        case 'explosion_2': {
+            var pts2 = [];
+            for (var i2 = 0; i2 < 12; i2++) {
+                var a2 = Math.PI * 2 * i2 / 12 - Math.PI / 2;
+                var or2 = Math.min(cx, cy) - half;
+                var ir2 = or2 * (0.5 + (i2 % 3) * 0.05);
+                pts2.push((cx + or2 * Math.cos(a2)).toFixed(1) + ',' + (cy + or2 * Math.sin(a2)).toFixed(1));
+                var a2b = a2 + Math.PI / 12;
+                pts2.push((cx + ir2 * Math.cos(a2b)).toFixed(1) + ',' + (cy + ir2 * Math.sin(a2b)).toFixed(1));
+            }
+            inner = `<polygon points="${pts2.join(' ')}" ${fa}/>`;
+            break;
+        }
+        case 'wave':
+            inner = `<path d="M${half} ${h*0.3}c${w*0.15}-${h*0.25} ${w*0.35}-${h*0.25} ${cx} 0s${w*0.35} ${h*0.25} ${cx} 0v${h*0.4}c-${w*0.15} ${h*0.25}-${w*0.35} ${h*0.25}-${cx} 0s-${w*0.35}-${h*0.25}-${cx} 0z" ${fa}/>`;
+            break;
+        case 'double_wave':
+            inner = `<path d="M${half} ${h*0.2}c${w*0.15}-${h*0.15} ${w*0.35}-${h*0.15} ${cx} 0s${w*0.35} ${h*0.15} ${cx} 0" fill="none" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+            inner += `<path d="M${half} ${cy}c${w*0.15}-${h*0.15} ${w*0.35}-${h*0.15} ${cx} 0s${w*0.35} ${h*0.15} ${cx} 0" fill="none" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+            inner += `<path d="M${half} ${h*0.8}c${w*0.15}-${h*0.15} ${w*0.35}-${h*0.15} ${cx} 0s${w*0.35} ${h*0.15} ${cx} 0" fill="none" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+            break;
+        case 'ribbon': {
+            const ry = h * 0.15;
+            inner = `<path d="M${half} ${ry + half}h${w - sw}v${h - sw - 2 * ry}H${half}z" ${fa}/>`;
+            inner += `<path d="M${half} ${ry + half}L${w*0.1} ${half}l${w*0.05} ${ry}" fill="none" stroke="${stroke}" stroke-width="${sw}"/>`;
+            inner += `<path d="M${w-half} ${ry + half}L${w*0.9} ${half}l-${w*0.05} ${ry}" fill="none" stroke="${stroke}" stroke-width="${sw}"/>`;
+            inner += `<path d="M${half} ${h - ry - half}L${w*0.1} ${h-half}l${w*0.05}-${ry}" fill="none" stroke="${stroke}" stroke-width="${sw}"/>`;
+            inner += `<path d="M${w-half} ${h - ry - half}L${w*0.9} ${h-half}l-${w*0.05}-${ry}" fill="none" stroke="${stroke}" stroke-width="${sw}"/>`;
+            break;
+        }
+        // 설명선
+        case 'wedge_rect_callout': {
+            const ct = h * 0.7;
+            inner = `<path d="M${half} ${half}h${w - sw}v${ct}H${cx + w * 0.08}l-${w * 0.08} ${h - half - ct - half}l-${w * 0.08} -${h - half - ct - half}H${half}z" ${fa}/>`;
+            break;
+        }
+        case 'wedge_round_rect_callout': {
+            const rrc = Math.min(w, h) * 0.08;
+            const cth = h * 0.7;
+            inner = `<path d="M${half + rrc} ${half}h${w - sw - 2*rrc}a${rrc} ${rrc} 0 01${rrc} ${rrc}v${cth - rrc}H${cx + w*0.08}l-${w*0.08} ${h - half - cth - half}l-${w*0.08}-${h - half - cth - half}H${half}V${half + rrc}a${rrc} ${rrc} 0 01${rrc}-${rrc}z" ${fa}/>`;
+            break;
+        }
+        case 'wedge_ellipse_callout': {
+            const erx = (w - sw) / 2, ery = (h * 0.65 - sw) / 2;
+            inner = `<ellipse cx="${cx}" cy="${ery + half}" rx="${erx}" ry="${ery}" ${fa}/>`;
+            inner += `<path d="M${cx - w*0.05} ${ery*2}l-${w*0.03} ${h*0.3} ${w*0.12}-${h*0.22}z" fill="${fill}" fill-opacity="${opacity}" stroke="${stroke}" stroke-width="${sw * 0.5}"/>`;
+            break;
+        }
+        case 'cloud_callout':
+            inner = `<path d="M${w*0.25} ${h*0.6}a${w*0.12} ${h*0.12} 0 01${w*0.02}-${h*0.25} ${w*0.18} ${h*0.18} 0 01${w*0.35}-${h*0.1} ${w*0.13} ${h*0.1} 0 01${w*0.25} ${h*0.04} ${w*0.1} ${h*0.1} 0 01${w*0.02} ${h*0.18}z" ${fa}/>`;
+            inner += `<circle cx="${w*0.3}" cy="${h*0.72}" r="${Math.min(w,h)*0.04}" fill="${fill}" fill-opacity="${opacity}" stroke="${stroke}" stroke-width="${sw}"/>`;
+            inner += `<circle cx="${w*0.22}" cy="${h*0.82}" r="${Math.min(w,h)*0.025}" fill="${fill}" fill-opacity="${opacity}" stroke="${stroke}" stroke-width="${sw * 0.7}"/>`;
+            break;
+        case 'border_callout_1':
+            inner = `<rect x="${half}" y="${half}" width="${w - sw}" height="${h * 0.65}" ${fa}/>`;
+            inner += `<line x1="${w * 0.3}" y1="${h * 0.65 + half}" x2="${w * 0.2}" y2="${h - half}" stroke="${stroke}" stroke-width="${sw}"/>`;
+            break;
+        case 'border_callout_2':
+            inner = `<rect x="${half}" y="${half}" width="${w - sw}" height="${h * 0.65}" ${fa}/>`;
+            inner += `<polyline points="${w*0.3},${h*0.65+half} ${w*0.35},${h*0.8} ${w*0.2},${h-half}" fill="none" stroke="${stroke}" stroke-width="${sw}"/>`;
+            break;
+        case 'border_callout_3':
+            inner = `<rect x="${half}" y="${half}" width="${w - sw}" height="${h * 0.65}" ${fa}/>`;
+            inner += `<polyline points="${w*0.3},${h*0.65+half} ${w*0.4},${h*0.75} ${w*0.25},${h*0.85} ${w*0.2},${h-half}" fill="none" stroke="${stroke}" stroke-width="${sw}"/>`;
+            break;
+        case 'line': {
+            const midL = h / 2;
+            inner = `<line x1="${half}" y1="${midL}" x2="${w - half}" y2="${midL}" stroke="${stroke}" stroke-width="${sw}" ${dash}/>`;
+            break;
+        }
+        case 'arrow': {
+            const midA = h / 2;
+            const markerId = 'ah_' + obj.obj_id;
+            inner = `<defs><marker id="${markerId}" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="${stroke}"/></marker></defs>`;
+            inner += `<line x1="${half}" y1="${midA}" x2="${w - half}" y2="${midA}" stroke="${stroke}" stroke-width="${sw}" ${dash} marker-end="url(#${markerId})"/>`;
+            break;
+        }
+        default: // rectangle
+            inner = `<rect x="${half}" y="${half}" width="${w - sw}" height="${h - sw}" ${fa}/>`;
+            break;
     }
     return `<svg width="100%" height="100%" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="pointer-events:none;">${inner}</svg>`;
 }
@@ -4744,7 +5342,7 @@ async function loadSharedPresentation(shareToken) {
         state.generatedSlides = data.slides || [];
         state.currentSlideIndex = 0;
 
-        document.title = data.project_name + ' - PPTMaker';
+        document.title = data.project_name + ' - OfficeCoWork';
         showApp();
         $('#sidebar').hide();
         $('#sidebarUserName').text(t('sharedPresentation'));
@@ -5375,11 +5973,14 @@ async function revertHistory(historyId) {
     }
 }
 
-// ── 페이지 종료 시 정리 ──
+// ── 페이지 종료 시 정리 (pagehide 사용 - unload Permissions Policy 위반 방지) ──
 
-window.addEventListener('beforeunload', function() {
+window.addEventListener('pagehide', function() {
     stopCollabPolling();
-    destroyOnlyOfficeEditor();
+    if (state.onlyofficeEditor) {
+        try { state.onlyofficeEditor.destroyEditor(); } catch (e) { }
+        state.onlyofficeEditor = null;
+    }
 });
 
 // 협업 검색 초기화 (DOM ready 시)
@@ -6448,6 +7049,12 @@ function destroyOnlyOfficeEditor() {
         state.onlyofficeEditor = null;
     }
     $('#onlyofficeContainer').empty();
+    // 전체화면 해제
+    if ($('#appView').hasClass('oo-fullscreen')) {
+        $('#appView').removeClass('oo-fullscreen');
+        $('.oo-fullscreen-exit').remove();
+    }
+    $('#btnFullscreenOO').hide();
 }
 
 async function openOnlyOfficeEditor(projectId) {
@@ -6470,6 +7077,7 @@ async function openOnlyOfficeEditor(projectId) {
             onDocumentReady: function () {
                 console.log('[OnlyOffice] 문서 로드 완료');
                 $('#btnDownloadOO').show();
+                $('#btnFullscreenOO').show();
             },
             onError: function (event) {
                 console.error('[OnlyOffice] 에디터 오류:', event.data);
@@ -6478,6 +7086,14 @@ async function openOnlyOfficeEditor(projectId) {
         };
 
         state.onlyofficeEditor = new DocsAPI.DocEditor('ooEditorDiv', config);
+
+        // OnlyOffice SDK iframe에 unload 권한 부여 (Permissions Policy 위반 방지)
+        setTimeout(function() {
+            var ooIframe = document.querySelector('#ooEditorDiv iframe');
+            if (ooIframe) {
+                ooIframe.setAttribute('allow', 'clipboard-read; clipboard-write; unload');
+            }
+        }, 500);
     } catch (e) {
         console.error('[OnlyOffice] 에디터 열기 실패:', e);
         showToast('OnlyOffice 에디터를 열 수 없습니다: ' + e.message, 'error');
@@ -6490,19 +7106,77 @@ async function initOnlyOfficeWorkspace() {
     } else {
         // 문서가 없을 때 빈 상태 표시
         const projectType = state.currentProject ? state.currentProject.project_type : '';
-        const labels = {
-            'onlyoffice_pptx': { icon: '📊', title: '프레젠테이션', desc: '지침을 입력하고 PPT 생성 버튼을 클릭하세요' },
-            'onlyoffice_xlsx': { icon: '📋', title: '스프레드시트', desc: '지침을 입력하고 Excel 생성 버튼을 클릭하세요' },
-            'onlyoffice_docx': { icon: '📝', title: '문서', desc: '지침을 입력하고 Word 생성 버튼을 클릭하세요' },
+        const icons = {
+            'onlyoffice_pptx': '<svg width="48" height="48" fill="none" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" stroke="#a78bfa" stroke-width="1.5"/><path d="M8 21h8M12 17v4" stroke="#a78bfa" stroke-width="1.5" stroke-linecap="round"/><path d="M7 8h4M7 11h6" stroke="#c4b5fd" stroke-width="1.5" stroke-linecap="round"/><rect x="14" y="7" width="4" height="5" rx=".5" fill="#ede9fe"/></svg>',
+            'onlyoffice_xlsx': '<svg width="48" height="48" fill="none" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" stroke="#34d399" stroke-width="1.5"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18" stroke="#6ee7b7" stroke-width="1"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5" fill="#d1fae5"/></svg>',
+            'onlyoffice_docx': '<svg width="48" height="48" fill="none" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="#60a5fa" stroke-width="1.5"/><path d="M14 2v6h6" stroke="#93c5fd" stroke-width="1.5"/><path d="M8 13h8M8 17h5" stroke="#bfdbfe" stroke-width="1.5" stroke-linecap="round"/></svg>',
         };
-        const info = labels[projectType] || { icon: '📄', title: '문서', desc: '지침을 입력하고 생성 버튼을 클릭하세요' };
+        const labels = {
+            'onlyoffice_pptx': { title: '프레젠테이션', desc: '지침을 입력하고 생성 버튼을 클릭하세요', color: '#8b5cf6', bg: 'rgba(139,92,246,.08)', bgHover: 'rgba(139,92,246,.14)' },
+            'onlyoffice_xlsx': { title: '스프레드시트', desc: '지침을 입력하고 생성 버튼을 클릭하세요', color: '#10b981', bg: 'rgba(16,185,129,.08)', bgHover: 'rgba(16,185,129,.14)' },
+            'onlyoffice_docx': { title: '문서', desc: '지침을 입력하고 Word 생성 버튼을 클릭하세요', color: '#3b82f6', bg: 'rgba(59,130,246,.08)', bgHover: 'rgba(59,130,246,.14)' },
+        };
+        const icon = icons[projectType] || icons['onlyoffice_docx'];
+        const info = labels[projectType] || labels['onlyoffice_docx'];
         $('#onlyofficeContainer').html(`
-            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;min-height:400px;color:#94a3b8;">
-                <div style="font-size:48px;margin-bottom:16px;">${info.icon}</div>
-                <div style="font-size:18px;font-weight:600;color:#64748b;margin-bottom:8px;">${info.title}</div>
-                <div style="font-size:14px;">${info.desc}</div>
+            <div class="oo-empty-state">
+                <div class="oo-empty-icon" style="background:${info.bg}">${icon}</div>
+                <div class="oo-empty-title" style="color:${info.color}">${info.title}</div>
+                <div class="oo-empty-desc">${info.desc}</div>
             </div>
         `);
+    }
+}
+
+function updateFullscreenInputHeight() {
+    const inputBar = document.querySelector('.input-bar');
+    if (inputBar) {
+        const h = inputBar.offsetHeight;
+        document.documentElement.style.setProperty('--fullscreen-input-h', h + 'px');
+    }
+}
+
+function toggleCanvasFullscreen() {
+    const $app = $('#appView');
+    const isFullscreen = $app.hasClass('canvas-fullscreen');
+    const enterIcon = '<path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>';
+    const exitIcon = '<path d="M4 14h2a2 2 0 012 2v2m8-4h2a2 2 0 002-2V8m-8 16v-2a2 2 0 012-2h2M4 10V8a2 2 0 012-2h2"/>';
+
+    if (isFullscreen) {
+        $app.removeClass('canvas-fullscreen');
+        $('.canvas-fullscreen-exit').remove();
+        $('#btnCanvasFullscreen').attr('title', '전체화면');
+        $('#icoCanvasFullscreen').html(enterIcon);
+    } else {
+        $app.addClass('canvas-fullscreen');
+        $('body').append('<button class="canvas-fullscreen-exit" onclick="toggleCanvasFullscreen()" title="전체화면 해제"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">' + exitIcon + '</svg></button>');
+        $('#btnCanvasFullscreen').attr('title', '전체화면 해제');
+        $('#icoCanvasFullscreen').html(exitIcon);
+        setTimeout(updateFullscreenInputHeight, 50);
+    }
+
+    setTimeout(() => { window.dispatchEvent(new Event('resize')); }, 100);
+}
+
+function toggleOnlyOfficeFullscreen() {
+    const $app = $('#appView');
+    const isFullscreen = $app.hasClass('oo-fullscreen');
+
+    if (isFullscreen) {
+        $app.removeClass('oo-fullscreen');
+        $('.oo-fullscreen-exit').remove();
+        $('#btnFullscreenOO').attr('title', '전체화면');
+        $('#icoFullscreenOO').html('<path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>');
+    } else {
+        $app.addClass('oo-fullscreen');
+        $('body').append('<button class="oo-fullscreen-exit" onclick="toggleOnlyOfficeFullscreen()" title="전체화면 해제"><svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 14h2a2 2 0 012 2v2m8-4h2a2 2 0 002-2V8m-8 16v-2a2 2 0 012-2h2M4 10V8a2 2 0 012-2h2"/></svg></button>');
+        $('#btnFullscreenOO').attr('title', '전체화면 해제');
+        $('#icoFullscreenOO').html('<path d="M4 14h2a2 2 0 012 2v2m8-4h2a2 2 0 002-2V8m-8 16v-2a2 2 0 012-2h2M4 10V8a2 2 0 012-2h2"/>');
+        setTimeout(updateFullscreenInputHeight, 50);
+    }
+
+    if (state.onlyofficeEditor) {
+        setTimeout(() => { window.dispatchEvent(new Event('resize')); }, 100);
     }
 }
 
@@ -6526,7 +7200,8 @@ function _showOnlyOfficeProgress(msg) {
 function _hideOnlyOfficeProgress() {
     $('#onlyofficeProgressOverlay').hide();
     $('#onlyofficeProgressBar').css('width', '0%');
-    $('#ooGenContent').empty();
+    $('#ooGenContent').empty().show();
+    _ooGenClearItems();
     _ooGenStopTimer();
     // 모든 step 초기화
     $('.oo-gen-step').removeClass('active done');
@@ -6577,11 +7252,52 @@ function _ooGenAppendContent(text) {
     el.scrollTop = el.scrollHeight;
 }
 
+function _ooGenUpdateSmartSummary(fullText, projectType) {
+    const el = document.getElementById('ooGenContent');
+    if (!el) return;
+    let itemCount = 0, lastTitle = '', charCount = fullText.length;
+    if (projectType === 'onlyoffice_pptx') {
+        itemCount = (fullText.match(/"template_index"/g) || []).length;
+        const titles = fullText.match(/"title"\s*:\s*\{\s*"text"\s*:\s*"([^"]{1,80})"/g);
+        if (titles && titles.length) { const m = titles[titles.length - 1].match(/"text"\s*:\s*"([^"]{1,80})"/); if (m) lastTitle = m[1]; }
+        el.textContent = `AI가 프레젠테이션을 설계하고 있습니다...\n\n${itemCount > 0 ? `슬라이드 ${itemCount}개 생성 중` : '구조 분석 중'}${lastTitle ? ` — "${lastTitle}"` : ''}\n\n${(charCount / 1000).toFixed(1)}K 문자 수신`;
+    } else if (projectType === 'onlyoffice_xlsx') {
+        itemCount = (fullText.match(/"name"\s*:/g) || []).length;
+        const names = fullText.match(/"name"\s*:\s*"([^"]{1,60})"/g);
+        if (names && names.length) { const m = names[names.length - 1].match(/"name"\s*:\s*"([^"]{1,60})"/); if (m) lastTitle = m[1]; }
+        el.textContent = `AI가 데이터를 구조화하고 있습니다...\n\n${itemCount > 0 ? `시트 ${itemCount}개` : '구조 분석 중'}${lastTitle ? ` — "${lastTitle}"` : ''}\n\n${(charCount / 1000).toFixed(1)}K 문자 수신`;
+    } else if (projectType === 'onlyoffice_docx') {
+        itemCount = (fullText.match(/"title"\s*:/g) || []).length;
+        const titles = fullText.match(/"title"\s*:\s*"([^"]{1,80})"/g);
+        if (titles && titles.length) { const m = titles[titles.length - 1].match(/"title"\s*:\s*"([^"]{1,80})"/); if (m) lastTitle = m[1]; }
+        el.textContent = `AI가 문서를 작성하고 있습니다...\n\n${itemCount > 0 ? `섹션 ${itemCount}개 생성 중` : '구조 분석 중'}${lastTitle ? ` — "${lastTitle}"` : ''}\n\n${(charCount / 1000).toFixed(1)}K 문자 수신`;
+    }
+}
+
+function _ooGenAddItem(current, total, title, type, detail) {
+    const container = $('#ooGenItems');
+    container.show();
+    container.find('.oo-gen-item.active').removeClass('active').addClass('done');
+    const typeLabel = type === 'slide' ? '슬라이드' : type === 'sheet' ? '시트' : '섹션';
+    const detailHtml = detail ? `<span class="oo-gen-item-detail">${detail}</span>` : '';
+    container.append(`<div class="oo-gen-item active" data-index="${current}"><span class="oo-gen-item-icon"></span><span class="oo-gen-item-text">${typeLabel} ${current}/${total}: ${title}</span>${detailHtml}</div>`);
+    container[0].scrollTop = container[0].scrollHeight;
+}
+
+function _ooGenClearItems() {
+    $('#ooGenItems').empty().hide();
+}
+
 async function _onlyofficeStreamGenerate(url, body) {
     _showOnlyOfficeProgress('준비 중...');
     _ooGenStartTimer();
     $('#ooGenContent').empty();
+    _ooGenClearItems();
     _showStopButton();
+
+    let projectType = 'onlyoffice_pptx';
+    if (url.includes('/xlsx/')) projectType = 'onlyoffice_xlsx';
+    else if (url.includes('/docx/')) projectType = 'onlyoffice_docx';
 
     state.currentProject.status = 'generating';
     $('#wsProjectStatus').text(t('statusGenerating')).attr('class', 'ws-status generating');
@@ -6642,7 +7358,7 @@ async function _onlyofficeStreamGenerate(url, body) {
                         break;
                     case 'delta':
                         llmText += evt.text || '';
-                        _ooGenAppendContent(evt.text || '');
+                        _ooGenUpdateSmartSummary(llmText, projectType);
                         const progress = Math.min(llmText.length / 5000 * 70, 70);
                         $('#onlyofficeProgressBar').css('width', progress + '%');
                         break;
@@ -6650,6 +7366,15 @@ async function _onlyofficeStreamGenerate(url, body) {
                         _ooGenSetStep('parse');
                         _showOnlyOfficeProgress(evt.message || '콘텐츠를 구성하고 있습니다...');
                         $('#onlyofficeProgressBar').css('width', '75%');
+                        $('#ooGenContent').hide();
+                        break;
+                    case 'item_progress':
+                        _ooGenSetStep('parse');
+                        const ipType = evt.type === 'slide' ? '슬라이드' : evt.type === 'sheet' ? '시트' : '섹션';
+                        _showOnlyOfficeProgress(`${ipType} ${evt.current}/${evt.total} 처리 중: ${evt.title}`);
+                        _ooGenAddItem(evt.current, evt.total, evt.title, evt.type, evt.detail);
+                        const ipProgress = 70 + (evt.current / evt.total) * 15;
+                        $('#onlyofficeProgressBar').css('width', ipProgress + '%');
                         break;
                     case 'file_creating':
                         _ooGenSetStep('file');
@@ -6663,6 +7388,8 @@ async function _onlyofficeStreamGenerate(url, body) {
                         state.onlyofficeDoc = evt.document || null;
                         break;
                     case 'complete':
+                        // Mark remaining items as done
+                        $('#ooGenItems .oo-gen-item.active').removeClass('active').addClass('done');
                         _hideOnlyOfficeProgress();
                         _showGenerateOrRestartButton();
                         state.currentProject.status = 'generated';

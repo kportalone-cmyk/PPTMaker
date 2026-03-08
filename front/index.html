@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>K-Portal PPTMaker</title>
+    <title>OfficeCoWork</title>
     <link rel="icon" href="/front/img/favicon.ico" type="image/x-icon">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="/front/css/app.css">
@@ -21,7 +21,7 @@
                     <path d="M12 14h16v2H12zM12 19h12v2H12zM12 24h14v2H12z" fill="white" opacity="0.9"/>
                     <defs><linearGradient id="g1" x1="0" y1="0" x2="40" y2="40"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs>
                 </svg>
-                <h1>K-Portal PPTMaker</h1>
+                <h1>OfficeCoWork</h1>
             </div>
             <p class="login-subtitle subtitle">기업용 파워포인트 자동 생성 솔루션</p>
 
@@ -86,7 +86,7 @@
                         <path d="M12 14h16v2H12zM12 19h12v2H12zM12 24h14v2H12z" fill="white" opacity="0.9"/>
                         <defs><linearGradient id="g2" x1="0" y1="0" x2="40" y2="40"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs>
                     </svg>
-                    <span>K-Portal PPTMaker</span>
+                    <span>OfficeCoWork</span>
                 </div>
                 <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">
                     <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h12M3 12h12"/></svg>
@@ -195,6 +195,14 @@
                         </div>
                         <!-- 온라인 프레젠스 바 -->
                         <div id="collabPresenceBar" class="collab-presence-bar" style="display:none;"></div>
+                        <!-- 캔버스 전체화면 버튼 (슬라이드/엑셀) -->
+                        <button class="ws-action-btn" id="btnCanvasFullscreen" onclick="toggleCanvasFullscreen()" title="전체화면" style="display:none;">
+                            <svg id="icoCanvasFullscreen" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
+                        </button>
+                        <!-- OnlyOffice 전체화면 버튼 -->
+                        <button class="ws-action-btn" id="btnFullscreenOO" onclick="toggleOnlyOfficeFullscreen()" title="전체화면" style="display:none;">
+                            <svg id="icoFullscreenOO" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
+                        </button>
                         <!-- OnlyOffice 다운로드 버튼 (헤더에 배치) -->
                         <button class="ws-action-btn" id="btnDownloadOO" onclick="downloadOnlyOfficeDoc()" title="다운로드" style="display:none;">
                             <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 10v3h11v-3M7.5 2v7.5M4.5 7l3 3 3-3"/></svg>
@@ -395,23 +403,7 @@
                                         <span class="edit-bt-counter" id="editSlideCounter">1 / 1</span>
                                     </div>
                                     <!-- 도형 서브메뉴 -->
-                                    <div class="edit-shape-menu" id="editShapeMenu" style="display:none;">
-                                        <button class="edit-shape-item" onclick="insertEditShape('rectangle')" title="Rectangle">
-                                            <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="5" width="16" height="12"/></svg>
-                                        </button>
-                                        <button class="edit-shape-item" onclick="insertEditShape('rounded_rectangle')" title="Rounded">
-                                            <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="5" width="16" height="12" rx="4"/></svg>
-                                        </button>
-                                        <button class="edit-shape-item" onclick="insertEditShape('ellipse')" title="Ellipse">
-                                            <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="11" cy="11" rx="8" ry="6"/></svg>
-                                        </button>
-                                        <button class="edit-shape-item" onclick="insertEditShape('line')" title="Line">
-                                            <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="3" y1="17" x2="19" y2="5"/></svg>
-                                        </button>
-                                        <button class="edit-shape-item" onclick="insertEditShape('arrow')" title="Arrow">
-                                            <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="3" y1="11" x2="16" y2="11"/><path d="M13 7l4 4-4 4"/></svg>
-                                        </button>
-                                    </div>
+                                    <div class="edit-shape-menu" id="editShapeMenu" style="display:none;"></div>
                                 </div>
                                 <input type="file" id="editInsertImageInput" style="display:none;" accept="image/*" onchange="handleEditInsertImage(event)">
                             </div>
@@ -522,6 +514,8 @@
                             </div>
                             <!-- AI 스트리밍 콘텐츠 -->
                             <div id="ooGenContent" class="oo-gen-content"></div>
+                        <!-- 항목별 진행 상태 -->
+                        <div id="ooGenItems" class="oo-gen-items" style="display:none;"></div>
                             <!-- 프로그레스 바 -->
                             <div class="oo-gen-bar-wrap">
                                 <div class="oo-gen-bar" id="onlyofficeProgressBar"></div>

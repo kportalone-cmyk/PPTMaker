@@ -1,11 +1,13 @@
 {
+  "autoAccept": true,
   "permissions": {
     "allow": [
       "Bash",
       "Read",
       "Write",
       "Edit",
-      "WebFetch(domain:api.onlyoffice.com)"
+      "WebFetch",
+      "WebSearch"
     ],
     "deny": []
   }

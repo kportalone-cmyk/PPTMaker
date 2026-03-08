@@ -2,26 +2,23 @@
 XLSX 생성 서비스 - openpyxl 기반 스프레드시트 생성
 
 generated_excel 컬렉션의 데이터를 .xlsx 파일로 변환합니다.
-차트는 matplotlib로 PNG 이미지를 생성하여 시트에 삽입합니다.
+차트는 openpyxl 네이티브 차트로 생성하여 OnlyOffice에서 편집 가능합니다.
 """
 
 import os
 import uuid
-from io import BytesIO
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
-from openpyxl.drawing.image import Image as XlImage
+from openpyxl.chart import (
+    BarChart, LineChart, PieChart, AreaChart, ScatterChart,
+    DoughnutChart, RadarChart, Reference, Series,
+)
+from openpyxl.chart.label import DataLabelList
+from openpyxl.chart.series import SeriesLabel
 from services.mongo_service import get_db
 from bson import ObjectId
 from config import settings
-
-# matplotlib 서버 환경 설정 (GUI 불필요)
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
-import numpy as np
 
 
 async def generate_xlsx(project_id: str) -> str:
@@ -104,8 +101,8 @@ async def generate_xlsx(project_id: str) -> str:
         # 헤더 행 고정
         ws.freeze_panes = "A2"
 
-        # 차트 이미지 추가
-        _add_chart_images_to_sheet(ws, sheet_data)
+        # 네이티브 차트 추가 (OnlyOffice 편집 가능)
+        _add_native_charts_to_sheet(ws, sheet_data)
 
     # 파일 저장
     output_dir = os.path.join(settings.UPLOAD_DIR, "generated")
@@ -170,7 +167,6 @@ def auto_generate_chart_definition(sheet_data: dict, chart_type: str = "bar", ti
     for i in range(len(columns)):
         if i == labels_column:
             continue
-        # 해당 컬럼에 숫자 데이터가 있는지 확인
         numeric_count = 0
         for row in rows:
             if i < len(row):
@@ -212,41 +208,17 @@ def auto_generate_chart_definition(sheet_data: dict, chart_type: str = "bar", ti
     }
 
 
-def render_chart_to_file(chart_def: dict, sheet_data: dict) -> str | None:
-    """차트를 matplotlib로 이미지 렌더링하여 파일로 저장
+# ============ openpyxl 네이티브 차트 (OnlyOffice 편집 가능) ============
 
-    Returns:
-        이미지 상대 경로 (예: /uploads/charts/xxx.png) 또는 None
-    """
-    rows = sheet_data.get("rows", [])
-    columns = sheet_data.get("columns", [])
-
-    img_bytes = _render_chart_image(chart_def, rows, columns)
-    if not img_bytes:
-        return None
-
-    output_dir = os.path.join(settings.UPLOAD_DIR, "charts")
-    os.makedirs(output_dir, exist_ok=True)
-    filename = f"{uuid.uuid4().hex}.png"
-    filepath = os.path.join(output_dir, filename)
-
-    with open(filepath, "wb") as f:
-        f.write(img_bytes.getvalue())
-
-    return f"/uploads/charts/{filename}"
-
-
-# ============ 차트 이미지 생성 (matplotlib) ============
-
-# 색상 팔레트 (Chart.js 프론트엔드와 동일)
+# 색상 팔레트
 _CHART_COLORS = [
-    "#4472C4", "#ED7D31", "#A5A5A5", "#FFC000",
-    "#5B9BD5", "#70AD47", "#264478", "#9B59B6",
+    "4472C4", "ED7D31", "A5A5A5", "FFC000",
+    "5B9BD5", "70AD47", "264478", "9B59B6",
 ]
 
 
-def _add_chart_images_to_sheet(ws, sheet_data: dict):
-    """matplotlib로 차트 PNG를 생성하여 시트에 이미지로 삽입"""
+def _add_native_charts_to_sheet(ws, sheet_data: dict):
+    """openpyxl 네이티브 차트를 시트에 추가 (OnlyOffice에서 편집 가능)"""
     charts = sheet_data.get("charts", [])
     if not charts:
         return
@@ -265,19 +237,24 @@ def _add_chart_images_to_sheet(ws, sheet_data: dict):
             continue
 
         try:
-            img_bytes = _render_chart_image(chart_def, rows, columns)
-            if img_bytes:
-                img = XlImage(img_bytes)
-                # 앵커: 데이터 아래 3행, 차트 간 20행 간격
-                anchor_row = num_data_rows + 3 + (chart_idx * 20)
-                ws.add_image(img, f"A{anchor_row}")
+            chart_obj = _create_native_chart(ws, chart_def, num_data_rows, num_cols, columns)
+            if chart_obj:
+                # 데이터 아래 3행, 차트 간 17행 간격
+                anchor_row = num_data_rows + 3 + (chart_idx * 17)
+                ws.add_chart(chart_obj, f"A{anchor_row}")
         except Exception as e:
-            print(f"[Excel] 차트 이미지 생성 실패 (chart_idx={chart_idx}): {e}")
+            print(f"[Excel] 네이티브 차트 생성 실패 (chart_idx={chart_idx}): {e}")
             continue
 
 
-def _render_chart_image(chart_def: dict, rows: list, columns: list) -> BytesIO | None:
-    """단일 차트 정의 → matplotlib PNG BytesIO"""
+def _create_native_chart(ws, chart_def: dict, num_data_rows: int, num_cols: int, columns: list):
+    """차트 정의로부터 openpyxl 차트 객체 생성 (OnlyOffice 호환)
+
+    핵심 호환성 포인트:
+    1. titles_from_data=True + 헤더 행 포함 → 셀 참조 시리즈 라벨 (strRef)
+    2. x_axis.axPos="b", y_axis.axPos="l" → 축 위치 명시적 설정
+    3. varyColors=False → 시리즈별 색상 (슬라이스별 아님)
+    """
     chart_type = chart_def.get("type", "bar")
     title = chart_def.get("title", "")
     data_range = chart_def.get("data_range", {})
@@ -287,201 +264,130 @@ def _render_chart_image(chart_def: dict, rows: list, columns: list) -> BytesIO |
     row_end = data_range.get("row_end")
     options = chart_def.get("options", {})
 
-    num_rows = len(rows)
-    num_cols = len(columns)
     if row_end is None:
-        row_end = num_rows - 1
-    row_end = min(row_end, num_rows - 1)
+        row_end = num_data_rows - 1
+    row_end = min(row_end, num_data_rows - 1)
 
     if row_start > row_end or not series_defs:
         return None
 
-    # 라벨 추출
-    labels = []
-    for i in range(row_start, row_end + 1):
-        row = rows[i] if i < num_rows else []
-        val = row[labels_col] if labels_col < len(row) else ""
-        labels.append(str(val) if val is not None else "")
+    # 헤더 포함 데이터 범위 (titles_from_data=True 용)
+    # 헤더: row 1, 데이터: row 2 ~ row_end+2
+    header_row = 1
+    data_max_row = row_end + 2
+    num_categories = data_max_row - header_row  # 헤더 제외한 데이터 행 수
 
-    # 시리즈 데이터 추출
-    series_list = []
+    # 카테고리 라벨 (헤더 제외, 데이터만)
+    labels_col_idx = labels_col + 1  # 1-based
+    cats = Reference(ws, min_col=labels_col_idx, min_row=header_row + 1, max_row=data_max_row)
+
+    # 데이터 컬럼 인덱스 (1-based)
+    data_cols = []
     for s_def in series_defs:
-        col_idx = s_def.get("column", 1)
-        if col_idx < 0 or col_idx >= num_cols:
-            continue
-        name = s_def.get("name", columns[col_idx] if col_idx < len(columns) else f"Series {col_idx}")
-        values = []
-        for i in range(row_start, row_end + 1):
-            row = rows[i] if i < num_rows else []
-            val = row[col_idx] if col_idx < len(row) else 0
-            try:
-                values.append(float(val))
-            except (ValueError, TypeError):
-                values.append(0)
-        series_list.append({"name": name, "values": values})
-
-    if not series_list:
+        col_idx = s_def.get("column", 1) + 1
+        if 1 <= col_idx <= num_cols:
+            data_cols.append(col_idx)
+    if not data_cols:
         return None
 
-    # 한글 폰트 설정
-    plt.rcParams["font.family"] = "Malgun Gothic"
-    plt.rcParams["axes.unicode_minus"] = False
-
-    # 차트 타입별 렌더링
-    if chart_type in ("pie", "doughnut"):
-        fig, ax = plt.subplots(figsize=(8, 6))
-        _render_pie(ax, labels, series_list[0]["values"], title, chart_type == "doughnut")
+    # 차트 타입별 객체 생성
+    if chart_type == "bar":
+        chart_obj = BarChart()
+        chart_obj.type = "col"
+        chart_obj.grouping = "stacked" if options.get("stacked") else "clustered"
+        chart_obj.varyColors = False
+        if options.get("stacked"):
+            chart_obj.overlap = 100
+    elif chart_type == "line":
+        chart_obj = LineChart()
+        chart_obj.varyColors = False
+    elif chart_type == "pie":
+        chart_obj = PieChart()
+    elif chart_type == "doughnut":
+        chart_obj = DoughnutChart()
+    elif chart_type == "area":
+        chart_obj = AreaChart()
+        chart_obj.grouping = "stacked" if options.get("stacked") else "standard"
+        chart_obj.varyColors = False
+    elif chart_type == "scatter":
+        chart_obj = ScatterChart()
+        chart_obj.varyColors = False
     elif chart_type == "radar":
-        fig, ax = plt.subplots(figsize=(8, 6), subplot_kw={"projection": "polar"})
-        _render_radar(ax, labels, series_list, title, options)
+        chart_obj = RadarChart()
     else:
-        fig, ax = plt.subplots(figsize=(10, 6))
-        if chart_type == "bar":
-            _render_bar(ax, labels, series_list, title, options)
-        elif chart_type == "line":
-            _render_line(ax, labels, series_list, title, options)
-        elif chart_type == "area":
-            _render_area(ax, labels, series_list, title, options)
-        elif chart_type == "scatter":
-            _render_scatter(ax, labels, series_list, title, options)
+        return None
 
-    fig.tight_layout()
+    chart_obj.title = title
+    chart_obj.width = max(18, min(num_categories * 2, 30))
+    chart_obj.height = 12
 
-    buf = BytesIO()
-    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
-    plt.close(fig)
-    buf.seek(0)
-    return buf
+    # 시리즈 추가 - titles_from_data=True 패턴 (셀 참조 라벨 생성)
+    if chart_type == "scatter":
+        # scatter는 xVal/yVal 구조
+        for s_idx, col_idx in enumerate(data_cols):
+            x_ref = Reference(ws, min_col=labels_col_idx, min_row=header_row + 1, max_row=data_max_row)
+            y_ref = Reference(ws, min_col=col_idx, min_row=header_row + 1, max_row=data_max_row)
+            series_name = columns[col_idx - 1] if col_idx - 1 < len(columns) else f"Series {s_idx}"
+            s = Series(y_ref, xvalues=x_ref, title=series_name)
+            chart_obj.series.append(s)
+            color = _CHART_COLORS[s_idx % len(_CHART_COLORS)]
+            chart_obj.series[-1].graphicalProperties.solidFill = color
+    else:
+        # 연속 컬럼인 경우 한 번에 추가 (가장 깨끗한 XML 생성)
+        data_cols_sorted = sorted(data_cols)
+        is_contiguous = (data_cols_sorted == list(range(data_cols_sorted[0], data_cols_sorted[-1] + 1)))
 
-
-# ---- 차트 유형별 렌더링 ----
-
-def _render_bar(ax, labels, series_list, title, options):
-    """세로 막대 차트"""
-    x = np.arange(len(labels))
-    n = len(series_list)
-    width = 0.7 / max(n, 1)
-    stacked = options.get("stacked", False)
-
-    for i, s in enumerate(series_list):
-        color = _CHART_COLORS[i % len(_CHART_COLORS)]
-        if stacked:
-            bottom = np.zeros(len(labels))
-            for j in range(i):
-                bottom += np.array(series_list[j]["values"])
-            ax.bar(x, s["values"], width=0.7, bottom=bottom, label=s["name"], color=color)
+        if is_contiguous:
+            data_ref = Reference(ws,
+                                 min_col=data_cols_sorted[0],
+                                 max_col=data_cols_sorted[-1],
+                                 min_row=header_row,
+                                 max_row=data_max_row)
+            chart_obj.add_data(data_ref, titles_from_data=True)
         else:
-            offset = (i - n / 2 + 0.5) * width
-            ax.bar(x + offset, s["values"], width=width, label=s["name"], color=color)
+            # 비연속 컬럼: 개별 추가 (헤더 포함)
+            for col_idx in data_cols:
+                data_ref = Reference(ws, min_col=col_idx, min_row=header_row, max_row=data_max_row)
+                chart_obj.add_data(data_ref, titles_from_data=True)
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=45 if len(labels) > 6 else 0, ha="right" if len(labels) > 6 else "center")
-    ax.set_title(title, fontsize=14, fontweight="bold", pad=12)
-    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: f"{v:,.0f}"))
-    if len(series_list) > 1 or options.get("show_legend", True):
-        ax.legend(loc="best")
-    ax.grid(axis="y", alpha=0.3)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
+        # 카테고리 설정
+        if chart_type not in ("pie", "doughnut"):
+            chart_obj.set_categories(cats)
+        else:
+            chart_obj.set_categories(cats)
 
+        # 색상 적용
+        for s_idx, s in enumerate(chart_obj.series):
+            color = _CHART_COLORS[s_idx % len(_CHART_COLORS)]
+            if chart_type not in ("pie", "doughnut"):
+                s.graphicalProperties.solidFill = color
 
-def _render_line(ax, labels, series_list, title, options):
-    """꺾은선 차트"""
-    x = np.arange(len(labels))
-    for i, s in enumerate(series_list):
-        color = _CHART_COLORS[i % len(_CHART_COLORS)]
-        ax.plot(x, s["values"], marker="o", markersize=5, label=s["name"], color=color, linewidth=2)
+    # 축 위치 명시적 설정 (OnlyOffice 호환 핵심)
+    if chart_type in ("bar", "line", "area"):
+        # 세로 막대: 카테고리축=하단(b), 값축=좌측(l)
+        chart_obj.x_axis.axPos = "b"
+        chart_obj.y_axis.axPos = "l"
+        chart_obj.x_axis.tickLblPos = "nextTo"
+        chart_obj.y_axis.tickLblPos = "nextTo"
+        chart_obj.x_axis.delete = False
+        chart_obj.y_axis.delete = False
+        chart_obj.y_axis.numFmt = "#,##0"
+        chart_obj.y_axis.majorGridlines = None  # 깔끔한 표시
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=45 if len(labels) > 6 else 0, ha="right" if len(labels) > 6 else "center")
-    ax.set_title(title, fontsize=14, fontweight="bold", pad=12)
-    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: f"{v:,.0f}"))
-    if len(series_list) > 1 or options.get("show_legend", True):
-        ax.legend(loc="best")
-    ax.grid(alpha=0.3)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
+    # radar 축 설정
+    if chart_type == "radar":
+        chart_obj.set_categories(cats)
 
+    # pie/doughnut 라벨
+    if chart_type in ("pie", "doughnut") and chart_obj.series:
+        dl = DataLabelList()
+        dl.showPercent = True
+        dl.showCatName = True
+        dl.showVal = False
+        chart_obj.dataLabels = dl
 
-def _render_area(ax, labels, series_list, title, options):
-    """영역 차트"""
-    x = np.arange(len(labels))
-    for i, s in enumerate(series_list):
-        color = _CHART_COLORS[i % len(_CHART_COLORS)]
-        ax.fill_between(x, s["values"], alpha=0.4, label=s["name"], color=color)
-        ax.plot(x, s["values"], color=color, linewidth=1.5)
+    # 범례
+    if not options.get("show_legend", True) and chart_type not in ("pie", "doughnut"):
+        chart_obj.legend = None
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=45 if len(labels) > 6 else 0, ha="right" if len(labels) > 6 else "center")
-    ax.set_title(title, fontsize=14, fontweight="bold", pad=12)
-    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: f"{v:,.0f}"))
-    if len(series_list) > 1 or options.get("show_legend", True):
-        ax.legend(loc="best")
-    ax.grid(alpha=0.3)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-
-
-def _render_scatter(ax, labels, series_list, title, options):
-    """산점도"""
-    try:
-        x_values = [float(v) for v in labels]
-    except (ValueError, TypeError):
-        x_values = list(range(len(labels)))
-
-    for i, s in enumerate(series_list):
-        color = _CHART_COLORS[i % len(_CHART_COLORS)]
-        ax.scatter(x_values, s["values"], label=s["name"], color=color, s=60, alpha=0.8)
-
-    ax.set_title(title, fontsize=14, fontweight="bold", pad=12)
-    ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: f"{v:,.0f}"))
-    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: f"{v:,.0f}"))
-    if len(series_list) > 1 or options.get("show_legend", True):
-        ax.legend(loc="best")
-    ax.grid(alpha=0.3)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-
-
-def _render_pie(ax, labels, values, title, is_doughnut=False):
-    """파이/도넛 차트"""
-    colors = [_CHART_COLORS[i % len(_CHART_COLORS)] for i in range(len(labels))]
-    wedges, texts, autotexts = ax.pie(
-        values,
-        labels=labels,
-        autopct="%1.1f%%",
-        colors=colors,
-        startangle=90,
-        pctdistance=0.75 if is_doughnut else 0.6,
-    )
-    for t in autotexts:
-        t.set_fontsize(9)
-
-    if is_doughnut:
-        centre_circle = plt.Circle((0, 0), 0.50, fc="white")
-        ax.add_artist(centre_circle)
-
-    ax.set_title(title, fontsize=14, fontweight="bold", pad=12)
-
-
-def _render_radar(ax, labels, series_list, title, options):
-    """레이더 차트"""
-    n = len(labels)
-    if n < 3:
-        return
-    angles = np.linspace(0, 2 * np.pi, n, endpoint=False).tolist()
-    angles += angles[:1]  # 닫기
-
-    ax.set_theta_offset(np.pi / 2)
-    ax.set_theta_direction(-1)
-    ax.set_thetagrids(np.degrees(angles[:-1]), labels)
-
-    for i, s in enumerate(series_list):
-        color = _CHART_COLORS[i % len(_CHART_COLORS)]
-        vals = s["values"] + s["values"][:1]
-        ax.plot(angles, vals, linewidth=2, label=s["name"], color=color)
-        ax.fill(angles, vals, alpha=0.15, color=color)
-
-    ax.set_title(title, fontsize=14, fontweight="bold", pad=20)
-    if len(series_list) > 1 or options.get("show_legend", True):
-        ax.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1))
+    return chart_obj

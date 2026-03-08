@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>K-Portal PPTMaker - 관리자</title>
+    <title>OfficeCoWork - 관리자</title>
     <link rel="icon" href="/front/img/favicon.ico" type="image/x-icon">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="/admin/css/admin.css">
@@ -14,7 +14,7 @@
     <!-- 헤더 -->
     <div class="header">
         <div style="display:flex;align-items:center;gap:16px;">
-            <h1>K-Portal PPTMaker 관리자</h1>
+            <h1>OfficeCoWork 관리자</h1>
             <button class="header-btn" onclick="showFontManageModal()" title="폰트 관리">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2 2h5v2H5.5L4 12h1.5v2H2v-2h1.2L5 4H3V2zm7 0h5v2h-1l-2.5 10H12v2H7.5v-2h1.2L11.2 4H9V2z"/></svg>
                 폰트 관리
@@ -75,28 +75,7 @@
                         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="12" height="12" rx="1"/></svg>
                         도형 ▾
                     </button>
-                    <div id="shapeDropdown" class="shape-dropdown" style="display:none;">
-                        <button onclick="addShapeObject('rectangle')" title="사각형">
-                            <svg width="20" height="20" viewBox="0 0 20 20"><rect x="2" y="4" width="16" height="12" fill="none" stroke="#333" stroke-width="1.5"/></svg>
-                            사각형
-                        </button>
-                        <button onclick="addShapeObject('rounded_rectangle')" title="둥근 사각형">
-                            <svg width="20" height="20" viewBox="0 0 20 20"><rect x="2" y="4" width="16" height="12" rx="3" fill="none" stroke="#333" stroke-width="1.5"/></svg>
-                            둥근 사각형
-                        </button>
-                        <button onclick="addShapeObject('ellipse')" title="원/타원">
-                            <svg width="20" height="20" viewBox="0 0 20 20"><ellipse cx="10" cy="10" rx="8" ry="6" fill="none" stroke="#333" stroke-width="1.5"/></svg>
-                            원/타원
-                        </button>
-                        <button onclick="addShapeObject('line')" title="직선">
-                            <svg width="20" height="20" viewBox="0 0 20 20"><line x1="2" y1="16" x2="18" y2="4" stroke="#333" stroke-width="1.5"/></svg>
-                            직선
-                        </button>
-                        <button onclick="addShapeObject('arrow')" title="화살표">
-                            <svg width="20" height="20" viewBox="0 0 20 20"><line x1="2" y1="14" x2="16" y2="4" stroke="#333" stroke-width="1.5"/><polygon points="16,4 11,5 14,8" fill="#333"/></svg>
-                            화살표
-                        </button>
-                    </div>
+                    <div id="shapeDropdown" class="shape-picker-panel" style="display:none;"></div>
                 </div>
                 <div class="separator"></div>
                 <button class="btn" id="btnGridToggle" onclick="toggleGrid()" title="격자/눈금자 토글">
@@ -115,6 +94,11 @@
                     슬라이드 배경 해제
                 </button>
                 <input type="file" id="bgUploadInput" accept="image/*" style="display:none;" onchange="handleBgUpload(event)">
+                <div class="separator"></div>
+                <button class="btn" onclick="showBulkFontModal()" title="전체 슬라이드 폰트 일괄 변경" id="btnBulkFont" style="display:none;">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 2h5v1.8H4.8L3 12.2h1.5V14H1.5v-1.8h1L4.8 3.8H3V2zM9.5 6H14v1.5h-1.2l-1.6 5H12.5V14H9.5v-1.5h.8l1.6-5H10.5V6z"/></svg>
+                    폰트 일괄
+                </button>
                 <div class="separator"></div>
                 <button class="btn btn-primary" onclick="saveSlide()">
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M13 1H3a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2V3a2 2 0 00-2-2zm-1 4H4V3h8v2zm0 8H4V7h8v6z"/></svg>
@@ -141,6 +125,40 @@
 
         <!-- 우측 속성 패널 -->
         <div class="properties-panel" id="propertiesPanel" style="display:none;">
+            <!-- 슬라이드 메타 정보 (항상 상단) -->
+            <div id="slideMetaPanel">
+                <h3>슬라이드 메타정보</h3>
+                <div class="slide-meta-form">
+                    <div class="meta-field">
+                        <label>레이아웃</label>
+                        <select id="metaLayout" onchange="updateSlideMeta()">
+                            <option value="">선택안함</option>
+                            <option value="cover">커버 (타이틀용)</option>
+                            <option value="numbered_list">번호 리스트 (목차용)</option>
+                            <option value="divider">디바이더 (간지용)</option>
+                            <option value="single_column">단일 컬럼</option>
+                            <option value="two_column">2단 컬럼</option>
+                            <option value="grid">카드 그리드</option>
+                            <option value="closing">마무리</option>
+                        </select>
+                    </div>
+                    <div class="meta-field">
+                        <label>콘텐츠 유형</label>
+                        <select id="metaContentType" onchange="updateSlideMeta()">
+                            <option value="title_slide">타이틀 슬라이드</option>
+                            <option value="toc">목차 슬라이드</option>
+                            <option value="section_divider">섹션 간지</option>
+                            <option value="body" selected>본문 슬라이드</option>
+                            <option value="closing">마무리 슬라이드</option>
+                        </select>
+                        <div id="metaTypeGuide" class="meta-type-guide" style="display:none;"></div>
+                    </div>
+                    <div id="metaAutoInfo" class="meta-field" style="font-size:12px;color:#888;line-height:1.6;display:none;">
+                        <span id="metaAutoSummary"></span>
+                    </div>
+                </div>
+            </div>
+
             <h3>오브젝트 속성</h3>
 
             <div id="objProperties" style="display:none;">
@@ -246,11 +264,97 @@
                 <div class="prop-group">
                     <label>도형 유형</label>
                     <select id="propShapeType" onchange="updateShapeStyle('shape_type', this.value)">
-                        <option value="rectangle">사각형</option>
-                        <option value="rounded_rectangle">둥근 사각형</option>
-                        <option value="ellipse">원/타원</option>
-                        <option value="line">직선</option>
-                        <option value="arrow">화살표</option>
+                        <optgroup label="직사각형">
+                            <option value="rectangle">사각형</option>
+                            <option value="rounded_rectangle">둥근 사각형</option>
+                            <option value="snip_1_rect">모서리 1개 잘림</option>
+                            <option value="snip_2_diag_rect">대각 2개 잘림</option>
+                            <option value="round_1_rect">모서리 1개 둥근</option>
+                            <option value="round_2_diag_rect">대각 2개 둥근</option>
+                        </optgroup>
+                        <optgroup label="기본 도형">
+                            <option value="ellipse">원/타원</option>
+                            <option value="triangle">삼각형</option>
+                            <option value="right_triangle">직각 삼각형</option>
+                            <option value="parallelogram">평행사변형</option>
+                            <option value="trapezoid">사다리꼴</option>
+                            <option value="diamond">마름모</option>
+                            <option value="pentagon">오각형</option>
+                            <option value="hexagon">육각형</option>
+                            <option value="heptagon">칠각형</option>
+                            <option value="octagon">팔각형</option>
+                            <option value="decagon">십각형</option>
+                            <option value="dodecagon">십이각형</option>
+                            <option value="cross">십자형</option>
+                            <option value="donut">도넛</option>
+                            <option value="no_smoking">금지</option>
+                            <option value="block_arc">호</option>
+                            <option value="heart">하트</option>
+                            <option value="lightning_bolt">번개</option>
+                            <option value="sun">태양</option>
+                            <option value="moon">달</option>
+                            <option value="cloud">구름</option>
+                            <option value="smiley_face">웃는 얼굴</option>
+                            <option value="folded_corner">접힌 모서리</option>
+                            <option value="frame">프레임</option>
+                            <option value="teardrop">물방울</option>
+                            <option value="plaque">명판</option>
+                            <option value="brace_pair">중괄호 쌍</option>
+                            <option value="bracket_pair">대괄호 쌍</option>
+                        </optgroup>
+                        <optgroup label="블록 화살표">
+                            <option value="right_arrow">오른쪽 화살표</option>
+                            <option value="left_arrow">왼쪽 화살표</option>
+                            <option value="up_arrow">위쪽 화살표</option>
+                            <option value="down_arrow">아래쪽 화살표</option>
+                            <option value="left_right_arrow">좌우 화살표</option>
+                            <option value="up_down_arrow">상하 화살표</option>
+                            <option value="quad_arrow">사방 화살표</option>
+                            <option value="notched_right_arrow">노치 오른쪽 화살표</option>
+                            <option value="chevron">쉐브론</option>
+                            <option value="home_plate">홈 플레이트</option>
+                            <option value="striped_right_arrow">줄무늬 오른쪽 화살표</option>
+                            <option value="bent_arrow">꺾인 화살표</option>
+                            <option value="u_turn_arrow">유턴 화살표</option>
+                            <option value="circular_arrow">원형 화살표</option>
+                        </optgroup>
+                        <optgroup label="수학">
+                            <option value="math_plus">더하기</option>
+                            <option value="math_minus">빼기</option>
+                            <option value="math_multiply">곱하기</option>
+                            <option value="math_divide">나누기</option>
+                            <option value="math_equal">등호</option>
+                            <option value="math_not_equal">부등호</option>
+                        </optgroup>
+                        <optgroup label="별 및 현수막">
+                            <option value="star_4_point">4각별</option>
+                            <option value="star_5_point">5각별</option>
+                            <option value="star_6_point">6각별</option>
+                            <option value="star_8_point">8각별</option>
+                            <option value="star_10_point">10각별</option>
+                            <option value="star_12_point">12각별</option>
+                            <option value="star_16_point">16각별</option>
+                            <option value="star_24_point">24각별</option>
+                            <option value="star_32_point">32각별</option>
+                            <option value="explosion_1">폭발 1</option>
+                            <option value="explosion_2">폭발 2</option>
+                            <option value="wave">물결</option>
+                            <option value="double_wave">이중 물결</option>
+                            <option value="ribbon">리본</option>
+                        </optgroup>
+                        <optgroup label="설명선">
+                            <option value="wedge_rect_callout">사각 설명선</option>
+                            <option value="wedge_round_rect_callout">둥근 사각 설명선</option>
+                            <option value="wedge_ellipse_callout">타원 설명선</option>
+                            <option value="cloud_callout">구름 설명선</option>
+                            <option value="border_callout_1">테두리 설명선 1</option>
+                            <option value="border_callout_2">테두리 설명선 2</option>
+                            <option value="border_callout_3">테두리 설명선 3</option>
+                        </optgroup>
+                        <optgroup label="선">
+                            <option value="line">직선</option>
+                            <option value="arrow">화살표</option>
+                        </optgroup>
                     </select>
                 </div>
                 <div class="prop-row" id="shapeFillRow">
@@ -296,46 +400,6 @@
                 </div>
             </div>
 
-            <!-- 슬라이드 메타 정보 -->
-            <div id="slideMetaPanel" style="margin-top:24px;">
-                <h3>슬라이드 메타정보</h3>
-                <div class="slide-meta-form">
-                    <div class="meta-field">
-                        <label>콘텐츠 유형</label>
-                        <select id="metaContentType" onchange="updateSlideMeta()">
-                            <option value="title_slide">타이틀 슬라이드</option>
-                            <option value="toc">목차 슬라이드</option>
-                            <option value="section_divider">섹션 간지</option>
-                            <option value="body" selected>본문 슬라이드</option>
-                            <option value="closing">마무리 슬라이드</option>
-                        </select>
-                        <div id="metaTypeGuide" class="meta-type-guide" style="display:none;"></div>
-                    </div>
-                    <div class="meta-field">
-                        <label>레이아웃</label>
-                        <select id="metaLayout" onchange="updateSlideMeta()">
-                            <option value="">선택안함</option>
-                            <option value="cover">커버 (타이틀용)</option>
-                            <option value="numbered_list">번호 리스트 (목차용)</option>
-                            <option value="divider">디바이더 (간지용)</option>
-                            <option value="single_column">단일 컬럼</option>
-                            <option value="two_column">2단 컬럼</option>
-                            <option value="grid">카드 그리드</option>
-                            <option value="closing">마무리</option>
-                        </select>
-                    </div>
-                    <div class="meta-field">
-                        <label><input type="checkbox" id="metaHasTitle" onchange="updateSlideMeta()"> 제목 포함</label>
-                    </div>
-                    <div class="meta-field">
-                        <label><input type="checkbox" id="metaHasGovernance" onchange="updateSlideMeta()"> 거버넌스 포함</label>
-                    </div>
-                    <div class="meta-field">
-                        <label>설명 텍스트 수</label>
-                        <input type="number" id="metaDescCount" value="0" min="0" max="10" onchange="updateSlideMeta()">
-                    </div>
-                </div>
-            </div>
         </div>
     </div>
 
@@ -449,6 +513,29 @@
                     <button class="btn" onclick="showPromptList()">취소</button>
                     <button class="btn btn-primary" onclick="savePrompt()">저장</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 폰트 일괄 변경 모달 -->
+    <div class="modal-overlay" id="bulkFontModal" style="display:none;">
+        <div class="modal" style="max-width:460px;">
+            <h2 style="margin-bottom:4px;">폰트 일괄 변경</h2>
+            <p style="font-size:13px;color:#888;margin-bottom:20px;">현재 템플릿의 모든 슬라이드에서 텍스트 폰트를 일괄 변경합니다.</p>
+            <div class="form-group">
+                <label>변경 대상</label>
+                <select id="bulkFontFrom"><option value="">전체 폰트</option></select>
+            </div>
+            <div class="form-group">
+                <label>변경할 폰트</label>
+                <select id="bulkFontTo"></select>
+            </div>
+            <div style="padding:10px 14px;background:#f8f9fa;border-radius:6px;margin-bottom:16px;font-size:13px;color:#555;">
+                영향받는 텍스트: <strong id="bulkFontAffectedCount" style="color:#2d5a8e;">0</strong>개 (<span id="bulkFontSlideCount">0</span>개 슬라이드)
+            </div>
+            <div class="modal-actions">
+                <button class="btn" onclick="closeModal('bulkFontModal')">취소</button>
+                <button class="btn btn-primary" onclick="applyBulkFontChange()">적용</button>
             </div>
         </div>
     </div>

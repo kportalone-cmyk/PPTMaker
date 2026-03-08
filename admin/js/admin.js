@@ -81,6 +81,7 @@ async function verifyToken() {
 }
 
 async function init() {
+    initShapePicker();
     await loadFonts();
     await loadTemplates();
 }
@@ -350,6 +351,107 @@ async function deleteFontItem(fontId, fontName, fontFamily) {
     }
 }
 
+// ============ 폰트 일괄 변경 ============
+
+function showBulkFontModal() {
+    if (!state.currentTemplate) {
+        showToast('먼저 템플릿을 선택하세요', 'error');
+        return;
+    }
+    if (state.slides.length === 0) {
+        showToast('슬라이드가 없습니다', 'error');
+        return;
+    }
+
+    // 사용 중인 폰트 수집
+    const usedFonts = collectUsedFonts();
+
+    // 소스 폰트 드롭다운
+    const fromSelect = $('#bulkFontFrom');
+    fromSelect.empty().append('<option value="">전체 폰트</option>');
+    usedFonts.forEach(function(f) {
+        fromSelect.append('<option value="' + f.family + '">' + f.family + ' (' + f.count + '개)</option>');
+    });
+
+    // 타겟 폰트 드롭다운
+    const toSelect = $('#bulkFontTo');
+    toSelect.empty();
+    const defaultFonts = [
+        { name: 'Arial', family: 'Arial' },
+        { name: '맑은 고딕', family: '맑은 고딕' },
+    ];
+    const allFonts = [...defaultFonts, ...state.fonts];
+    const seen = new Set();
+    allFonts.forEach(function(f) {
+        if (!seen.has(f.family)) {
+            seen.add(f.family);
+            toSelect.append('<option value="' + f.family + '" style="font-family:\'' + f.family + '\',sans-serif">' + f.name + '</option>');
+        }
+    });
+
+    updateBulkFontPreview();
+    fromSelect.off('change.bulkfont').on('change.bulkfont', updateBulkFontPreview);
+    $('#bulkFontModal').show();
+}
+
+function collectUsedFonts() {
+    const fontMap = {};
+    state.slides.forEach(function(slide) {
+        (slide.objects || []).forEach(function(obj) {
+            if (obj.obj_type === 'text' && obj.text_style && obj.text_style.font_family) {
+                var family = obj.text_style.font_family;
+                fontMap[family] = (fontMap[family] || 0) + 1;
+            }
+        });
+    });
+    return Object.keys(fontMap).sort().map(function(family) {
+        return { family: family, count: fontMap[family] };
+    });
+}
+
+function updateBulkFontPreview() {
+    var fromFont = $('#bulkFontFrom').val();
+    var objectCount = 0, slideCount = 0;
+    state.slides.forEach(function(slide) {
+        var affected = false;
+        (slide.objects || []).forEach(function(obj) {
+            if (obj.obj_type === 'text' && obj.text_style) {
+                if (!fromFont || obj.text_style.font_family === fromFont) {
+                    objectCount++;
+                    affected = true;
+                }
+            }
+        });
+        if (affected) slideCount++;
+    });
+    $('#bulkFontAffectedCount').text(objectCount);
+    $('#bulkFontSlideCount').text(slideCount);
+}
+
+async function applyBulkFontChange() {
+    var fromFont = $('#bulkFontFrom').val() || null;
+    var toFont = $('#bulkFontTo').val();
+    if (!toFont) {
+        showToast('변경할 폰트를 선택하세요', 'error');
+        return;
+    }
+    var fromLabel = fromFont || '전체 폰트';
+    if (!confirm('"' + fromLabel + '" → "' + toFont + '" 변경하시겠습니까?')) return;
+
+    try {
+        var res = await apiPut('/api/admin/templates/' + state.currentTemplate._id + '/bulk-font', {
+            from_font: fromFont,
+            to_font: toFont
+        });
+        showToast(res.updated_count + '개 텍스트의 폰트가 변경되었습니다', 'success');
+        closeModal('bulkFontModal');
+        await selectTemplate(state.currentTemplate._id);
+    } catch (e) {
+        showToast('폰트 변경 실패: ' + e.message, 'error');
+    }
+}
+
+
 // ============ 프롬프트 관리 모달 ============
 let _promptList = [];
 let _editingPromptId = null;
@@ -575,6 +677,7 @@ async function selectTemplate(templateId) {
 
         $('#slideSection').show();
         $('#btnDeleteTemplate').show();
+        $('#btnBulkFont').show();
 
         // 캔버스 초기화
         clearCanvas();
@@ -886,6 +989,12 @@ async function saveSlide() {
     const sortedObjects = sortObjectsByRole(state.objects);
     state.objects = sortedObjects;
 
+    // 오브젝트 role에서 메타 자동 계산
+    var auto = calcMetaFromObjects(state.objects);
+    state.slideMeta.has_title = auto.has_title;
+    state.slideMeta.has_governance = auto.has_governance;
+    state.slideMeta.description_count = auto.description_count;
+
     try {
         await apiPut('/api/admin/slides/' + state.currentSlide._id, {
             objects: sortedObjects,
@@ -944,6 +1053,7 @@ function hideEditor() {
     $('#slideSection').hide();
     $('#propertiesPanel').hide();
     $('#btnDeleteTemplate').hide();
+    $('#btnBulkFont').hide();
     $('#btnRemoveBg').hide();
 }
 
@@ -1628,6 +1738,7 @@ function updatePositionInputs() {
 function updateObjProperty(prop, value) {
     if (!state.selectedObject) return;
     state.selectedObject[prop] = value;
+    if (prop === 'role') updateSlideMetaUI();
 }
 
 function updateObjPosition() {
@@ -1735,16 +1846,19 @@ function createShapeAtRect(shapeType, x, y, width, height) {
 
 function toggleShapeDropdown() {
     const dd = $('#shapeDropdown');
-    dd.toggle();
     if (dd.is(':visible')) {
-        setTimeout(() => {
-            $(document).one('click', function (e) {
-                if (!$(e.target).closest('.shape-dropdown-wrapper').length) {
-                    dd.hide();
-                }
-            });
-        }, 0);
+        dd.hide();
+        return;
     }
+    dd.show();
+    setTimeout(function() {
+        $(document).on('mousedown.shapepicker', function (e) {
+            if (!$(e.target).closest('.shape-dropdown-wrapper').length) {
+                dd.hide();
+                $(document).off('mousedown.shapepicker');
+            }
+        });
+    }, 0);
 }
 
 function addShapeObject(shapeType) {
@@ -1764,6 +1878,231 @@ function addShapeObject(shapeType) {
     showToast('캔버스에서 드래그하여 도형을 그리세요 (ESC: 취소)', 'info');
 }
 
+// ============ 도형 헬퍼 함수 ============
+function _regPolygonPts(cx, cy, r, n, rotDeg) {
+    var pts = [], rad = (rotDeg - 90) * Math.PI / 180;
+    for (var i = 0; i < n; i++) {
+        var a = rad + 2 * Math.PI * i / n;
+        pts.push((cx + r * Math.cos(a)).toFixed(1) + ',' + (cy + r * Math.sin(a)).toFixed(1));
+    }
+    return pts.join(' ');
+}
+
+function _starPts(cx, cy, outerR, innerR, n, rotDeg) {
+    var pts = [], rad = (rotDeg - 90) * Math.PI / 180;
+    for (var i = 0; i < n * 2; i++) {
+        var r = i % 2 === 0 ? outerR : innerR;
+        var a = rad + Math.PI * i / n;
+        pts.push((cx + r * Math.cos(a)).toFixed(1) + ',' + (cy + r * Math.sin(a)).toFixed(1));
+    }
+    return pts.join(' ');
+}
+
+// ============ 도형 아이콘 SVG (24x24 picker용) ============
+function _getShapeIconSVG(type) {
+    var s = 'fill="none" stroke="#444" stroke-width="1.2"';
+    var sf = 'fill="#444" stroke="none"';
+    switch (type) {
+        // 직사각형
+        case 'rectangle': return '<svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" '+s+'/></svg>';
+        case 'rounded_rectangle': return '<svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="3" '+s+'/></svg>';
+        case 'snip_1_rect': return '<svg viewBox="0 0 24 24"><path d="M2 5h16l4 4v10H2z" '+s+'/></svg>';
+        case 'snip_2_diag_rect': return '<svg viewBox="0 0 24 24"><path d="M6 5h16l-4 4v10H2V9z" '+s+'/></svg>';
+        case 'round_1_rect': return '<svg viewBox="0 0 24 24"><path d="M2 5h16a4 4 0 0 1 4 4v10H2z" '+s+'/></svg>';
+        case 'round_2_diag_rect': return '<svg viewBox="0 0 24 24"><path d="M6 5h16v10a4 4 0 0 1-4 4H2V9a4 4 0 0 1 4-4z" '+s+'/></svg>';
+        // 기본 도형
+        case 'ellipse': return '<svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="10" ry="7" '+s+'/></svg>';
+        case 'triangle': return '<svg viewBox="0 0 24 24"><polygon points="12,2 22,20 2,20" '+s+'/></svg>';
+        case 'right_triangle': return '<svg viewBox="0 0 24 24"><polygon points="2,20 22,20 2,4" '+s+'/></svg>';
+        case 'parallelogram': return '<svg viewBox="0 0 24 24"><polygon points="6,5 22,5 18,19 2,19" '+s+'/></svg>';
+        case 'trapezoid': return '<svg viewBox="0 0 24 24"><polygon points="6,5 18,5 22,19 2,19" '+s+'/></svg>';
+        case 'diamond': return '<svg viewBox="0 0 24 24"><polygon points="12,2 22,12 12,22 2,12" '+s+'/></svg>';
+        case 'pentagon': return '<svg viewBox="0 0 24 24"><polygon points="'+_regPolygonPts(12,12,10,5,0)+'" '+s+'/></svg>';
+        case 'hexagon': return '<svg viewBox="0 0 24 24"><polygon points="'+_regPolygonPts(12,12,10,6,0)+'" '+s+'/></svg>';
+        case 'heptagon': return '<svg viewBox="0 0 24 24"><polygon points="'+_regPolygonPts(12,12,10,7,0)+'" '+s+'/></svg>';
+        case 'octagon': return '<svg viewBox="0 0 24 24"><polygon points="'+_regPolygonPts(12,12,10,8,0)+'" '+s+'/></svg>';
+        case 'decagon': return '<svg viewBox="0 0 24 24"><polygon points="'+_regPolygonPts(12,12,10,10,0)+'" '+s+'/></svg>';
+        case 'dodecagon': return '<svg viewBox="0 0 24 24"><polygon points="'+_regPolygonPts(12,12,10,12,0)+'" '+s+'/></svg>';
+        case 'cross': return '<svg viewBox="0 0 24 24"><polygon points="8,2 16,2 16,8 22,8 22,16 16,16 16,22 8,22 8,16 2,16 2,8 8,8" '+s+'/></svg>';
+        case 'donut': return '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" '+s+'/><circle cx="12" cy="12" r="5" '+s+'/></svg>';
+        case 'no_smoking': return '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" '+s+'/><line x1="5" y1="5" x2="19" y2="19" stroke="#444" stroke-width="1.2"/></svg>';
+        case 'block_arc': return '<svg viewBox="0 0 24 24"><path d="M4 20A10 10 0 0 1 20 20" '+s+'/></svg>';
+        case 'heart': return '<svg viewBox="0 0 24 24"><path d="M12 21C12 21 3 14 3 8.5C3 5.4 5.4 3 8.5 3C10.2 3 11.8 3.8 12 5C12.2 3.8 13.8 3 15.5 3C18.6 3 21 5.4 21 8.5C21 14 12 21 12 21Z" '+s+'/></svg>';
+        case 'lightning_bolt': return '<svg viewBox="0 0 24 24"><polygon points="13,2 6,13 11,13 10,22 18,10 13,10" '+s+'/></svg>';
+        case 'sun': return '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5" '+s+'/><g stroke="#444" stroke-width="1.2"><line x1="12" y1="1" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="23"/><line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/><line x1="4.2" y1="4.2" x2="6.3" y2="6.3"/><line x1="17.7" y1="17.7" x2="19.8" y2="19.8"/><line x1="4.2" y1="19.8" x2="6.3" y2="17.7"/><line x1="17.7" y1="6.3" x2="19.8" y2="4.2"/></g></svg>';
+        case 'moon': return '<svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" '+s+'/></svg>';
+        case 'cloud': return '<svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.8-7.9A5.5 5.5 0 0 1 16 6.5h.5A4 4 0 0 1 20 13a3 3 0 0 1-2 5H6z" '+s+'/></svg>';
+        case 'smiley_face': return '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" '+s+'/><path d="M8 14s1.5 2 4 2 4-2 4-2" '+s+'/><circle cx="9" cy="9" r="1" '+sf+'/><circle cx="15" cy="9" r="1" '+sf+'/></svg>';
+        case 'folded_corner': return '<svg viewBox="0 0 24 24"><path d="M2 2h20v14l-6 6H2z" '+s+'/><path d="M16 22v-6h6" '+s+'/></svg>';
+        case 'frame': return '<svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" '+s+'/><rect x="5" y="5" width="14" height="14" '+s+'/></svg>';
+        case 'teardrop': return '<svg viewBox="0 0 24 24"><path d="M12 2C12 2 4 10 4 15a8 8 0 0 0 16 0c0-5-8-13-8-13z" '+s+'/></svg>';
+        case 'plaque': return '<svg viewBox="0 0 24 24"><path d="M4 2h16a0 0 0 0 1 0 0v0a4 4 0 0 0-4 4v12a4 4 0 0 0 4 4v0H4v0a4 4 0 0 0 4-4V6a4 4 0 0 0-4-4z" '+s+'/></svg>';
+        case 'brace_pair': return '<svg viewBox="0 0 24 24"><path d="M8 2C5 2 4 4 4 6v4c0 1-1 2-2 2 1 0 2 1 2 2v4c0 2 1 4 4 4" '+s+'/><path d="M16 2c3 0 4 2 4 4v4c0 1 1 2 2 2-1 0-2 1-2 2v4c0 2-1 4-4 4" '+s+'/></svg>';
+        case 'bracket_pair': return '<svg viewBox="0 0 24 24"><path d="M8 2H4v20h4" '+s+'/><path d="M16 2h4v20h-4" '+s+'/></svg>';
+        // 블록 화살표
+        case 'right_arrow': return '<svg viewBox="0 0 24 24"><polygon points="2,8 15,8 15,3 22,12 15,21 15,16 2,16" '+s+'/></svg>';
+        case 'left_arrow': return '<svg viewBox="0 0 24 24"><polygon points="22,8 9,8 9,3 2,12 9,21 9,16 22,16" '+s+'/></svg>';
+        case 'up_arrow': return '<svg viewBox="0 0 24 24"><polygon points="8,22 8,9 3,9 12,2 21,9 16,9 16,22" '+s+'/></svg>';
+        case 'down_arrow': return '<svg viewBox="0 0 24 24"><polygon points="8,2 8,15 3,15 12,22 21,15 16,15 16,2" '+s+'/></svg>';
+        case 'left_right_arrow': return '<svg viewBox="0 0 24 24"><polygon points="6,3 6,8 18,8 18,3 23,12 18,21 18,16 6,16 6,21 1,12" '+s+'/></svg>';
+        case 'up_down_arrow': return '<svg viewBox="0 0 24 24"><polygon points="3,6 8,6 8,18 3,18 12,23 21,18 16,18 16,6 21,6 12,1" '+s+'/></svg>';
+        case 'quad_arrow': return '<svg viewBox="0 0 24 24"><polygon points="12,1 15,5 13,5 13,9 17,9 17,5 21,5 23,12 21,19 17,19 17,15 13,15 13,19 15,19 12,23 9,19 11,19 11,15 7,15 7,19 3,19 1,12 3,5 7,5 7,9 11,9 11,5 9,5" '+s+'/></svg>';
+        case 'notched_right_arrow': return '<svg viewBox="0 0 24 24"><polygon points="2,8 15,8 15,3 22,12 15,21 15,16 2,16 5,12" '+s+'/></svg>';
+        case 'chevron': return '<svg viewBox="0 0 24 24"><polygon points="2,4 16,4 22,12 16,20 2,20 8,12" '+s+'/></svg>';
+        case 'home_plate': return '<svg viewBox="0 0 24 24"><polygon points="2,4 18,4 22,12 18,20 2,20" '+s+'/></svg>';
+        case 'striped_right_arrow': return '<svg viewBox="0 0 24 24"><polygon points="8,8 15,8 15,3 22,12 15,21 15,16 8,16" '+s+'/><line x1="5" y1="8" x2="5" y2="16" stroke="#444" stroke-width="1.2"/><line x1="3" y1="8" x2="3" y2="16" stroke="#444" stroke-width="1.2"/></svg>';
+        case 'bent_arrow': return '<svg viewBox="0 0 24 24"><path d="M4 20V10h8V5l6 7-6 7v-5H8v6z" '+s+'/></svg>';
+        case 'u_turn_arrow': return '<svg viewBox="0 0 24 24"><path d="M6 20V10a6 6 0 0 1 12 0v4h4l-6 6-6-6h4v-4a2 2 0 0 0-4 0v10z" '+s+'/></svg>';
+        case 'circular_arrow': return '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-3-6.3" '+s+'/><polygon points="20,2 22,8 16,8" '+sf+'/></svg>';
+        // 수학
+        case 'math_plus': return '<svg viewBox="0 0 24 24"><line x1="12" y1="4" x2="12" y2="20" stroke="#444" stroke-width="2"/><line x1="4" y1="12" x2="20" y2="12" stroke="#444" stroke-width="2"/></svg>';
+        case 'math_minus': return '<svg viewBox="0 0 24 24"><line x1="4" y1="12" x2="20" y2="12" stroke="#444" stroke-width="2"/></svg>';
+        case 'math_multiply': return '<svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18" stroke="#444" stroke-width="2"/><line x1="18" y1="6" x2="6" y2="18" stroke="#444" stroke-width="2"/></svg>';
+        case 'math_divide': return '<svg viewBox="0 0 24 24"><line x1="4" y1="12" x2="20" y2="12" stroke="#444" stroke-width="2"/><circle cx="12" cy="7" r="1.5" '+sf+'/><circle cx="12" cy="17" r="1.5" '+sf+'/></svg>';
+        case 'math_equal': return '<svg viewBox="0 0 24 24"><line x1="4" y1="9" x2="20" y2="9" stroke="#444" stroke-width="2"/><line x1="4" y1="15" x2="20" y2="15" stroke="#444" stroke-width="2"/></svg>';
+        case 'math_not_equal': return '<svg viewBox="0 0 24 24"><line x1="4" y1="9" x2="20" y2="9" stroke="#444" stroke-width="2"/><line x1="4" y1="15" x2="20" y2="15" stroke="#444" stroke-width="2"/><line x1="16" y1="4" x2="8" y2="20" stroke="#444" stroke-width="2"/></svg>';
+        // 별 및 현수막
+        case 'star_4_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,4,4,0)+'" '+s+'/></svg>';
+        case 'star_5_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,4,5,0)+'" '+s+'/></svg>';
+        case 'star_6_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,5,6,0)+'" '+s+'/></svg>';
+        case 'star_8_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,5,8,0)+'" '+s+'/></svg>';
+        case 'star_10_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,6,10,0)+'" '+s+'/></svg>';
+        case 'star_12_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,6,12,0)+'" '+s+'/></svg>';
+        case 'star_16_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,7,16,0)+'" '+s+'/></svg>';
+        case 'star_24_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,7,24,0)+'" '+s+'/></svg>';
+        case 'star_32_point': return '<svg viewBox="0 0 24 24"><polygon points="'+_starPts(12,12,10,8,32,0)+'" '+s+'/></svg>';
+        case 'explosion_1': return '<svg viewBox="0 0 24 24"><polygon points="12,2 14,8 20,4 16,10 22,12 16,14 20,20 14,16 12,22 10,16 4,20 8,14 2,12 8,10 4,4 10,8" '+s+'/></svg>';
+        case 'explosion_2': return '<svg viewBox="0 0 24 24"><polygon points="12,1 13,7 18,3 15,9 22,8 17,12 22,16 15,15 18,21 13,17 12,23 11,17 6,21 9,15 2,16 7,12 2,8 9,9 6,3 11,7" '+s+'/></svg>';
+        case 'wave': return '<svg viewBox="0 0 24 24"><path d="M2 8c4-6 6 6 10 0s6 6 10 0v8c-4 6-6-6-10 0s-6-6-10 0z" '+s+'/></svg>';
+        case 'double_wave': return '<svg viewBox="0 0 24 24"><path d="M2 6c3-4 5 4 10 0s7 4 10 0" '+s+'/><path d="M2 18c3-4 5 4 10 0s7 4 10 0" '+s+'/></svg>';
+        case 'ribbon': return '<svg viewBox="0 0 24 24"><path d="M2 6h20v12H2z" '+s+'/><path d="M2 6l3 3-3 3" '+s+'/><path d="M22 6l-3 3 3 3" '+s+'/></svg>';
+        // 설명선
+        case 'wedge_rect_callout': return '<svg viewBox="0 0 24 24"><path d="M2 3h20v13H14l-2 5-2-5H2z" '+s+'/></svg>';
+        case 'wedge_round_rect_callout': return '<svg viewBox="0 0 24 24"><path d="M5 3h14a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H14l-2 5-2-5H5a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3z" '+s+'/></svg>';
+        case 'wedge_ellipse_callout': return '<svg viewBox="0 0 24 24"><ellipse cx="12" cy="10" rx="10" ry="7" '+s+'/><path d="M10 16l0 5 4-4" '+s+'/></svg>';
+        case 'cloud_callout': return '<svg viewBox="0 0 24 24"><path d="M6 16a4 4 0 0 1-.8-7.9A5.5 5.5 0 0 1 16 4h.5A4 4 0 0 1 20 10a3 3 0 0 1-2 5H6z" '+s+'/><circle cx="8" cy="19" r="1" '+sf+'/><circle cx="6" cy="21" r="0.7" '+sf+'/></svg>';
+        case 'border_callout_1': return '<svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="14" '+s+'/><line x1="8" y1="16" x2="8" y2="22" stroke="#444" stroke-width="1.2"/></svg>';
+        case 'border_callout_2': return '<svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="14" '+s+'/><polyline points="8,16 8,19 12,22" '+s+'/></svg>';
+        case 'border_callout_3': return '<svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="14" '+s+'/><polyline points="8,16 10,19 6,22" '+s+'/></svg>';
+        // 선
+        case 'line': return '<svg viewBox="0 0 24 24"><line x1="2" y1="18" x2="22" y2="6" stroke="#444" stroke-width="1.2"/></svg>';
+        case 'arrow': return '<svg viewBox="0 0 24 24"><line x1="2" y1="18" x2="19" y2="6" stroke="#444" stroke-width="1.2"/><polygon points="22,4 16,6 19,9" fill="#444"/></svg>';
+        default: return '<svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" '+s+'/></svg>';
+    }
+}
+
+// ============ 도형 카탈로그 ============
+var SHAPE_CATEGORIES = [
+    { name: '직사각형', shapes: [
+        { id: 'rectangle', label: '사각형' },
+        { id: 'rounded_rectangle', label: '둥근 사각형' },
+        { id: 'snip_1_rect', label: '모서리 1개 잘림' },
+        { id: 'snip_2_diag_rect', label: '대각 2개 잘림' },
+        { id: 'round_1_rect', label: '모서리 1개 둥근' },
+        { id: 'round_2_diag_rect', label: '대각 2개 둥근' },
+    ]},
+    { name: '기본 도형', shapes: [
+        { id: 'ellipse', label: '원/타원' },
+        { id: 'triangle', label: '삼각형' },
+        { id: 'right_triangle', label: '직각 삼각형' },
+        { id: 'parallelogram', label: '평행사변형' },
+        { id: 'trapezoid', label: '사다리꼴' },
+        { id: 'diamond', label: '마름모' },
+        { id: 'pentagon', label: '오각형' },
+        { id: 'hexagon', label: '육각형' },
+        { id: 'heptagon', label: '칠각형' },
+        { id: 'octagon', label: '팔각형' },
+        { id: 'decagon', label: '십각형' },
+        { id: 'dodecagon', label: '십이각형' },
+        { id: 'cross', label: '십자형' },
+        { id: 'donut', label: '도넛' },
+        { id: 'no_smoking', label: '금지' },
+        { id: 'block_arc', label: '호' },
+        { id: 'heart', label: '하트' },
+        { id: 'lightning_bolt', label: '번개' },
+        { id: 'sun', label: '태양' },
+        { id: 'moon', label: '달' },
+        { id: 'cloud', label: '구름' },
+        { id: 'smiley_face', label: '웃는 얼굴' },
+        { id: 'folded_corner', label: '접힌 모서리' },
+        { id: 'frame', label: '프레임' },
+        { id: 'teardrop', label: '물방울' },
+        { id: 'plaque', label: '명판' },
+        { id: 'brace_pair', label: '중괄호 쌍' },
+        { id: 'bracket_pair', label: '대괄호 쌍' },
+    ]},
+    { name: '블록 화살표', shapes: [
+        { id: 'right_arrow', label: '오른쪽 화살표' },
+        { id: 'left_arrow', label: '왼쪽 화살표' },
+        { id: 'up_arrow', label: '위쪽 화살표' },
+        { id: 'down_arrow', label: '아래쪽 화살표' },
+        { id: 'left_right_arrow', label: '좌우 화살표' },
+        { id: 'up_down_arrow', label: '상하 화살표' },
+        { id: 'quad_arrow', label: '사방 화살표' },
+        { id: 'notched_right_arrow', label: '노치 오른쪽 화살표' },
+        { id: 'chevron', label: '쉐브론' },
+        { id: 'home_plate', label: '홈 플레이트' },
+        { id: 'striped_right_arrow', label: '줄무늬 오른쪽 화살표' },
+        { id: 'bent_arrow', label: '꺾인 화살표' },
+        { id: 'u_turn_arrow', label: '유턴 화살표' },
+        { id: 'circular_arrow', label: '원형 화살표' },
+    ]},
+    { name: '수학', shapes: [
+        { id: 'math_plus', label: '더하기' },
+        { id: 'math_minus', label: '빼기' },
+        { id: 'math_multiply', label: '곱하기' },
+        { id: 'math_divide', label: '나누기' },
+        { id: 'math_equal', label: '등호' },
+        { id: 'math_not_equal', label: '부등호' },
+    ]},
+    { name: '별 및 현수막', shapes: [
+        { id: 'star_4_point', label: '4각별' },
+        { id: 'star_5_point', label: '5각별' },
+        { id: 'star_6_point', label: '6각별' },
+        { id: 'star_8_point', label: '8각별' },
+        { id: 'star_10_point', label: '10각별' },
+        { id: 'star_12_point', label: '12각별' },
+        { id: 'star_16_point', label: '16각별' },
+        { id: 'star_24_point', label: '24각별' },
+        { id: 'star_32_point', label: '32각별' },
+        { id: 'explosion_1', label: '폭발 1' },
+        { id: 'explosion_2', label: '폭발 2' },
+        { id: 'wave', label: '물결' },
+        { id: 'double_wave', label: '이중 물결' },
+        { id: 'ribbon', label: '리본' },
+    ]},
+    { name: '설명선', shapes: [
+        { id: 'wedge_rect_callout', label: '사각 설명선' },
+        { id: 'wedge_round_rect_callout', label: '둥근 사각 설명선' },
+        { id: 'wedge_ellipse_callout', label: '타원 설명선' },
+        { id: 'cloud_callout', label: '구름 설명선' },
+        { id: 'border_callout_1', label: '테두리 설명선 1' },
+        { id: 'border_callout_2', label: '테두리 설명선 2' },
+        { id: 'border_callout_3', label: '테두리 설명선 3' },
+    ]},
+    { name: '선', shapes: [
+        { id: 'line', label: '직선' },
+        { id: 'arrow', label: '화살표' },
+    ]},
+];
+
+function initShapePicker() {
+    var container = document.getElementById('shapeDropdown');
+    if (!container) return;
+    var html = '';
+    SHAPE_CATEGORIES.forEach(function(cat) {
+        html += '<div class="shape-picker-category">' + cat.name + '</div>';
+        html += '<div class="shape-picker-grid">';
+        cat.shapes.forEach(function(shape) {
+            html += '<button type="button" class="shape-picker-item" title="' + shape.label + '" onclick="addShapeObject(\'' + shape.id + '\')">';
+            html += _getShapeIconSVG(shape.id);
+            html += '</button>';
+        });
+        html += '</div>';
+    });
+    container.innerHTML = html;
+}
+
 function createShapeSVG(obj) {
     const s = obj.shape_style || {};
     const w = obj.width;
@@ -1775,6 +2114,8 @@ function createShapeSVG(obj) {
     const dashMap = { dashed: '8,4', dotted: '2,4' };
     const dashAttr = dashMap[s.stroke_dash] ? `stroke-dasharray="${dashMap[s.stroke_dash]}"` : '';
     const half = strokeW / 2;
+    const commonFill = `fill="${fill}" fill-opacity="${fillOpacity}"`;
+    const commonStroke = `stroke="${stroke}" stroke-width="${strokeW}" ${dashAttr}`;
 
     let inner = '';
 
@@ -1782,15 +2123,12 @@ function createShapeSVG(obj) {
         case 'rounded_rectangle': {
             const rx = s.border_radius || 12;
             inner = `<rect x="${half}" y="${half}" width="${Math.max(0, w - strokeW)}" height="${Math.max(0, h - strokeW)}"
-                      rx="${rx}" ry="${rx}"
-                      fill="${fill}" fill-opacity="${fillOpacity}"
-                      stroke="${stroke}" stroke-width="${strokeW}" ${dashAttr}/>`;
+                      rx="${rx}" ry="${rx}" ${commonFill} ${commonStroke}/>`;
             break;
         }
         case 'ellipse':
             inner = `<ellipse cx="${w / 2}" cy="${h / 2}" rx="${Math.max(0, w / 2 - half)}" ry="${Math.max(0, h / 2 - half)}"
-                      fill="${fill}" fill-opacity="${fillOpacity}"
-                      stroke="${stroke}" stroke-width="${strokeW}" ${dashAttr}/>`;
+                      ${commonFill} ${commonStroke}/>`;
             break;
         case 'line':
             inner = `<line x1="0" y1="${h / 2}" x2="${w}" y2="${h / 2}"
@@ -1813,10 +2151,357 @@ function createShapeSVG(obj) {
                   ${s.arrow_head === 'both' ? `marker-start="url(#${mid}_s)"` : ''}/>`;
             break;
         }
+        // 직사각형 변형
+        case 'snip_1_rect': {
+            var c = Math.min(w, h) * 0.2;
+            inner = `<polygon points="${half},${half} ${w - c - half},${half} ${w - half},${c + half} ${w - half},${h - half} ${half},${h - half}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'snip_2_diag_rect': {
+            var c = Math.min(w, h) * 0.2;
+            inner = `<polygon points="${c + half},${half} ${w - half},${half} ${w - half},${h - c - half} ${w - c - half},${h - half} ${half},${h - half} ${half},${c + half}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'round_1_rect': {
+            var r = Math.min(w, h) * 0.2;
+            inner = `<path d="M${half},${half} H${w - r - half} A${r},${r} 0 0 1 ${w - half},${r + half} V${h - half} H${half} Z" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'round_2_diag_rect': {
+            var r = Math.min(w, h) * 0.2;
+            inner = `<path d="M${r + half},${half} H${w - half} V${h - r - half} A${r},${r} 0 0 1 ${w - r - half},${h - half} H${half} V${r + half} A${r},${r} 0 0 1 ${r + half},${half} Z" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        // 기본 도형
+        case 'triangle':
+            inner = `<polygon points="${w / 2},${half} ${w - half},${h - half} ${half},${h - half}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'right_triangle':
+            inner = `<polygon points="${half},${h - half} ${w - half},${h - half} ${half},${half}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'parallelogram': {
+            var off = w * 0.2;
+            inner = `<polygon points="${off},${half} ${w - half},${half} ${w - off},${h - half} ${half},${h - half}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'trapezoid': {
+            var off = w * 0.2;
+            inner = `<polygon points="${off},${half} ${w - off},${half} ${w - half},${h - half} ${half},${h - half}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'diamond':
+            inner = `<polygon points="${w / 2},${half} ${w - half},${h / 2} ${w / 2},${h - half} ${half},${h / 2}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'pentagon':
+            inner = `<polygon points="${_regPolygonPts(w / 2, h / 2, Math.min(w, h) / 2 - half, 5, 0)}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'hexagon':
+            inner = `<polygon points="${_regPolygonPts(w / 2, h / 2, Math.min(w, h) / 2 - half, 6, 0)}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'heptagon':
+            inner = `<polygon points="${_regPolygonPts(w / 2, h / 2, Math.min(w, h) / 2 - half, 7, 0)}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'octagon':
+            inner = `<polygon points="${_regPolygonPts(w / 2, h / 2, Math.min(w, h) / 2 - half, 8, 0)}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'decagon':
+            inner = `<polygon points="${_regPolygonPts(w / 2, h / 2, Math.min(w, h) / 2 - half, 10, 0)}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'dodecagon':
+            inner = `<polygon points="${_regPolygonPts(w / 2, h / 2, Math.min(w, h) / 2 - half, 12, 0)}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'cross': {
+            var arm = w * 0.3;
+            var armH = h * 0.3;
+            inner = `<polygon points="${arm},${half} ${w - arm},${half} ${w - arm},${armH} ${w - half},${armH} ${w - half},${h - armH} ${w - arm},${h - armH} ${w - arm},${h - half} ${arm},${h - half} ${arm},${h - armH} ${half},${h - armH} ${half},${armH} ${arm},${armH}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'donut': {
+            var cx = w / 2, cy = h / 2;
+            var rx1 = w / 2 - half, ry1 = h / 2 - half;
+            var rx2 = rx1 * 0.5, ry2 = ry1 * 0.5;
+            inner = `<path d="M${cx + rx1},${cy} A${rx1},${ry1} 0 1 0 ${cx - rx1},${cy} A${rx1},${ry1} 0 1 0 ${cx + rx1},${cy} Z M${cx + rx2},${cy} A${rx2},${ry2} 0 1 1 ${cx - rx2},${cy} A${rx2},${ry2} 0 1 1 ${cx + rx2},${cy} Z" fill-rule="evenodd" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'no_smoking': {
+            var cx = w / 2, cy = h / 2;
+            var rx = w / 2 - half, ry = h / 2 - half;
+            inner = `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" ${commonFill} ${commonStroke}/>`;
+            var dx = rx * 0.707, dy = ry * 0.707;
+            inner += `<line x1="${cx - dx}" y1="${cy - dy}" x2="${cx + dx}" y2="${cy + dy}" stroke="${stroke}" stroke-width="${strokeW}" ${dashAttr}/>`;
+            break;
+        }
+        case 'block_arc': {
+            inner = `<path d="M${half},${h - half} A${w / 2 - half},${h / 2 - half} 0 0 1 ${w - half},${h - half}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'heart': {
+            var cx = w / 2, top = h * 0.2;
+            inner = `<path d="M${cx},${h - half} C${cx},${h * 0.65} ${half},${h * 0.45} ${half},${top + h * 0.1} A${w * 0.25},${h * 0.2} 0 0 1 ${cx},${top} A${w * 0.25},${h * 0.2} 0 0 1 ${w - half},${top + h * 0.1} C${w - half},${h * 0.45} ${cx},${h * 0.65} ${cx},${h - half} Z" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'lightning_bolt': {
+            inner = `<polygon points="${w * 0.55},${half} ${w * 0.25},${h * 0.45} ${w * 0.45},${h * 0.45} ${w * 0.4},${h - half} ${w * 0.75},${h * 0.5} ${w * 0.55},${h * 0.5} ${w * 0.6},${half}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'sun': {
+            var cx = w / 2, cy = h / 2;
+            var r = Math.min(w, h) * 0.22;
+            inner = `<circle cx="${cx}" cy="${cy}" r="${r}" ${commonFill} ${commonStroke}/>`;
+            var rayR = Math.min(w, h) * 0.45;
+            for (var i = 0; i < 8; i++) {
+                var a = i * Math.PI / 4;
+                inner += `<line x1="${cx + r * Math.cos(a)}" y1="${cy + r * Math.sin(a)}" x2="${cx + rayR * Math.cos(a)}" y2="${cy + rayR * Math.sin(a)}" stroke="${stroke}" stroke-width="${strokeW}" ${dashAttr}/>`;
+            }
+            break;
+        }
+        case 'moon': {
+            inner = `<path d="M${w * 0.7},${half} A${w * 0.4},${h * 0.45} 0 1 0 ${w * 0.7},${h - half} A${w * 0.25},${h * 0.35} 0 0 1 ${w * 0.7},${half} Z" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'cloud': {
+            inner = `<path d="M${w * 0.25},${h * 0.75} A${w * 0.17},${w * 0.17} 0 0 1 ${w * 0.12},${h * 0.45} A${w * 0.22},${w * 0.22} 0 0 1 ${w * 0.38},${h * 0.22} A${w * 0.2},${w * 0.2} 0 0 1 ${w * 0.68},${h * 0.2} A${w * 0.17},${w * 0.17} 0 0 1 ${w * 0.87},${h * 0.42} A${w * 0.15},${w * 0.15} 0 0 1 ${w * 0.82},${h * 0.72} Z" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'smiley_face': {
+            var cx = w / 2, cy = h / 2;
+            var rx = w / 2 - half, ry = h / 2 - half;
+            inner = `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" ${commonFill} ${commonStroke}/>`;
+            inner += `<circle cx="${cx - rx * 0.3}" cy="${cy - ry * 0.2}" r="${Math.min(rx, ry) * 0.08}" fill="${stroke}"/>`;
+            inner += `<circle cx="${cx + rx * 0.3}" cy="${cy - ry * 0.2}" r="${Math.min(rx, ry) * 0.08}" fill="${stroke}"/>`;
+            inner += `<path d="M${cx - rx * 0.35},${cy + ry * 0.2} Q${cx},${cy + ry * 0.55} ${cx + rx * 0.35},${cy + ry * 0.2}" fill="none" stroke="${stroke}" stroke-width="${strokeW}" ${dashAttr}/>`;
+            break;
+        }
+        case 'folded_corner': {
+            var fold = Math.min(w, h) * 0.2;
+            inner = `<polygon points="${half},${half} ${w - half},${half} ${w - half},${h - fold - half} ${w - fold - half},${h - half} ${half},${h - half}" ${commonFill} ${commonStroke}/>`;
+            inner += `<polygon points="${w - fold - half},${h - half} ${w - fold - half},${h - fold - half} ${w - half},${h - fold - half}" fill="#e0e0e0" stroke="${stroke}" stroke-width="${Math.max(1, strokeW * 0.7)}"/>`;
+            break;
+        }
+        case 'frame': {
+            var bw = Math.min(w, h) * 0.12;
+            inner = `<rect x="${half}" y="${half}" width="${w - strokeW}" height="${h - strokeW}" ${commonFill} ${commonStroke}/>`;
+            inner += `<rect x="${bw}" y="${bw}" width="${w - bw * 2}" height="${h - bw * 2}" fill="white" fill-opacity="0.8" stroke="${stroke}" stroke-width="${Math.max(1, strokeW * 0.7)}"/>`;
+            break;
+        }
+        case 'teardrop': {
+            inner = `<path d="M${w / 2},${half} C${w / 2},${half} ${w - half},${h * 0.35} ${w - half},${h * 0.6} A${w / 2 - half},${h * 0.4 - half} 0 1 1 ${half},${h * 0.6} C${half},${h * 0.35} ${w / 2},${half} ${w / 2},${half} Z" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'plaque': {
+            var r = Math.min(w, h) * 0.12;
+            inner = `<path d="M${half},${r + half} A${r},${r} 0 0 1 ${r + half},${half} H${w - r - half} A${r},${r} 0 0 1 ${w - half},${r + half} V${h - r - half} A${r},${r} 0 0 1 ${w - r - half},${h - half} H${r + half} A${r},${r} 0 0 1 ${half},${h - r - half} Z" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'brace_pair': {
+            var q = Math.min(w, h) * 0.15;
+            inner = `<path d="M${w * 0.15},${half} Q${half},${half} ${half},${q + half} V${h / 2 - q} Q${half},${h / 2} ${half - q * 0.3},${h / 2} Q${half},${h / 2} ${half},${h / 2 + q} V${h - q - half} Q${half},${h - half} ${w * 0.15},${h - half}" fill="none" ${commonStroke}/>`;
+            inner += `<path d="M${w * 0.85},${half} Q${w - half},${half} ${w - half},${q + half} V${h / 2 - q} Q${w - half},${h / 2} ${w - half + q * 0.3},${h / 2} Q${w - half},${h / 2} ${w - half},${h / 2 + q} V${h - q - half} Q${w - half},${h - half} ${w * 0.85},${h - half}" fill="none" ${commonStroke}/>`;
+            break;
+        }
+        case 'bracket_pair': {
+            inner = `<path d="M${w * 0.15},${half} H${half} V${h - half} H${w * 0.15}" fill="none" ${commonStroke}/>`;
+            inner += `<path d="M${w * 0.85},${half} H${w - half} V${h - half} H${w * 0.85}" fill="none" ${commonStroke}/>`;
+            break;
+        }
+        // 블록 화살표
+        case 'right_arrow': {
+            var shaft = h * 0.3;
+            inner = `<polygon points="${half},${h / 2 - shaft} ${w * 0.65},${h / 2 - shaft} ${w * 0.65},${half} ${w - half},${h / 2} ${w * 0.65},${h - half} ${w * 0.65},${h / 2 + shaft} ${half},${h / 2 + shaft}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'left_arrow': {
+            var shaft = h * 0.3;
+            inner = `<polygon points="${w - half},${h / 2 - shaft} ${w * 0.35},${h / 2 - shaft} ${w * 0.35},${half} ${half},${h / 2} ${w * 0.35},${h - half} ${w * 0.35},${h / 2 + shaft} ${w - half},${h / 2 + shaft}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'up_arrow': {
+            var shaft = w * 0.3;
+            inner = `<polygon points="${w / 2 - shaft},${h - half} ${w / 2 - shaft},${h * 0.35} ${half},${h * 0.35} ${w / 2},${half} ${w - half},${h * 0.35} ${w / 2 + shaft},${h * 0.35} ${w / 2 + shaft},${h - half}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'down_arrow': {
+            var shaft = w * 0.3;
+            inner = `<polygon points="${w / 2 - shaft},${half} ${w / 2 - shaft},${h * 0.65} ${half},${h * 0.65} ${w / 2},${h - half} ${w - half},${h * 0.65} ${w / 2 + shaft},${h * 0.65} ${w / 2 + shaft},${half}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'left_right_arrow': {
+            var shaft = h * 0.3, head = w * 0.2;
+            inner = `<polygon points="${half},${h / 2} ${head},${half} ${head},${h / 2 - shaft} ${w - head},${h / 2 - shaft} ${w - head},${half} ${w - half},${h / 2} ${w - head},${h - half} ${w - head},${h / 2 + shaft} ${head},${h / 2 + shaft} ${head},${h - half}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'up_down_arrow': {
+            var shaft = w * 0.3, head = h * 0.2;
+            inner = `<polygon points="${w / 2},${half} ${w - half},${head} ${w / 2 + shaft},${head} ${w / 2 + shaft},${h - head} ${w - half},${h - head} ${w / 2},${h - half} ${half},${h - head} ${w / 2 - shaft},${h - head} ${w / 2 - shaft},${head} ${half},${head}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'quad_arrow': {
+            var s2 = Math.min(w, h) * 0.12, head = Math.min(w, h) * 0.25;
+            var cx = w / 2, cy = h / 2;
+            inner = `<polygon points="${cx},${half} ${cx + head},${head + half} ${cx + s2},${head + half} ${cx + s2},${cy - s2} ${cx + head + s2},${cy - s2} ${cx + head + s2},${cy - head} ${w - half},${cy} ${cx + head + s2},${cy + head} ${cx + head + s2},${cy + s2} ${cx + s2},${cy + s2} ${cx + s2},${cy + head + s2} ${cx + head},${cy + head + s2} ${cx},${h - half} ${cx - head},${cy + head + s2} ${cx - s2},${cy + head + s2} ${cx - s2},${cy + s2} ${cx - head - s2},${cy + s2} ${cx - head - s2},${cy + head} ${half},${cy} ${cx - head - s2},${cy - head} ${cx - head - s2},${cy - s2} ${cx - s2},${cy - s2} ${cx - s2},${head + half} ${cx - head},${head + half}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'notched_right_arrow': {
+            var shaft = h * 0.3, notch = w * 0.08;
+            inner = `<polygon points="${half},${h / 2 - shaft} ${w * 0.65},${h / 2 - shaft} ${w * 0.65},${half} ${w - half},${h / 2} ${w * 0.65},${h - half} ${w * 0.65},${h / 2 + shaft} ${half},${h / 2 + shaft} ${notch + half},${h / 2}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'chevron': {
+            var notch = w * 0.25;
+            inner = `<polygon points="${half},${half} ${w - notch},${half} ${w - half},${h / 2} ${w - notch},${h - half} ${half},${h - half} ${notch},${h / 2}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'home_plate': {
+            var point = w * 0.15;
+            inner = `<polygon points="${half},${half} ${w - point},${half} ${w - half},${h / 2} ${w - point},${h - half} ${half},${h - half}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'striped_right_arrow': {
+            var shaft = h * 0.3;
+            inner = `<polygon points="${w * 0.2},${h / 2 - shaft} ${w * 0.65},${h / 2 - shaft} ${w * 0.65},${half} ${w - half},${h / 2} ${w * 0.65},${h - half} ${w * 0.65},${h / 2 + shaft} ${w * 0.2},${h / 2 + shaft}" ${commonFill} ${commonStroke}/>`;
+            var stripeGap = w * 0.04;
+            for (var si = 0; si < 3; si++) {
+                var sx = half + si * (stripeGap + strokeW);
+                inner += `<line x1="${sx}" y1="${h / 2 - shaft}" x2="${sx}" y2="${h / 2 + shaft}" stroke="${stroke}" stroke-width="${strokeW}"/>`;
+            }
+            break;
+        }
+        case 'bent_arrow': {
+            var shaft = h * 0.12;
+            inner = `<path d="M${half},${h - half} V${h * 0.35} H${w * 0.55} V${h * 0.15} L${w - half},${h * 0.35} L${w * 0.55},${h * 0.55} V${h * 0.35 + shaft * 2} H${half + shaft * 3} V${h - half} Z" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'u_turn_arrow': {
+            var shaftW = w * 0.12;
+            inner = `<path d="M${half},${h - half} V${h * 0.3} A${w * 0.3},${h * 0.25} 0 0 1 ${w * 0.6 + half},${h * 0.3} V${h * 0.5} H${w * 0.8} L${w * 0.6},${h * 0.7} L${w * 0.4},${h * 0.5} H${w * 0.6 + half - shaftW} V${h * 0.3} A${w * 0.18},${h * 0.13} 0 0 0 ${half + shaftW},${h * 0.3} V${h - half} Z" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'circular_arrow': {
+            var cx = w / 2, cy = h / 2;
+            var rx = w * 0.4, ry = h * 0.4;
+            var rx2 = w * 0.28, ry2 = h * 0.28;
+            inner = `<path d="M${cx + rx},${cy} A${rx},${ry} 0 1 0 ${cx},${cy - ry} L${cx},${cy - ry - h * 0.08} A${rx + w * 0.08},${ry + h * 0.08} 0 1 1 ${cx + rx + w * 0.08},${cy}" ${commonFill} ${commonStroke}/>`;
+            inner += `<polygon points="${cx + rx + w * 0.12},${cy - h * 0.08} ${cx + rx + w * 0.12},${cy + h * 0.08} ${cx + rx - w * 0.02},${cy}" fill="${fill === 'none' ? stroke : fill}" stroke="${stroke}" stroke-width="${strokeW}"/>`;
+            break;
+        }
+        // 수학
+        case 'math_plus': {
+            var arm = Math.min(w, h) * 0.18;
+            inner = `<polygon points="${w / 2 - arm},${half} ${w / 2 + arm},${half} ${w / 2 + arm},${h / 2 - arm} ${w - half},${h / 2 - arm} ${w - half},${h / 2 + arm} ${w / 2 + arm},${h / 2 + arm} ${w / 2 + arm},${h - half} ${w / 2 - arm},${h - half} ${w / 2 - arm},${h / 2 + arm} ${half},${h / 2 + arm} ${half},${h / 2 - arm} ${w / 2 - arm},${h / 2 - arm}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'math_minus':
+            inner = `<rect x="${half}" y="${h * 0.35}" width="${w - strokeW}" height="${h * 0.3}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'math_multiply': {
+            var cx = w / 2, cy = h / 2, arm = Math.min(w, h) * 0.08, len = Math.min(w, h) * 0.4;
+            inner = `<path d="M${cx - arm},${half} L${cx + arm},${half} L${cx + arm},${cy - arm - len * 0.3} L${w - half},${cy - arm} L${w - half},${cy + arm} L${cx + arm + len * 0.3},${cy + arm} L${w - half - arm},${h - half - arm} L${cx + arm},${h - half} L${cx - arm},${h - half} L${cx - arm},${cy + arm + len * 0.3} L${half},${cy + arm} L${half},${cy - arm} L${cx - arm - len * 0.3},${cy - arm} Z" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'math_divide': {
+            var dotR = Math.min(w, h) * 0.08;
+            inner = `<rect x="${half}" y="${h * 0.4}" width="${w - strokeW}" height="${h * 0.2}" ${commonFill} ${commonStroke}/>`;
+            inner += `<circle cx="${w / 2}" cy="${h * 0.2}" r="${dotR}" ${commonFill} ${commonStroke}/>`;
+            inner += `<circle cx="${w / 2}" cy="${h * 0.8}" r="${dotR}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'math_equal':
+            inner = `<rect x="${w * 0.1}" y="${h * 0.28}" width="${w * 0.8}" height="${h * 0.12}" ${commonFill} ${commonStroke}/>`;
+            inner += `<rect x="${w * 0.1}" y="${h * 0.6}" width="${w * 0.8}" height="${h * 0.12}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'math_not_equal':
+            inner = `<rect x="${w * 0.1}" y="${h * 0.28}" width="${w * 0.8}" height="${h * 0.12}" ${commonFill} ${commonStroke}/>`;
+            inner += `<rect x="${w * 0.1}" y="${h * 0.6}" width="${w * 0.8}" height="${h * 0.12}" ${commonFill} ${commonStroke}/>`;
+            inner += `<line x1="${w * 0.65}" y1="${h * 0.15}" x2="${w * 0.35}" y2="${h * 0.85}" stroke="${stroke}" stroke-width="${strokeW + 1}" ${dashAttr}/>`;
+            break;
+        // 별
+        case 'star_4_point':
+            inner = `<polygon points="${_starPts(w / 2, h / 2, Math.min(w, h) / 2 - half, Math.min(w, h) * 0.18, 4, 0)}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'star_5_point':
+            inner = `<polygon points="${_starPts(w / 2, h / 2, Math.min(w, h) / 2 - half, Math.min(w, h) * 0.18, 5, 0)}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'star_6_point':
+            inner = `<polygon points="${_starPts(w / 2, h / 2, Math.min(w, h) / 2 - half, Math.min(w, h) * 0.22, 6, 0)}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'star_8_point':
+            inner = `<polygon points="${_starPts(w / 2, h / 2, Math.min(w, h) / 2 - half, Math.min(w, h) * 0.22, 8, 0)}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'star_10_point':
+            inner = `<polygon points="${_starPts(w / 2, h / 2, Math.min(w, h) / 2 - half, Math.min(w, h) * 0.25, 10, 0)}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'star_12_point':
+            inner = `<polygon points="${_starPts(w / 2, h / 2, Math.min(w, h) / 2 - half, Math.min(w, h) * 0.25, 12, 0)}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'star_16_point':
+            inner = `<polygon points="${_starPts(w / 2, h / 2, Math.min(w, h) / 2 - half, Math.min(w, h) * 0.3, 16, 0)}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'star_24_point':
+            inner = `<polygon points="${_starPts(w / 2, h / 2, Math.min(w, h) / 2 - half, Math.min(w, h) * 0.32, 24, 0)}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'star_32_point':
+            inner = `<polygon points="${_starPts(w / 2, h / 2, Math.min(w, h) / 2 - half, Math.min(w, h) * 0.35, 32, 0)}" ${commonFill} ${commonStroke}/>`;
+            break;
+        case 'explosion_1': {
+            inner = `<polygon points="${w * 0.5},${half} ${w * 0.58},${h * 0.3} ${w * 0.85},${h * 0.15} ${w * 0.68},${h * 0.38} ${w - half},${h * 0.5} ${w * 0.68},${h * 0.6} ${w * 0.85},${h * 0.85} ${w * 0.58},${h * 0.68} ${w * 0.5},${h - half} ${w * 0.42},${h * 0.68} ${w * 0.15},${h * 0.85} ${w * 0.32},${h * 0.6} ${half},${h * 0.5} ${w * 0.32},${h * 0.38} ${w * 0.15},${h * 0.15} ${w * 0.42},${h * 0.3}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'explosion_2': {
+            inner = `<polygon points="${w * 0.5},${half} ${w * 0.54},${h * 0.25} ${w * 0.72},${h * 0.1} ${w * 0.62},${h * 0.3} ${w * 0.9},${h * 0.25} ${w * 0.7},${h * 0.42} ${w - half},${h * 0.5} ${w * 0.72},${h * 0.58} ${w * 0.9},${h * 0.75} ${w * 0.62},${h * 0.65} ${w * 0.72},${h * 0.9} ${w * 0.54},${h * 0.72} ${w * 0.5},${h - half} ${w * 0.46},${h * 0.72} ${w * 0.28},${h * 0.9} ${w * 0.38},${h * 0.65} ${w * 0.1},${h * 0.75} ${w * 0.28},${h * 0.58} ${half},${h * 0.5} ${w * 0.3},${h * 0.42} ${w * 0.1},${h * 0.25} ${w * 0.38},${h * 0.3} ${w * 0.28},${h * 0.1} ${w * 0.46},${h * 0.25}" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'wave': {
+            inner = `<path d="M${half},${h * 0.35} C${w * 0.2},${half} ${w * 0.35},${half} ${w * 0.5},${h * 0.35} C${w * 0.65},${h * 0.5} ${w * 0.8},${h * 0.5} ${w - half},${h * 0.35} V${h * 0.65} C${w * 0.8},${h - half} ${w * 0.65},${h - half} ${w * 0.5},${h * 0.65} C${w * 0.35},${h * 0.5} ${w * 0.2},${h * 0.5} ${half},${h * 0.65} Z" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'double_wave': {
+            inner = `<path d="M${half},${h * 0.3} C${w * 0.15},${h * 0.15} ${w * 0.35},${h * 0.15} ${w * 0.5},${h * 0.3} S${w * 0.85},${h * 0.45} ${w - half},${h * 0.3}" fill="none" ${commonStroke}/>`;
+            inner += `<path d="M${half},${h * 0.7} C${w * 0.15},${h * 0.55} ${w * 0.35},${h * 0.55} ${w * 0.5},${h * 0.7} S${w * 0.85},${h * 0.85} ${w - half},${h * 0.7}" fill="none" ${commonStroke}/>`;
+            break;
+        }
+        case 'ribbon': {
+            inner = `<path d="M${half},${h * 0.3} L${w * 0.12},${half} H${w * 0.88} L${w - half},${h * 0.3} L${w * 0.88},${h * 0.5} V${h - half} H${w * 0.12} V${h * 0.5} Z" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        // 설명선
+        case 'wedge_rect_callout': {
+            inner = `<path d="M${half},${half} H${w - half} V${h * 0.65} H${w * 0.55} L${w * 0.4},${h - half} L${w * 0.35},${h * 0.65} H${half} Z" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'wedge_round_rect_callout': {
+            var r = Math.min(w, h) * 0.08;
+            inner = `<path d="M${r + half},${half} H${w - r - half} A${r},${r} 0 0 1 ${w - half},${r + half} V${h * 0.65 - r} A${r},${r} 0 0 1 ${w - r - half},${h * 0.65} H${w * 0.55} L${w * 0.4},${h - half} L${w * 0.35},${h * 0.65} H${r + half} A${r},${r} 0 0 1 ${half},${h * 0.65 - r} V${r + half} A${r},${r} 0 0 1 ${r + half},${half} Z" ${commonFill} ${commonStroke}/>`;
+            break;
+        }
+        case 'wedge_ellipse_callout': {
+            inner = `<ellipse cx="${w / 2}" cy="${h * 0.4}" rx="${w / 2 - half}" ry="${h * 0.35}" ${commonFill} ${commonStroke}/>`;
+            inner += `<path d="M${w * 0.42},${h * 0.7} L${w * 0.35},${h - half} L${w * 0.52},${h * 0.72}" fill="${fill === 'none' ? 'none' : fill}" stroke="${stroke}" stroke-width="${strokeW}" ${dashAttr}/>`;
+            break;
+        }
+        case 'cloud_callout': {
+            inner = `<path d="M${w * 0.25},${h * 0.65} A${w * 0.17},${w * 0.15} 0 0 1 ${w * 0.12},${h * 0.38} A${w * 0.2},${w * 0.2} 0 0 1 ${w * 0.38},${h * 0.18} A${w * 0.18},${w * 0.18} 0 0 1 ${w * 0.65},${h * 0.15} A${w * 0.15},${w * 0.15} 0 0 1 ${w * 0.85},${h * 0.35} A${w * 0.13},${w * 0.13} 0 0 1 ${w * 0.8},${h * 0.62} Z" ${commonFill} ${commonStroke}/>`;
+            inner += `<circle cx="${w * 0.3}" cy="${h * 0.78}" r="${Math.min(w, h) * 0.04}" fill="${fill === 'none' ? 'none' : fill}" stroke="${stroke}" stroke-width="${strokeW}"/>`;
+            inner += `<circle cx="${w * 0.22}" cy="${h * 0.88}" r="${Math.min(w, h) * 0.025}" fill="${fill === 'none' ? 'none' : fill}" stroke="${stroke}" stroke-width="${strokeW}"/>`;
+            break;
+        }
+        case 'border_callout_1': {
+            inner = `<rect x="${half}" y="${half}" width="${w - strokeW}" height="${h * 0.65}" ${commonFill} ${commonStroke}/>`;
+            inner += `<line x1="${w * 0.3}" y1="${h * 0.65}" x2="${w * 0.3}" y2="${h - half}" stroke="${stroke}" stroke-width="${strokeW}" ${dashAttr}/>`;
+            break;
+        }
+        case 'border_callout_2': {
+            inner = `<rect x="${half}" y="${half}" width="${w - strokeW}" height="${h * 0.65}" ${commonFill} ${commonStroke}/>`;
+            inner += `<polyline points="${w * 0.3},${h * 0.65} ${w * 0.3},${h * 0.8} ${w * 0.45},${h - half}" fill="none" stroke="${stroke}" stroke-width="${strokeW}" ${dashAttr}/>`;
+            break;
+        }
+        case 'border_callout_3': {
+            inner = `<rect x="${half}" y="${half}" width="${w - strokeW}" height="${h * 0.65}" ${commonFill} ${commonStroke}/>`;
+            inner += `<polyline points="${w * 0.3},${h * 0.65} ${w * 0.4},${h * 0.8} ${w * 0.2},${h - half}" fill="none" stroke="${stroke}" stroke-width="${strokeW}" ${dashAttr}/>`;
+            break;
+        }
         default: // rectangle
             inner = `<rect x="${half}" y="${half}" width="${Math.max(0, w - strokeW)}" height="${Math.max(0, h - strokeW)}"
-                      fill="${fill}" fill-opacity="${fillOpacity}"
-                      stroke="${stroke}" stroke-width="${strokeW}" ${dashAttr}/>`;
+                      ${commonFill} ${commonStroke}/>`;
             break;
     }
 
@@ -1864,30 +2549,58 @@ function updateShapePropertyVisibility() {
     $('#shapeFillRow').toggle(!isLine);
     $('#borderRadiusGroup').toggle(s.shape_type === 'rounded_rectangle');
     $('#arrowHeadGroup').toggle(s.shape_type === 'arrow');
+
+    // 도형 유형 변경 시 라인이 아닌 블록 화살표는 fill 표시
+    var blockArrows = ['right_arrow','left_arrow','up_arrow','down_arrow','left_right_arrow','up_down_arrow','quad_arrow','notched_right_arrow','chevron','home_plate','striped_right_arrow','bent_arrow','u_turn_arrow','circular_arrow'];
+    if (blockArrows.indexOf(s.shape_type) >= 0) {
+        $('#shapeFillRow').show();
+    }
 }
 
 // ============ 슬라이드 메타 ============
+function calcMetaFromObjects(objects) {
+    var hasTitle = false, hasGovernance = false, descCount = 0;
+    (objects || []).forEach(function(obj) {
+        if (obj.role === 'title') hasTitle = true;
+        if (obj.role === 'governance') hasGovernance = true;
+        if (obj.role === 'description') descCount++;
+    });
+    return { has_title: hasTitle, has_governance: hasGovernance, description_count: descCount };
+}
+
 function updateSlideMetaUI() {
     $('#metaContentType').val(state.slideMeta.content_type || 'body');
     $('#metaLayout').val(state.slideMeta.layout || '');
-    $('#metaHasTitle').prop('checked', state.slideMeta.has_title || false);
-    $('#metaHasGovernance').prop('checked', state.slideMeta.has_governance || false);
-    $('#metaDescCount').val(state.slideMeta.description_count || 0);
     _showMetaTypeGuide(state.slideMeta.content_type || 'body');
+
+    // 자동 계산된 메타 정보 표시
+    var auto = calcMetaFromObjects(state.objects);
+    var parts = [];
+    if (auto.has_title) parts.push('제목');
+    if (auto.has_governance) parts.push('거버넌스');
+    if (auto.description_count > 0) parts.push('설명 ' + auto.description_count + '개');
+    if (parts.length > 0) {
+        $('#metaAutoSummary').text('자동 감지: ' + parts.join(' · '));
+        $('#metaAutoInfo').show();
+    } else {
+        $('#metaAutoInfo').hide();
+    }
 }
 
 function updateSlideMeta() {
     const newLayout = $('#metaLayout').val();
     const oldLayout = state._previousLayout || '';
 
+    var auto = calcMetaFromObjects(state.objects);
     state.slideMeta = {
         content_type: $('#metaContentType').val(),
         layout: newLayout,
-        has_title: $('#metaHasTitle').is(':checked'),
-        has_governance: $('#metaHasGovernance').is(':checked'),
-        description_count: parseInt($('#metaDescCount').val()) || 0,
+        has_title: auto.has_title,
+        has_governance: auto.has_governance,
+        description_count: auto.description_count,
     };
     _showMetaTypeGuide(state.slideMeta.content_type);
+    updateSlideMetaUI();
 
     // 레이아웃이 변경되었으면 프리셋 적용
     if (newLayout && newLayout !== oldLayout) {
@@ -2133,11 +2846,12 @@ function applyLayoutPreset(layout) {
     state.objects = presetData.objects;
     state.selectedObject = null;
 
-    // 슬라이드 메타 자동 업데이트
+    // 슬라이드 메타 자동 업데이트 (has_title 등은 오브젝트에서 자동 계산)
+    var auto = calcMetaFromObjects(state.objects);
     state.slideMeta.content_type = presetData.content_type;
-    state.slideMeta.has_title = presetData.has_title;
-    state.slideMeta.has_governance = presetData.has_governance;
-    state.slideMeta.description_count = presetData.description_count;
+    state.slideMeta.has_title = auto.has_title;
+    state.slideMeta.has_governance = auto.has_governance;
+    state.slideMeta.description_count = auto.description_count;
     state.slideMeta.layout = layout;
 
     // 이전 레이아웃 갱신

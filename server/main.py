@@ -10,7 +10,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from starlette.middleware.base import BaseHTTPMiddleware
 from config import settings
 from services.mongo_service import init_indexes, close_connection, close_connection_sync
 from services.redis_service import init_redis, close_redis, close_redis_sync
@@ -18,15 +17,30 @@ from routers import auth, template, project, resource, generate, font, prompt, c
 from utils.versioning import get_file_version
 
 
-class StaticCacheMiddleware(BaseHTTPMiddleware):
-    """업로드 이미지에 브라우저 캐시 헤더 추가"""
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
-        path = request.url.path
-        if path.startswith("/uploads/"):
-            # 배경/이미지: 7일 캐시 (파일명이 UUID라 변경 시 URL 자체가 바뀜)
-            response.headers["Cache-Control"] = "public, max-age=604800, immutable"
-        return response
+class StaticCacheMiddleware:
+    """업로드 이미지에 브라우저 캐시 헤더 추가 (순수 ASGI 미들웨어 - shutdown hang 방지)"""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if not path.startswith("/uploads/"):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_cache(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                headers.append((b"cache-control", b"public, max-age=604800, immutable"))
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_with_cache)
 
 
 @asynccontextmanager
@@ -73,13 +87,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="PPTMaker API",
+    title="OfficeCoWork API",
     description="기업용 파워포인트 자동 생성 솔루션",
     version="1.0.0",
     lifespan=lifespan,
 )
 
-# 업로드 파일 캐시 헤더
+# 업로드 파일 캐시 헤더 (순수 ASGI 미들웨어)
 app.add_middleware(StaticCacheMiddleware)
 
 # CORS 설정 (.env CORS_ORIGINS 기반)
@@ -299,7 +313,7 @@ if __name__ == "__main__":
 
     # 콘솔 타이틀 설정
     _proto = "HTTPS" if (settings.SSL_CERTFILE and settings.SSL_KEYFILE) else "HTTP"
-    _title = f"PPTMaker Server | {_proto} :{settings.SERVER_PORT} | DB:{settings.PPTMAKER_DB} | Redis:{settings.REDIS_HOST}:{settings.REDIS_PORT} | {settings.ANTHROPIC_MODEL}"
+    _title = f"OfficeCoWork Server | {_proto} :{settings.SERVER_PORT} | DB:{settings.PPTMAKER_DB} | Redis:{settings.REDIS_HOST}:{settings.REDIS_PORT} | {settings.ANTHROPIC_MODEL}"
     if platform.system() == "Windows":
         import ctypes
         ctypes.windll.kernel32.SetConsoleTitleW(_title)
@@ -327,7 +341,7 @@ if __name__ == "__main__":
     protocol = "https" if use_https else "http"
     print("")
     print("=" * 60)
-    print("  PPTMaker Server")
+    print("  OfficeCoWork Server")
     print("=" * 60)
     print(f"  Protocol     : {protocol.upper()}")
     print(f"  Host         : {settings.SERVER_HOST}")
@@ -335,7 +349,7 @@ if __name__ == "__main__":
     print(f"  URL          : {protocol}://{settings.SERVER_HOST}:{settings.SERVER_PORT}")
     print("-" * 60)
     print(f"  MongoDB      : {settings.MONGO_URI.split('@')[-1].split('?')[0] if '@' in settings.MONGO_URI else settings.MONGO_URI}")
-    print(f"  PPTMaker DB  : {settings.PPTMAKER_DB}")
+    print(f"  OfficeCoWork DB : {settings.PPTMAKER_DB}")
     print(f"  Org DB       : {settings.ORG_DB} / {settings.ORG_COLLECTION}")
     _redis_pw = "(비밀번호 설정)" if settings.REDIS_PASSWORD else "(비밀번호 없음)"
     print(f"  Redis        : {settings.REDIS_HOST}:{settings.REDIS_PORT} DB={settings.REDIS_DB} {_redis_pw}")

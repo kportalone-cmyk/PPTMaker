@@ -68,3 +68,8 @@ class TemplateUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     background_image: Optional[str] = None
+
+
+class BulkFontUpdate(BaseModel):
+    from_font: Optional[str] = None  # None이면 전체 텍스트 대상
+    to_font: str

@@ -3,7 +3,7 @@ from bson import ObjectId
 from datetime import datetime
 from models.template import (
     TemplateCreate, TemplateUpdate,
-    SlideCreate, SlideUpdate
+    SlideCreate, SlideUpdate, BulkFontUpdate
 )
 from services.mongo_service import get_db
 from services.auth_service import decode_jwt_token, get_user_flexible, is_admin
@@ -225,3 +225,43 @@ async def upload_slide_image(jwt_token: str, file: UploadFile = File(...)):
 
     image_url = f"/uploads/images/{filename}"
     return {"image_url": image_url}
+
+
+# ============ 폰트 일괄 변경 ============
+
+@router.put("/{jwt_token}/api/admin/templates/{template_id}/bulk-font")
+async def bulk_font_update(jwt_token: str, template_id: str, data: BulkFontUpdate):
+    """템플릿 전체 슬라이드의 폰트 일괄 변경"""
+    await verify_admin(jwt_token)
+    db = get_db()
+
+    template = await db.templates.find_one({"_id": ObjectId(template_id)})
+    if not template:
+        raise HTTPException(status_code=404, detail="템플릿을 찾을 수 없습니다")
+
+    cursor = db.slides.find({"template_id": template_id})
+    updated_count = 0
+
+    async for slide in cursor:
+        objects = slide.get("objects", [])
+        modified = False
+
+        for obj in objects:
+            if obj.get("obj_type") != "text":
+                continue
+            text_style = obj.get("text_style")
+            if not text_style:
+                continue
+            if data.from_font is None or text_style.get("font_family") == data.from_font:
+                text_style["font_family"] = data.to_font
+                updated_count += 1
+                modified = True
+
+        if modified:
+            await db.slides.update_one(
+                {"_id": slide["_id"]},
+                {"$set": {"objects": objects, "updated_at": datetime.utcnow()}}
+            )
+
+    await invalidate_template_cache(template_id)
+    return {"success": True, "updated_count": updated_count}
