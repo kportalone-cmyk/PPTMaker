@@ -4254,7 +4254,8 @@ body {
 .excel-charts-container {
     border-top: 1px solid var(--border);
     background: var(--bg);
-    max-height: 50%;
+    min-height: 340px;
+    max-height: 60%;
     overflow-y: auto;
     flex-shrink: 0;
 }
@@ -4288,17 +4289,17 @@ body {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 16px;
-    min-height: 260px;
+    padding: 12px;
+    min-height: 320px;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    justify-content: center;
+    align-items: stretch;
 }
 
 .excel-chart-card .echarts-container {
     width: 100%;
     height: 300px;
+    flex-shrink: 0;
 }
 
 
@@ -4551,10 +4552,11 @@ body {
     overflow-y: auto;
     border: none !important;
     border-radius: 0 !important;
-    font-family: "Malgun Gothic", "맑은 고딕", sans-serif;
-    font-size: 14px;
-    line-height: 1.6;
-    padding: 20px;
+    font-family: "Malgun Gothic", "맑은 고딕", "Segoe UI", sans-serif;
+    font-size: 14.5px;
+    line-height: 1.8;
+    color: #1a1a2e;
+    padding: 40px 48px;
     max-width: 800px;
     margin: 0 auto;
 }
@@ -4819,23 +4821,23 @@ body {
     color: #475569;
 }
 
-/* CKEditor 내 테이블 스타일 향상 */
-.ckeditor-container .ck-editor__editable table,
-.ckeditor-container .ck-editor__editable .ck-widget.table table {
-    border-collapse: collapse !important;
-    margin: 12px 0 !important;
+/* CKEditor 내 테이블 스타일 - 스트리밍 프리뷰와 동일 */
+.ckeditor-container .ck-editor__editable figure.table,
+.ckeditor-container .ck-editor__editable .ck-widget.table {
     width: 100% !important;
-    border: 1px solid #d1d5db !important;
+    margin: 0 !important;
 }
 
-.ckeditor-container .ck-editor__editable table th,
-.ckeditor-container .ck-editor__editable table td,
-.ckeditor-container .ck-editor__editable .ck-widget.table th,
-.ckeditor-container .ck-editor__editable .ck-widget.table td {
-    border: 1px solid #d1d5db !important;
-    padding: 5px 10px !important;
-    font-size: 13px !important;
-    line-height: 1.4 !important;
+.ckeditor-container .ck-editor__editable table,
+.ckeditor-container .ck-editor__editable .ck-widget.table table {
+    width: 100% !important;
+    border-collapse: separate !important;
+    border-spacing: 0 !important;
+    margin: 16px 0 !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 8px !important;
+    overflow: hidden !important;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04) !important;
 }
 
 .ckeditor-container .ck-editor__editable table th,
@@ -4843,16 +4845,53 @@ body {
     background: #f1f5f9 !important;
     color: #1e293b !important;
     font-weight: 700 !important;
+    font-size: 13px !important;
+    padding: 10px 14px !important;
     text-align: left !important;
+    border-bottom: 2px solid #6366f1 !important;
+    border-right: none !important;
+    border-left: none !important;
+    border-top: none !important;
+    letter-spacing: 0.02em !important;
 }
 
 .ckeditor-container .ck-editor__editable table td,
 .ckeditor-container .ck-editor__editable .ck-widget.table td {
+    padding: 9px 14px !important;
+    font-size: 13.5px !important;
+    border-bottom: 1px solid #f1f5f9 !important;
+    border-right: none !important;
+    border-left: none !important;
+    border-top: none !important;
     color: #334155 !important;
+    line-height: 1.4 !important;
+}
+
+.ckeditor-container .ck-editor__editable table tr:last-child td {
+    border-bottom: none !important;
 }
 
 .ckeditor-container .ck-editor__editable table tr:nth-child(even) td {
     background: #f8fafc !important;
+}
+
+.ckeditor-container .ck-editor__editable table tr:hover td {
+    background: rgba(99, 102, 241, 0.04) !important;
+}
+
+/* CKEditor 내 차트 이미지 스타일 */
+.ckeditor-container .ck-editor__editable .docx-stream-chart,
+.ckeditor-container .ck-editor__editable div[class*="chart"] {
+    margin: 16px 0;
+    text-align: center;
+}
+
+.ckeditor-container .ck-editor__editable .docx-stream-chart img,
+.ckeditor-container .ck-editor__editable div[class*="chart"] img {
+    max-width: 100%;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
 .ckeditor-container .ck-editor__editable blockquote {
@@ -4860,6 +4899,7 @@ body {
     border-left: 4px solid var(--accent, #6366f1);
     border-radius: 0 8px 8px 0;
     padding: 12px 18px;
+    margin: 25px 0 !important;
     color: #4338ca;
 }
 
@@ -4868,7 +4908,8 @@ body {
     font-size: 26px !important;
     font-weight: 700 !important;
     color: #1a1a2e !important;
-    margin: 0 0 8px 0 !important;
+    text-align: center !important;
+    margin: 25px 0 8px 0 !important;
     padding-bottom: 12px !important;
     border-bottom: 3px solid var(--accent, #6366f1) !important;
     line-height: 1.4 !important;
@@ -4924,8 +4965,8 @@ body {
 
 /* CKEditor 내 일반 텍스트 */
 .ckeditor-container .ck-editor__editable p {
-    margin: 12px 0 !important;
-    color: #334155;
+    margin: 8px 0 !important;
+    color: #334155 !important;
 }
 
 .ckeditor-container .ck-editor__editable strong {

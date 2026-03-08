@@ -5539,6 +5539,11 @@ async function loadSharedExcel(shareToken, projectName) {
     $('#sidebar').hide();
     $('#sidebarUserName').text(t('sharedPresentation'));
 
+    // 빈 상태 숨기고 프로젝트 워크스페이스 표시
+    $('#emptyState').hide();
+    $('#projectWorkspace').css('display', 'flex');
+    $('.workspace-header').hide();
+
     // 모든 워크스페이스 숨기기, 엑셀만 표시
     $('#slidePreview').hide();
     $('#slideEmpty').hide();
@@ -5573,6 +5578,11 @@ async function loadSharedWord(shareToken, projectName) {
     $('#sidebar').hide();
     $('#sidebarUserName').text(t('sharedPresentation'));
 
+    // 빈 상태 숨기고 프로젝트 워크스페이스 표시
+    $('#emptyState').hide();
+    $('#projectWorkspace').css('display', 'flex');
+    $('.workspace-header').hide();
+
     // 모든 워크스페이스 숨기기, 워드만 표시
     $('#slidePreview').hide();
     $('#slideEmpty').hide();
@@ -5601,7 +5611,7 @@ async function loadSharedWord(shareToken, projectName) {
         Font, Alignment, List, Link,
         Table, TableToolbar, TableProperties, TableCellProperties,
         Indent, IndentBlock, BlockQuote, Heading,
-        Paragraph
+        Paragraph, GeneralHtmlSupport
     } = CKEDITOR;
 
     _ckEditorInstance = await ClassicEditor.create(
@@ -5611,14 +5621,25 @@ async function loadSharedWord(shareToken, projectName) {
                 Essentials, Bold, Italic, Underline, Strikethrough,
                 Font, Alignment, List, Link,
                 Table, TableToolbar, TableProperties, TableCellProperties,
-                Indent, IndentBlock, BlockQuote, Heading, Paragraph
+                Indent, IndentBlock, BlockQuote, Heading, Paragraph,
+                GeneralHtmlSupport
             ],
             toolbar: [],
+            htmlSupport: {
+                allow: [
+                    { name: 'img', attributes: true, styles: true, classes: true },
+                    { name: 'div', attributes: true, styles: true, classes: true },
+                ]
+            },
             language: 'ko',
             licenseKey: 'GPL'
         }
     );
 
+    // 차트 렌더링을 위해 ECharts 로드
+    if (typeof echarts === 'undefined') {
+        try { await loadEChartsScript(); } catch(e) {}
+    }
     const html = _docxSectionsToHtml(data.docx);
     _ckEditorInstance.setData(html);
     _ckEditorInstance.enableReadOnlyMode('shared');
@@ -7535,7 +7556,8 @@ function _renderInlineStreamCharts(container) {
 
             _wordChartCache.set(jsonStr, dataUrl);
 
-            div.innerHTML = `<img src="${dataUrl}" style="max-width:100%;border-radius:8px;" />`;
+            const safeJson = jsonStr.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            div.innerHTML = `<img src="${dataUrl}" style="max-width:100%;border-radius:8px;" data-chart-json="${safeJson}" />`;
             div.className = 'docx-stream-chart';
         } catch (e) {
             console.error('[Word Stream Chart] render error:', e);
@@ -7771,7 +7793,8 @@ function _streamingMarkdownToHtml(md) {
             if (braceCount <= 0 && jsonStr) {
                 // 완성된 JSON → 캐시 확인 후 이미지 또는 대기
                 if (_wordChartCache.has(jsonStr)) {
-                    html += `<div class="docx-stream-chart"><img src="${_wordChartCache.get(jsonStr)}" /></div>`;
+                    const safeJson2 = jsonStr.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                    html += `<div class="docx-stream-chart"><img src="${_wordChartCache.get(jsonStr)}" data-chart-json="${safeJson2}" /></div>`;
                 } else {
                     const idx = _pendingChartConfigs.length;
                     _pendingChartConfigs.push(jsonStr);
@@ -7902,7 +7925,8 @@ async function initWordWorkspace() {
             Table, TableToolbar, TableProperties, TableCellProperties,
             Indent, IndentBlock, BlockQuote, Heading,
             Undo, SourceEditing, FindAndReplace,
-            WordCount, RemoveFormat, Paragraph
+            WordCount, RemoveFormat, Paragraph,
+            GeneralHtmlSupport
         } = CKEDITOR;
 
         // CKEditor 5 초기화
@@ -7915,7 +7939,8 @@ async function initWordWorkspace() {
                     Table, TableToolbar, TableProperties, TableCellProperties,
                     Indent, IndentBlock, BlockQuote, Heading,
                     Undo, SourceEditing, FindAndReplace,
-                    WordCount, RemoveFormat, Paragraph
+                    WordCount, RemoveFormat, Paragraph,
+                    GeneralHtmlSupport
                 ],
                 toolbar: {
                     items: [
@@ -7930,6 +7955,12 @@ async function initWordWorkspace() {
                         'removeFormat', 'sourceEditing', 'findAndReplace'
                     ],
                     shouldNotGroupWhenFull: false
+                },
+                htmlSupport: {
+                    allow: [
+                        { name: 'img', attributes: true, styles: true, classes: true },
+                        { name: 'div', attributes: true, styles: true, classes: true },
+                    ]
                 },
                 table: {
                     contentToolbar: [
@@ -7955,6 +7986,10 @@ async function initWordWorkspace() {
 
         // 기존 생성 데이터가 있으면 로드
         if (state.generatedDocx && state.generatedDocx.sections) {
+            // 차트 렌더링을 위해 ECharts 로드
+            if (typeof echarts === 'undefined') {
+                try { await loadEChartsScript(); } catch(e) {}
+            }
             const html = _docxSectionsToHtml(state.generatedDocx);
             _ckEditorInstance.setData(html);
             $('#btnDownloadDocx').show();
@@ -7980,11 +8015,11 @@ function _docxSectionsToHtml(docxData) {
 
     // 문서 제목
     if (meta.title) {
-        html += `<h1 style="text-align:center;">${_escapeHtmlWord(meta.title)}</h1>`;
+        html += `<h1>${_escapeHtmlWord(meta.title)}</h1>`;
     }
     // 문서 설명
     if (meta.description) {
-        html += `<p style="text-align:center;color:#666;">${_escapeHtmlWord(meta.description)}</p><hr/>`;
+        html += `<p>${_escapeHtmlWord(meta.description)}</p><hr/>`;
     }
 
     // 섹션 처리
@@ -8019,6 +8054,60 @@ function _markdownToHtml(md) {
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         const trimmed = line.trim();
+
+        // 차트 코드블록 처리 (```chart ... ```)
+        if (trimmed === '```chart') {
+            if (inList) { html += '</ul>'; inList = false; }
+            if (inOrderedList) { html += '</ol>'; inOrderedList = false; }
+            if (inTable) { html += _renderTableHtml(tableLines); inTable = false; tableLines = []; }
+
+            let jsonLines = [];
+            let braceCount = 0;
+            let started = false;
+            let j = i + 1;
+            while (j < lines.length) {
+                const nextLine = lines[j].trim();
+                if (nextLine === '```') { j++; break; }
+                if (!nextLine && !started) { j++; continue; }
+                if (nextLine.includes('{') && !started) started = true;
+                if (started) {
+                    jsonLines.push(lines[j]);
+                    braceCount += (nextLine.match(/{/g) || []).length;
+                    braceCount -= (nextLine.match(/}/g) || []).length;
+                    if (braceCount <= 0) { j++; break; }
+                }
+                j++;
+            }
+            // 닫는 ``` 건너뛰기
+            if (j < lines.length && lines[j].trim() === '```') j++;
+
+            const jsonStr = jsonLines.join('\n').trim();
+            if (jsonStr) {
+                try {
+                    const config = JSON.parse(jsonStr);
+                    const dataUrl = _renderChartToImage(config);
+                    if (dataUrl) {
+                        const safeJson3 = jsonStr.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                        html += `<div class="docx-stream-chart"><img src="${dataUrl}" style="max-width:100%;" data-chart-json="${safeJson3}" /></div>`;
+                    }
+                } catch (e) {
+                    // JSON 파싱 실패 시 무시
+                }
+            }
+            i = j - 1;
+            continue;
+        }
+
+        // 일반 코드블록 스킵 (```xxx ... ```)
+        if (trimmed.startsWith('```')) {
+            if (inList) { html += '</ul>'; inList = false; }
+            if (inOrderedList) { html += '</ol>'; inOrderedList = false; }
+            let j = i + 1;
+            while (j < lines.length && lines[j].trim() !== '```') j++;
+            if (j < lines.length) j++; // 닫는 ``` 건너뛰기
+            i = j - 1;
+            continue;
+        }
 
         // 테이블 처리
         if (trimmed.startsWith('|') && trimmed.includes('|', 1)) {
@@ -8137,6 +8226,25 @@ function _renderTableHtml(lines) {
     return html;
 }
 
+function _renderChartToImage(config) {
+    if (typeof echarts === 'undefined') return null;
+    try {
+        const option = _buildEChartsOptionFromChartJson(config);
+        const offDiv = document.createElement('div');
+        offDiv.style.cssText = 'width:900px;height:450px;position:absolute;left:-9999px;top:-9999px;';
+        document.body.appendChild(offDiv);
+        const chart = echarts.init(offDiv);
+        chart.setOption(option);
+        const dataUrl = chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#fff' });
+        chart.dispose();
+        document.body.removeChild(offDiv);
+        return dataUrl;
+    } catch (e) {
+        console.error('[Chart Render] error:', e);
+        return null;
+    }
+}
+
 function _htmlToDocxSections(html) {
     // Parse TinyMCE HTML back to sections format for saving
     const parser = new DOMParser();
@@ -8197,6 +8305,18 @@ function _htmlToDocxSections(html) {
 function _elementToMarkdown(el) {
     const tag = el.tagName.toLowerCase();
 
+    // 차트 이미지 복원 (data-chart-json 속성이 있는 img)
+    const chartImg = el.querySelector('img[data-chart-json]');
+    if (chartImg) {
+        const jsonStr = chartImg.getAttribute('data-chart-json');
+        if (jsonStr) {
+            try {
+                const parsed = JSON.parse(jsonStr);
+                return '```chart\n' + JSON.stringify(parsed, null, 2) + '\n```';
+            } catch (e) {}
+        }
+    }
+
     // CKEditor 5는 테이블을 <figure class="table">로 감쌈
     if (tag === 'figure') {
         const innerTable = el.querySelector('table');
@@ -8205,6 +8325,17 @@ function _elementToMarkdown(el) {
     }
 
     if (tag === 'p') {
+        // p 태그 내부에 차트 이미지가 있으면 처리
+        const pChartImg = el.querySelector('img[data-chart-json]');
+        if (pChartImg) {
+            const jsonStr = pChartImg.getAttribute('data-chart-json');
+            if (jsonStr) {
+                try {
+                    const parsed = JSON.parse(jsonStr);
+                    return '```chart\n' + JSON.stringify(parsed, null, 2) + '\n```';
+                } catch (e) {}
+            }
+        }
         return el.innerHTML
             .replace(/<strong>(.*?)<\/strong>/g, '**$1**')
             .replace(/<b>(.*?)<\/b>/g, '**$1**')
@@ -8467,11 +8598,21 @@ function _handleWordSSEEvent(evt) {
             state.currentProject.status = 'generated';
             $('#wsProjectStatus').text(t('statusGenerated')).attr('class', 'ws-status generated');
 
-            // 스트리밍 프리뷰 숨기고 CKEditor에 최종 콘텐츠 로드
-            _hideWordStreamingPreview();
-            if (_ckEditorInstance && state.generatedDocx) {
-                const html = _docxSectionsToHtml(state.generatedDocx);
-                _ckEditorInstance.setData(html);
+            // 스트리밍 프리뷰 HTML을 그대로 CKEditor에 이식 (재변환 금지)
+            if (_wordStreamRenderTimer) {
+                clearTimeout(_wordStreamRenderTimer);
+                _wordStreamRenderTimer = null;
+            }
+            _renderWordStreamingContent(); // 마지막 버퍼 반영
+            {
+                const streamHtml = $('#wordStreamingContent').html() || '';
+                // 커서 제거
+                const cleanHtml = streamHtml.replace(/<span class="word-typing-cursor"><\/span>/g, '');
+                $('#wordStreamingPreview').hide();
+                $('#ckeditorContainer').show();
+                if (_ckEditorInstance && cleanHtml) {
+                    _ckEditorInstance.setData(cleanHtml);
+                }
             }
 
             $('#btnDownloadDocx').show();
@@ -8485,7 +8626,20 @@ function _handleWordSSEEvent(evt) {
 
         case 'complete':
             _hideWordProgress();
-            _hideWordStreamingPreview();
+            // 프리뷰가 아직 보이면 그대로 CKEditor로 이식
+            if ($('#wordStreamingPreview').is(':visible')) {
+                if (_wordStreamRenderTimer) {
+                    clearTimeout(_wordStreamRenderTimer);
+                    _wordStreamRenderTimer = null;
+                }
+                _renderWordStreamingContent();
+                const streamHtml = ($('#wordStreamingContent').html() || '').replace(/<span class="word-typing-cursor"><\/span>/g, '');
+                $('#wordStreamingPreview').hide();
+                $('#ckeditorContainer').show();
+                if (_ckEditorInstance && streamHtml) {
+                    _ckEditorInstance.setData(streamHtml);
+                }
+            }
             showToast(t('msgWordGenerated'), 'success');
             break;
 
@@ -9124,6 +9278,11 @@ async function renderExcelCharts(excelData) {
 
     $('#excelChartsContainer').show();
 
+    // 컨테이너가 보인 후 차트 리사이즈 (레이아웃 반영)
+    requestAnimationFrame(() => {
+        _activeExcelCharts.forEach(c => { try { c.resize(); } catch(e) {} });
+    });
+
     // 리사이즈 대응
     if (!window._echartsResizeHandler) {
         window._echartsResizeHandler = () => {
@@ -9173,14 +9332,14 @@ function _buildEChartsOption(chartDef, sheetData) {
             tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
             legend: {
                 show: chartDef.options?.show_legend !== false,
-                bottom: 0,
+                bottom: 4,
                 type: 'scroll',
-                textStyle: { fontSize: 12 },
+                textStyle: { fontSize: 11 },
             },
             series: [{
                 type: 'pie',
-                radius: chartDef.type === 'doughnut' ? ['40%', '70%'] : '70%',
-                center: ['50%', '50%'],
+                radius: chartDef.type === 'doughnut' ? ['35%', '65%'] : '65%',
+                center: ['50%', '48%'],
                 data: pieData,
                 label: { show: true, formatter: '{b}: {d}%' },
                 emphasis: {
@@ -9233,7 +9392,7 @@ function _buildEChartsOption(chartDef, sheetData) {
             color: _CHART_PALETTE,
             title: { text: chartDef.title || '', left: 'center', textStyle: { fontSize: 14, fontWeight: 600 } },
             tooltip: {},
-            legend: { show: chartDef.options?.show_legend !== false, bottom: 0, type: 'scroll' },
+            legend: { show: chartDef.options?.show_legend !== false, bottom: 4, type: 'scroll', textStyle: { fontSize: 11 } },
             radar: { indicator: labels.map((l, i) => ({ name: l, max: Math.ceil(maxVals[i] * 1.2) || 100 })) },
             series: series,
         };
@@ -9252,11 +9411,11 @@ function _buildEChartsOption(chartDef, sheetData) {
         },
         legend: {
             show: chartDef.options?.show_legend !== false,
-            bottom: 0,
+            bottom: 4,
             type: 'scroll',
-            textStyle: { fontSize: 12 },
+            textStyle: { fontSize: 11 },
         },
-        grid: { left: '3%', right: '4%', bottom: '15%', top: chartDef.title ? '15%' : '8%', containLabel: true },
+        grid: { left: '3%', right: '4%', bottom: '18%', top: chartDef.title ? '15%' : '8%', containLabel: true },
         xAxis: {
             type: 'category',
             data: labels,
@@ -9292,12 +9451,13 @@ function _buildEChartsOptionFromChartJson(config) {
         return {
             animation: false,
             color: _CHART_PALETTE,
-            title: { text: titleText, left: 'center', textStyle: { fontSize: 16, fontFamily: "'Malgun Gothic', sans-serif" } },
+            title: { text: titleText, left: 'center', top: 12, textStyle: { fontSize: 16, fontFamily: "'Malgun Gothic', sans-serif" } },
             tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
-            legend: { bottom: 0, type: 'scroll' },
+            legend: { bottom: 12, type: 'scroll' },
             series: [{
                 type: 'pie',
-                radius: chartType === 'doughnut' ? ['40%', '70%'] : '70%',
+                radius: chartType === 'doughnut' ? ['35%', '65%'] : '65%',
+                center: ['50%', '52%'],
                 data: pieData,
                 label: { show: true, formatter: '{b}: {d}%' },
                 itemStyle: { borderRadius: chartType === 'doughnut' ? 6 : 0, borderColor: '#fff', borderWidth: 2 },
@@ -9321,10 +9481,10 @@ function _buildEChartsOptionFromChartJson(config) {
     return {
         animation: false,
         color: _CHART_PALETTE,
-        title: { text: titleText, left: 'center', textStyle: { fontSize: 16, fontFamily: "'Malgun Gothic', sans-serif" } },
+        title: { text: titleText, left: 'center', top: 12, textStyle: { fontSize: 16, fontFamily: "'Malgun Gothic', sans-serif" } },
         tooltip: { trigger: 'axis', axisPointer: { type: chartType === 'bar' ? 'shadow' : 'line' } },
-        legend: { bottom: 0, type: 'scroll' },
-        grid: { left: '3%', right: '4%', bottom: '15%', top: titleText ? '15%' : '8%', containLabel: true },
+        legend: { bottom: 12, type: 'scroll' },
+        grid: { left: '3%', right: '4%', bottom: '18%', top: titleText ? '18%' : '10%', containLabel: true },
         xAxis: { type: 'category', data: labels, axisLabel: { fontSize: 11 } },
         yAxis: { type: 'value', splitLine: { lineStyle: { color: 'rgba(0,0,0,0.06)' } } },
         series: series,
