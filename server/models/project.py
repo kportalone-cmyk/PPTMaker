@@ -74,3 +74,10 @@ class DocxGenerateRequest(BaseModel):
     instructions: str = ""
     lang: str = ""
     section_count: str = "auto"
+
+
+class DocxModifyRequest(BaseModel):
+    project_id: str
+    instruction: str
+    current_data: dict
+    lang: str = ""

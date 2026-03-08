@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from bson import ObjectId
 from datetime import datetime
-from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest
+from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest, DocxModifyRequest
 from services.mongo_service import get_db
 from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible, get_user_by_key
 from services import redis_service
@@ -1911,6 +1911,327 @@ async def download_onlyoffice_document(jwt_token: str, project_id: str):
     )
 
 
+# ============ Word 문서 생성 ============
+
+@router.post("/{jwt_token}/api/generate/docx/stream")
+async def generate_docx_stream(jwt_token: str, data: DocxGenerateRequest):
+    """SSE 스트리밍으로 Word 문서 데이터 생성 - 실시간 진행 표시"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    # 기존 생성 데이터 삭제
+    await db.generated_docx.delete_many({"project_id": data.project_id})
+
+    # 리소스 텍스트 수집
+    cursor = db.resources.find({"project_id": data.project_id})
+    all_content = []
+    async for r in cursor:
+        if r.get("content"):
+            all_content.append(r["content"])
+        elif r.get("title"):
+            all_content.append(f"[{r['title']}]")
+    combined_text = "\n\n".join(all_content)
+
+    # 리소스가 없으면 instructions 필수 (인터넷 검색에 사용)
+    needs_web_search = not combined_text.strip()
+    if needs_web_search and not data.instructions.strip():
+        raise HTTPException(status_code=400, detail="리소스가 없으면 지침을 입력해야 합니다.")
+
+    generation_id = str(uuid.uuid4())
+    await redis_service.clear_generation_cancel(data.project_id)
+
+    # 프로젝트 상태 업데이트
+    await db.projects.update_one(
+        {"_id": ObjectId(data.project_id)},
+        {"$set": {
+            "instructions": data.instructions,
+            "status": "generating",
+            "generation_id": generation_id,
+            "updated_at": datetime.utcnow(),
+        }}
+    )
+
+    def _sse(event: str, payload: dict) -> str:
+        return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False, default=str)}\n\n"
+
+    async def event_stream():
+        nonlocal combined_text, needs_web_search
+        try:
+            # 리소스가 없으면 인터넷 검색으로 자료 수집
+            if needs_web_search:
+                yield _sse("searching", {"message": "인터넷에서 자료를 검색하고 있습니다..."})
+
+                search_result = await search_web(data.instructions)
+                pages = search_result.get("pages", [])
+
+                if pages:
+                    search_contents = []
+                    for page in pages:
+                        title = page.get("title", "")
+                        content = page.get("content", "")
+                        url = page.get("url", "")
+                        search_contents.append(f"[{title}]\n{content}\n(출처: {url})")
+                    combined_text = "\n\n".join(search_contents)
+                else:
+                    # 검색 결과가 없으면 instructions만으로 진행
+                    combined_text = data.instructions
+
+                yield _sse("search_done", {"message": "검색 완료! 문서를 생성합니다...", "result_count": len(pages)})
+
+            yield _sse("start", {"message": "AI가 문서를 구조화하고 있습니다..."})
+
+            if await _check_cancelled(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            llm_result = None
+            chunk_count = 0
+            cancelled = False
+            async for event_type, event_data in generate_docx_content_stream(
+                combined_text, data.instructions, data.lang,
+                section_count=data.section_count,
+            ):
+                if event_type == "delta":
+                    yield _sse("delta", {"text": event_data})
+                    chunk_count += 1
+                    if chunk_count % 50 == 0:
+                        if await _check_cancelled(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
+                elif event_type == "result":
+                    llm_result = event_data
+
+            if cancelled:
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            if not llm_result:
+                yield _sse("error", {"message": "문서 생성 실패"})
+                return
+
+            yield _sse("parsing", {"message": "문서를 정리하고 있습니다..."})
+
+            # MongoDB에 저장
+            docx_doc = {
+                "project_id": data.project_id,
+                "sections": llm_result.get("sections", []),
+                "meta": llm_result.get("meta", {}),
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }
+            await db.generated_docx.insert_one(docx_doc)
+            docx_doc["_id"] = str(docx_doc["_id"])
+
+            # 프로젝트 업데이트
+            update_fields = {
+                "status": "generated",
+                "updated_at": datetime.utcnow(),
+            }
+            meta = llm_result.get("meta", {})
+            if meta:
+                update_fields["presentation_meta"] = meta
+
+            await db.projects.update_one(
+                {"_id": ObjectId(data.project_id)},
+                {"$set": update_fields}
+            )
+
+            yield _sse("docx_data", {"docx": docx_doc})
+            yield _sse("complete", {"total_sections": len(llm_result.get("sections", []))})
+
+        except Exception as e:
+            print(f"[SSE-Docx] Stream error: {e}")
+            project = await db.projects.find_one(
+                {"_id": ObjectId(data.project_id)}, {"status": 1}
+            )
+            if project and project.get("status") in ("stop_requested", "stopped"):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+            else:
+                yield _sse("error", {"message": str(e)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@router.post("/{jwt_token}/api/generate/docx/modify/stream")
+async def modify_docx_stream(jwt_token: str, data: DocxModifyRequest):
+    """SSE 스트리밍으로 기존 Word 문서를 수정"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    generation_id = str(uuid.uuid4())
+    await redis_service.clear_generation_cancel(data.project_id)
+
+    await db.projects.update_one(
+        {"_id": ObjectId(data.project_id)},
+        {"$set": {
+            "status": "generating",
+            "generation_id": generation_id,
+            "updated_at": datetime.utcnow(),
+        }}
+    )
+
+    def _sse(event: str, payload: dict) -> str:
+        return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False, default=str)}\n\n"
+
+    async def event_stream():
+        try:
+            yield _sse("start", {"message": "AI가 문서를 수정하고 있습니다..."})
+
+            if await _check_cancelled(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "수정이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            # 현재 문서 내용을 리소스 텍스트로 구성
+            current_sections = data.current_data.get("sections", [])
+            current_text_parts = []
+            for section in current_sections:
+                title = section.get("title", "")
+                content = section.get("content", "")
+                current_text_parts.append(f"## {title}\n{content}")
+            current_text = "\n\n".join(current_text_parts)
+
+            combined_text = f"[현재 문서 내용]\n{current_text}\n\n[수정 지침]\n{data.instruction}"
+
+            llm_result = None
+            chunk_count = 0
+            cancelled = False
+            async for event_type, event_data in generate_docx_content_stream(
+                combined_text, data.instruction, data.lang,
+            ):
+                if event_type == "delta":
+                    yield _sse("delta", {"text": event_data})
+                    chunk_count += 1
+                    if chunk_count % 50 == 0:
+                        if await _check_cancelled(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
+                elif event_type == "result":
+                    llm_result = event_data
+
+            if cancelled:
+                yield _sse("stopped", {"message": "수정이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            if not llm_result:
+                yield _sse("error", {"message": "문서 수정 실패"})
+                return
+
+            yield _sse("parsing", {"message": "수정된 문서를 정리하고 있습니다..."})
+
+            # MongoDB에 upsert 저장
+            await db.generated_docx.update_one(
+                {"project_id": data.project_id},
+                {"$set": {
+                    "sections": llm_result.get("sections", []),
+                    "meta": llm_result.get("meta", {}) or data.current_data.get("meta", {}),
+                    "updated_at": datetime.utcnow(),
+                }},
+                upsert=True
+            )
+
+            docx_doc = await db.generated_docx.find_one({"project_id": data.project_id})
+            docx_doc["_id"] = str(docx_doc["_id"])
+
+            update_fields = {
+                "status": "generated",
+                "updated_at": datetime.utcnow(),
+            }
+            meta = llm_result.get("meta", {})
+            if meta:
+                update_fields["presentation_meta"] = meta
+            await db.projects.update_one(
+                {"_id": ObjectId(data.project_id)},
+                {"$set": update_fields}
+            )
+
+            yield _sse("docx_data", {"docx": docx_doc})
+            yield _sse("complete", {"total_sections": len(llm_result.get("sections", []))})
+
+        except Exception as e:
+            print(f"[SSE-Docx-Modify] Stream error: {e}")
+            project = await db.projects.find_one(
+                {"_id": ObjectId(data.project_id)}, {"status": 1}
+            )
+            if project and project.get("status") in ("stop_requested", "stopped"):
+                yield _sse("stopped", {"message": "수정이 중단되었습니다."})
+            else:
+                yield _sse("error", {"message": str(e)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@router.get("/{jwt_token}/api/generate/{project_id}/docx")
+async def get_docx_data(jwt_token: str, project_id: str):
+    """Word 문서 데이터 조회"""
+    await get_user_key(jwt_token)
+    db = get_db()
+    docx_data = await db.generated_docx.find_one({"project_id": project_id})
+    if not docx_data:
+        raise HTTPException(status_code=404, detail="생성된 문서가 없습니다")
+    docx_data["_id"] = str(docx_data["_id"])
+    return {"docx": docx_data}
+
+
+@router.put("/{jwt_token}/api/generate/{project_id}/docx")
+async def save_docx_data(jwt_token: str, project_id: str, data: dict):
+    """Word 문서 데이터 저장"""
+    await get_user_key(jwt_token)
+    db = get_db()
+    await db.generated_docx.update_one(
+        {"project_id": project_id},
+        {"$set": {
+            "sections": data.get("sections", []),
+            "meta": data.get("meta", {}),
+            "updated_at": datetime.utcnow(),
+        }},
+        upsert=True
+    )
+    return {"success": True}
+
+
+@router.get("/{jwt_token}/api/generate/{project_id}/download/docx")
+async def download_docx(jwt_token: str, project_id: str):
+    """DOCX 파일 다운로드"""
+    await get_user_key(jwt_token)
+    try:
+        file_url = await generate_docx(project_id)
+        file_path = os.path.join(".", file_url.lstrip("/"))
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=500, detail="파일 생성 실패")
+
+        db = get_db()
+        project = await db.projects.find_one({"_id": ObjectId(project_id)})
+        filename = f"{project.get('name', 'document')}.docx"
+
+        return FileResponse(
+            path=file_path,
+            filename=filename,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # ============ 프레젠테이션 공유 ============
 
 @router.get("/{jwt_token}/api/generate/{project_id}/share-link")
@@ -1956,6 +2277,59 @@ async def get_shared_slides(share_token: str):
         "project_name": project.get("name"),
         "slides": slides,
         "template": template
+    }
+
+
+@router.get("/api/shared/{share_token}/info")
+async def get_shared_project_info(share_token: str):
+    """공유 링크로 프로젝트 타입 조회 (인증 불필요)"""
+    db = get_db()
+    project = await db.projects.find_one({"share_token": share_token})
+    if not project:
+        raise HTTPException(status_code=404, detail="공유 링크를 찾을 수 없습니다")
+    return {
+        "project_type": project.get("project_type", "slide"),
+        "project_name": project.get("name", ""),
+    }
+
+
+@router.get("/api/shared/{share_token}/excel")
+async def get_shared_excel(share_token: str):
+    """공유 링크로 엑셀 데이터 조회 (인증 불필요)"""
+    db = get_db()
+    project = await db.projects.find_one({"share_token": share_token})
+    if not project:
+        raise HTTPException(status_code=404, detail="공유 링크를 찾을 수 없습니다")
+
+    project_id = str(project["_id"])
+    doc = await db.generated_excel.find_one({"project_id": project_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="생성된 엑셀 데이터가 없습니다")
+    doc["_id"] = str(doc["_id"])
+
+    return {
+        "project_name": project.get("name"),
+        "excel": doc,
+    }
+
+
+@router.get("/api/shared/{share_token}/docx")
+async def get_shared_docx(share_token: str):
+    """공유 링크로 워드 문서 조회 (인증 불필요)"""
+    db = get_db()
+    project = await db.projects.find_one({"share_token": share_token})
+    if not project:
+        raise HTTPException(status_code=404, detail="공유 링크를 찾을 수 없습니다")
+
+    project_id = str(project["_id"])
+    doc = await db.generated_docx.find_one({"project_id": project_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="생성된 문서가 없습니다")
+    doc["_id"] = str(doc["_id"])
+
+    return {
+        "project_name": project.get("name"),
+        "docx": doc,
     }
 
 

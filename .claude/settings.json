@@ -1,6 +1,18 @@
 {
   "autoAccept": true,
   "permissions": {
+      "autoApprove": {
+        "enabled": true,
+        "tools": [
+          "Read",
+          "Write",
+          "Edit",
+          "Bash",
+          "WebFetch",
+          "TodoRead",
+          "TodoWrite"
+        ]
+      },
     "allow": [
       "Bash",
       "Read",

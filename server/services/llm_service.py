@@ -1255,7 +1255,7 @@ async def _build_generation_prompts(
     return system_prompt, user_prompt
 
 
-async def _stream_claude_api(system_prompt: str, user_prompt: str, model: str = ""):
+async def _stream_claude_api(system_prompt: str, user_prompt: str, model: str = "", max_tokens: int = 0):
     """Claude API 스트리밍 호출 - text delta를 async yield"""
     url = "https://api.anthropic.com/v1/messages"
     headers = {
@@ -1271,7 +1271,9 @@ async def _stream_claude_api(system_prompt: str, user_prompt: str, model: str = 
     }
     # 모델별 max_tokens 적용 (Anthropic API 필수 파라미터)
     effective_model = model or settings.ANTHROPIC_MODEL
-    if effective_model == settings.ANTHROPIC_OUTLINE_MODEL and settings.ANTHROPIC_OUTLINE_MAX_TOKENS > 0:
+    if max_tokens > 0:
+        payload["max_tokens"] = max_tokens
+    elif effective_model == settings.ANTHROPIC_OUTLINE_MODEL and settings.ANTHROPIC_OUTLINE_MAX_TOKENS > 0:
         payload["max_tokens"] = settings.ANTHROPIC_OUTLINE_MAX_TOKENS
     elif settings.ANTHROPIC_MAX_TOKENS > 0:
         payload["max_tokens"] = settings.ANTHROPIC_MAX_TOKENS
@@ -1728,7 +1730,7 @@ async def generate_docx_content_stream(
 
     try:
         full_text = ""
-        async for delta in _stream_claude_api(system_prompt, user_prompt, model=effective_model):
+        async for delta in _stream_claude_api(system_prompt, user_prompt, model=effective_model, max_tokens=16384):
             full_text += delta
             yield ("delta", delta)
 
@@ -1787,19 +1789,25 @@ def _parse_docx_schema(response_text: str) -> dict | None:
     """LLM 응답에서 Word 문서 JSON 스키마를 파싱"""
     text = response_text.strip()
 
-    # ```json ... ``` 블록 추출
+    # ```json ... ``` 블록 추출 (마지막 ``` 사용 - 내부 chart 블록 간섭 방지)
     if "```json" in text:
         start = text.index("```json") + 7
         try:
-            end = text.index("```", start)
-            text = text[start:end].strip()
+            end = text.rindex("```")
+            if end > start:
+                text = text[start:end].strip()
+            else:
+                text = text[start:].strip()
         except ValueError:
             text = text[start:].strip()
     elif "```" in text:
         start = text.index("```") + 3
         try:
-            end = text.index("```", start)
-            text = text[start:end].strip()
+            end = text.rindex("```")
+            if end > start:
+                text = text[start:end].strip()
+            else:
+                text = text[start:].strip()
         except ValueError:
             text = text[start:].strip()
 

@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 from bson import ObjectId
 from datetime import datetime
 from models.project import ProjectCreate, ProjectUpdate
-from services.mongo_service import get_db
+from services.mongo_service import get_db, get_org_db
 from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible
 from services import redis_service
 from routers.collaboration import check_project_access
@@ -44,6 +44,7 @@ async def list_projects(jwt_token: str):
         projects.append(p)
 
     # 공유된 프로젝트
+    org_db = get_org_db()
     shared_projects = []
     async for collab in db.collaborators.find({"user_key": user_key}):
         project_id = collab.get("project_id")
@@ -52,6 +53,13 @@ async def list_projects(jwt_token: str):
             p["_id"] = str(p["_id"])
             p["_collab_role"] = collab.get("role", "viewer")
             p["_collab_count"] = await db.collaborators.count_documents({"project_id": project_id})
+            # 소유자 이름 조회
+            owner_key = p.get("user_key", "")
+            if owner_key:
+                owner = await org_db.user_info.find_one({"ky": owner_key}, {"nm": 1, "dp": 1})
+                if owner:
+                    p["_owner_name"] = owner.get("nm", "")
+                    p["_owner_dept"] = owner.get("dp", "")
             shared_projects.append(p)
 
     return {"projects": projects, "shared_projects": shared_projects}
@@ -120,7 +128,7 @@ async def get_project(jwt_token: str, project_id: str):
 
     # Word 문서 데이터 조회
     generated_docx = None
-    if project_type == "onlyoffice_docx":
+    if project_type in ("word", "onlyoffice_docx"):
         generated_docx = await db.generated_docx.find_one({"project_id": project_id})
         if generated_docx:
             generated_docx["_id"] = str(generated_docx["_id"])
