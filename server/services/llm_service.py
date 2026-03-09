@@ -1726,6 +1726,7 @@ async def generate_docx_content_stream(
     instructions: str,
     lang: str = "",
     section_count: str = "auto",
+    template_structure: list = None,
 ):
     """스트리밍 방식 Word 문서 콘텐츠 생성
 
@@ -1739,6 +1740,7 @@ async def generate_docx_content_stream(
 
     system_prompt, user_prompt = await _build_docx_generation_prompts(
         resources_text, instructions, lang, section_count=section_count,
+        template_structure=template_structure,
     )
 
     prompt_model = await get_prompt_model("docx_generation_system")
@@ -1781,6 +1783,7 @@ async def generate_docx_content_stream(
 async def _build_docx_generation_prompts(
     resources_text: str, instructions: str, lang: str = "",
     section_count: str = "auto",
+    template_structure: list = None,
 ) -> tuple[str, str]:
     """Word 문서 생성용 프롬프트 빌드"""
     if section_count and section_count != "auto":
@@ -1796,6 +1799,60 @@ async def _build_docx_generation_prompts(
         "zh": "请用中文撰写所有内容。",
     }.get(output_lang, "모든 콘텐츠를 한국어로 작성하세요.")
 
+    # 템플릿 구조가 있으면 시스템 프롬프트에 추가 지침 삽입
+    template_instruction = ""
+    if template_structure:
+        is_table_based = any(sec.get("type") == "table_cell" for sec in template_structure)
+
+        sections_desc = []
+        for i, sec in enumerate(template_structure):
+            title = sec.get("title", "")
+            placeholder = sec.get("placeholder", "")
+            level = sec.get("level", 1)
+            if is_table_based:
+                desc = f'  섹션 {i+1}: (level: {level}) - 안내: "{placeholder}"'
+            else:
+                desc = f'  섹션 {i+1}: "{title}" (level: {level})'
+                if placeholder:
+                    desc += f" - 안내: {placeholder}"
+            sections_desc.append(desc)
+
+        if is_table_based:
+            template_instruction = f"""
+
+## [최우선] 템플릿 양식 준수 규칙
+사용자가 Word 템플릿 양식(테이블 기반)을 제공했습니다. **이 규칙은 다른 모든 규칙보다 우선합니다.**
+
+### 필수 규칙:
+1. 아래 각 섹션의 안내 텍스트(placeholder)를 참고하여, 리소스에서 해당 섹션에 맞는 내용을 추출하여 채워넣으세요.
+2. 섹션 수를 **정확히 {len(template_structure)}개**로 유지하세요. 섹션을 추가하거나 삭제하지 마세요.
+3. 각 섹션의 title은 안내 텍스트를 **그대로** 사용하세요 (매칭에 사용됩니다).
+4. **meta.title과 meta.description은 빈 문자열("")로 두세요.**
+5. 각 섹션의 content는 Markdown 형식으로 작성하되, 간결하고 읽기 쉽게 작성하세요.
+6. 리소스에 해당 내용이 없으면 맥락에 맞게 합리적으로 작성하세요.
+
+### 템플릿 섹션 구조:
+{chr(10).join(sections_desc)}
+"""
+        else:
+            template_instruction = f"""
+
+## [최우선] 템플릿 양식 준수 규칙
+사용자가 Word 템플릿 양식을 제공했습니다. **이 규칙은 다른 모든 규칙보다 우선합니다.**
+
+### 필수 규칙:
+1. 템플릿에 정의된 섹션 제목(title)을 **글자 하나 바꾸지 말고 정확히 그대로** 사용하세요.
+2. 템플릿에 정의된 섹션 순서를 **절대** 변경하지 마세요.
+3. 템플릿에 **없는 섹션을 임의로 추가하지 마세요.** sections 배열에는 아래 템플릿 섹션만 포함합니다.
+4. **meta.title과 meta.description은 빈 문자열("")로 두세요.** 템플릿에 이미 제목이 포함되어 있습니다.
+5. **level 0 섹션(문서 타이틀)의 content는 빈 문자열("")로 두세요.** 타이틀은 템플릿 서식이 그대로 사용됩니다.
+6. level 1 이상 섹션의 안내 텍스트(placeholder)를 참고하여, 리소스 자료에서 해당 섹션에 맞는 내용을 추출하여 채워넣으세요.
+7. 리소스 자료에서 해당 섹션에 맞는 내용이 없으면, 맥락에 맞게 합리적으로 작성하세요.
+
+### 템플릿 섹션 구조:
+{chr(10).join(sections_desc)}
+"""
+
     system_template = await get_prompt_content("docx_generation_system")
     user_template = await get_prompt_content("docx_generation_user")
 
@@ -1804,11 +1861,24 @@ async def _build_docx_generation_prompts(
         section_count_instruction=section_count_instruction,
     )
 
+    # 템플릿 지침을 시스템 프롬프트 끝에 추가
+    if template_instruction:
+        system_prompt += template_instruction
+
     user_prompt = user_template.format(
         lang_instruction=lang_instruction,
         instructions=instructions if instructions else "리소스 내용을 분석하여 체계적인 문서로 정리해주세요.",
         resources_text=resources_text[:12000],
     )
+
+    # 템플릿이 있으면 사용자 프롬프트에도 리마인더 추가
+    if template_structure:
+        is_table_tpl = any(sec.get("type") == "table_cell" for sec in template_structure)
+        section_titles = [sec.get("title", "") for sec in template_structure]
+        if is_table_tpl:
+            user_prompt += f"\n\n## [최우선] 템플릿 양식 준수\n위 리소스를 분석하여 다음 템플릿 섹션에 맞게 내용을 채워넣으세요.\n**정확히 {len(template_structure)}개 섹션을 생성하세요. 각 섹션의 title은 아래 안내 텍스트를 그대로 사용하세요.**\n**meta.title과 meta.description은 반드시 빈 문자열(\"\")로 두세요.**\n" + "\n".join(f'- "{t}"' for t in section_titles)
+        else:
+            user_prompt += f"\n\n## [최우선] 템플릿 양식 준수\n위 리소스를 분석하여 다음 템플릿 섹션에 맞게 내용을 채워넣으세요.\n**아래 섹션 제목을 글자 하나 바꾸지 말고 정확히 동일하게 사용하세요. 절대 변경/추가/삭제하지 마세요.**\n**meta.title과 meta.description은 반드시 빈 문자열(\"\")로 두세요.**\n**level 0 섹션의 content는 빈 문자열(\"\")로 두세요.**\n" + "\n".join(f'- "{t}"' for t in section_titles)
 
     return system_prompt, user_prompt
 

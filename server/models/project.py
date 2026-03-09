@@ -74,6 +74,7 @@ class DocxGenerateRequest(BaseModel):
     instructions: str = ""
     lang: str = ""
     section_count: str = "auto"
+    docx_template_id: Optional[str] = None
 
 
 class DocxModifyRequest(BaseModel):
@@ -85,6 +86,7 @@ class DocxModifyRequest(BaseModel):
 
 class DocxPrepareRequest(BaseModel):
     project_id: str
+    docx_template_id: Optional[str] = None
 
 
 class RewriteRequest(BaseModel):

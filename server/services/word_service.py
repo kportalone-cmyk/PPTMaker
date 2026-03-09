@@ -357,57 +357,446 @@ def _add_code_block(doc: Document, code_text: str):
     pPr.append(shading)
 
 
-async def create_empty_docx(project_id: str) -> str:
-    """빈 docx 파일 생성 (OnlyOffice 에디터용)"""
-    doc = Document()
+def extract_docx_template_info(file_path: str) -> dict:
+    """업로드된 .docx 템플릿에서 스타일 정보 및 콘텐츠 구조 추출"""
+    try:
+        doc = Document(file_path)
+        info = {
+            "page_count": len(doc.sections),
+            "paragraph_count": len(doc.paragraphs),
+            "table_count": len(doc.tables),
+            "styles": [],
+            "structure": [],  # 템플릿 섹션 구조
+        }
+        # 주요 스타일 추출
+        seen = set()
+        for para in doc.paragraphs:
+            style_name = para.style.name
+            if style_name not in seen:
+                seen.add(style_name)
+                font = para.style.font
+                info["styles"].append({
+                    "name": style_name,
+                    "font": font.name if font.name else None,
+                    "size": font.size.pt if font.size else None,
+                    "bold": font.bold,
+                })
 
-    # 기본 스타일 설정
-    style = doc.styles["Normal"]
-    font = style.font
-    font.name = "맑은 고딕"
-    font.size = Pt(11)
-    font.color.rgb = _COLORS["body"]
-    style.element.rPr.rFonts.set(qn("w:eastAsia"), "맑은 고딕")
-    pf = style.paragraph_format
-    pf.line_spacing = 1.6
-    pf.space_after = Pt(6)
+        # 콘텐츠 구조 추출 - 섹션 제목과 안내 텍스트 파악
+        info["structure"] = extract_docx_template_structure(file_path)
 
-    output_dir = os.path.join(settings.UPLOAD_DIR, "documents")
-    os.makedirs(output_dir, exist_ok=True)
-    filename = f"{uuid.uuid4().hex}.docx"
-    output_path = os.path.join(output_dir, filename)
-    doc.save(output_path)
-
-    return f"/uploads/documents/{filename}"
+        return info
+    except Exception as e:
+        print(f"[WordService] 템플릿 분석 실패: {e}")
+        return {}
 
 
-async def generate_docx(project_id: str) -> str:
-    """generated_docx 데이터를 .docx 파일로 변환"""
-    db = get_db()
-    docx_data = await db.generated_docx.find_one({"project_id": project_id})
-    if not docx_data:
-        raise ValueError("생성된 문서 데이터가 없습니다")
+def _looks_like_placeholder(text: str) -> bool:
+    """텍스트가 플레이스홀더/안내 텍스트인지 판별"""
+    text = text.strip()
+    if not text or len(text) > 200:
+        return False
+    patterns = [
+        '입력해', '작성해', '기입해', '기재해', '기술해',
+        '입력하세요', '작성하세요', '기입하세요',
+        '주세요', '바랍니다', '하십시오',
+        '여기에', '내용을', '입력란',
+    ]
+    return any(p in text for p in patterns)
 
-    sections = docx_data.get("sections", [])
-    if not sections:
-        raise ValueError("섹션 데이터가 없습니다")
 
-    meta = docx_data.get("meta", {})
-    doc = Document()
+def _extract_table_based_structure(doc: Document) -> list:
+    """테이블 레이아웃 기반 템플릿에서 섹션 구조 추출
 
-    # 기본 스타일 설정 - 웹 프리뷰와 동일한 폰트/크기
-    style = doc.styles["Normal"]
-    font = style.font
-    font.name = "맑은 고딕"
-    font.size = Pt(11)
-    font.color.rgb = _COLORS["body"]
-    # eastAsia 폰트 설정
-    style.element.rPr.rFonts.set(qn("w:eastAsia"), "맑은 고딕")
-    # 기본 줄간격/단락간격
-    pf = style.paragraph_format
-    pf.line_spacing = 1.6
-    pf.space_after = Pt(6)
+    한국어 워드 템플릿은 테이블로 레이아웃을 구성하고,
+    섹션 헤더를 이미지로, 본문을 셀 텍스트로 배치하는 경우가 많습니다.
+    병합된 셀과 복잡한 테이블 구조를 안전하게 처리합니다.
+    """
+    structure = []
+    seen_texts = set()  # (table_index, cell_text) 쌍으로 중복 방지
 
+    for ti, table in enumerate(doc.tables):
+        try:
+            for ri, row in enumerate(table.rows):
+                try:
+                    cells = row.cells
+                except Exception:
+                    continue
+                for ci, cell in enumerate(cells):
+                    try:
+                        cell_text = cell.text.strip()
+                        if not cell_text:
+                            continue
+
+                        # 같은 테이블 내 동일 텍스트 중복 방지 (병합 셀)
+                        dedup_key = (ti, cell_text)
+                        if dedup_key in seen_texts:
+                            continue
+                        seen_texts.add(dedup_key)
+
+                        if _looks_like_placeholder(cell_text):
+                            structure.append({
+                                "title": cell_text,
+                                "level": 1,
+                                "placeholder": cell_text,
+                                "type": "table_cell",
+                                "table_index": ti,
+                                "cell_row": ri,
+                                "cell_col": ci,
+                            })
+                    except Exception:
+                        continue
+        except Exception as e:
+            print(f"[WordService] 테이블 {ti} 분석 중 에러: {e}")
+            continue
+
+    return structure
+
+
+def extract_docx_template_structure(file_path: str) -> list:
+    """템플릿 .docx에서 섹션 구조(제목 + 안내/플레이스홀더 텍스트) 추출
+
+    단락 기반 템플릿과 테이블 기반 템플릿 모두 지원합니다.
+
+    Returns:
+        [
+            {"title": "섹션 제목", "level": 1, "placeholder": "안내 텍스트 또는 빈 문자열"},
+            ...
+        ]
+    """
+    try:
+        doc = Document(file_path)
+
+        # 1단계: 단락 기반 구조 추출
+        structure = []
+        current_section = None
+
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            if not text:
+                continue
+
+            if _is_template_heading(para):
+                if current_section:
+                    structure.append(current_section)
+                # 레벨 결정
+                style_name = para.style.name.lower()
+                level = 1
+                if 'title' in style_name:
+                    level = 0
+                elif 'heading' in style_name:
+                    for i in range(1, 5):
+                        if str(i) in style_name:
+                            level = i
+                            break
+                else:
+                    runs = para.runs
+                    if runs:
+                        font_size = runs[0].font.size or (para.style.font.size if para.style.font else None)
+                        if font_size:
+                            if font_size >= Pt(20):
+                                level = 0
+                            elif font_size >= Pt(16):
+                                level = 1
+                            else:
+                                level = 2
+                current_section = {"title": text, "level": level, "placeholder": ""}
+            elif current_section:
+                if current_section["placeholder"]:
+                    current_section["placeholder"] += "\n" + text
+                else:
+                    current_section["placeholder"] = text
+
+        if current_section:
+            structure.append(current_section)
+
+        if structure:
+            print(f"[WordService] 단락 기반 템플릿 구조: {len(structure)}개 섹션")
+            return structure
+
+        # 2단계: 단락에서 못 찾으면 테이블 기반 구조 추출
+        table_structure = _extract_table_based_structure(doc)
+        if table_structure:
+            print(f"[WordService] 테이블 기반 템플릿 구조: {len(table_structure)}개 섹션")
+            return table_structure
+
+        print("[WordService] 템플릿 구조 추출 실패: 단락/테이블 모두 감지 안됨")
+        return []
+    except Exception as e:
+        print(f"[WordService] 템플릿 구조 추출 실패: {e}")
+        return []
+
+
+def _load_template_document(template_path: str) -> Document:
+    """템플릿 .docx를 로드하고 기존 본문 내용을 비운 뒤 반환 (스타일/헤더/푸터 유지)"""
+    doc = Document(template_path)
+    # 본문 콘텐츠 제거 (스타일, 섹션 설정, 머리글/바닥글 유지)
+    body = doc.element.body
+    # 모든 단락과 테이블 제거 (sectPr은 유지)
+    for child in list(body):
+        if child.tag.endswith('}sectPr'):
+            continue
+        body.remove(child)
+    return doc
+
+
+# ── 템플릿 기반 생성 헬퍼 ──────────────────────────────────
+
+
+def _is_template_heading(para) -> bool:
+    """단락이 템플릿의 제목/헤딩인지 판별"""
+    text = para.text.strip()
+    if not text:
+        return False
+
+    style_name = para.style.name.lower()
+    if 'heading' in style_name or 'title' in style_name:
+        return True
+
+    # 스타일이 Heading이 아니어도 굵은 글씨 + 큰 폰트이면 제목으로 간주
+    runs = para.runs
+    if runs:
+        first_run = runs[0]
+        is_bold = first_run.bold or (para.style.font.bold if para.style.font else False)
+        font_size = first_run.font.size or (para.style.font.size if para.style.font else None)
+        if is_bold and font_size and font_size >= Pt(13):
+            return True
+
+    return False
+
+
+def _identify_template_sections(doc: Document) -> list:
+    """템플릿 문서에서 섹션(헤딩 + 플레이스홀더 요소) 식별
+
+    Returns:
+        [{"title": str, "heading_element": Element, "placeholder_elements": [Element]}]
+    """
+    sections = []
+    current = None
+
+    for para in doc.paragraphs:
+        text = para.text.strip()
+
+        if _is_template_heading(para):
+            if current:
+                sections.append(current)
+            current = {
+                'title': text,
+                'heading_element': para._element,
+                'placeholder_elements': [],
+            }
+        elif current and text:
+            # 텍스트가 있는 단락만 플레이스홀더로 간주 (빈 단락/장식 요소 보존)
+            current['placeholder_elements'].append(para._element)
+
+    if current:
+        sections.append(current)
+
+    return sections
+
+
+def _find_matching_ai_section(heading_title: str, ai_map: dict) -> dict:
+    """템플릿 헤딩 제목으로 AI 섹션 매칭 (정확 → 번호제거 → 부분 매칭)"""
+    # 정확 매칭
+    if heading_title in ai_map:
+        return ai_map.pop(heading_title)
+
+    # 번호 제거 후 매칭
+    clean_title = re.sub(r'^\d+[\.\)]\s*', '', heading_title).strip()
+    for key in list(ai_map.keys()):
+        clean_key = re.sub(r'^\d+[\.\)]\s*', '', key).strip()
+        if clean_title == clean_key:
+            return ai_map.pop(key)
+
+    # 부분 포함 매칭
+    for key in list(ai_map.keys()):
+        clean_key = re.sub(r'^\d+[\.\)]\s*', '', key).strip()
+        if clean_title and clean_key and len(clean_title) >= 2 and len(clean_key) >= 2:
+            if clean_title in clean_key or clean_key in clean_title:
+                return ai_map.pop(key)
+
+    return None
+
+
+def _insert_content_after(doc: Document, after_element, markdown_content: str):
+    """마크다운 콘텐츠를 렌더링하여 특정 요소 뒤에 삽입"""
+    body = doc.element.body
+
+    # 렌더링 전 기존 요소를 lxml 요소 set으로 보관 (id() 대신 lxml 네이티브 비교)
+    existing = set(body)
+
+    # 콘텐츠를 문서 끝에 렌더링
+    _render_markdown_content(doc, markdown_content)
+
+    # 새로 추가된 요소 식별 (sectPr 제외)
+    new_elements = [child for child in list(body)
+                    if child not in existing and not child.tag.endswith('}sectPr')]
+
+    if not new_elements:
+        return
+
+    # 새 요소들을 body에서 제거
+    for elem in new_elements:
+        body.remove(elem)
+
+    # after_element 뒤에 순서대로 삽입
+    insert_point = after_element
+    for elem in new_elements:
+        insert_point.addnext(elem)
+        insert_point = elem
+
+
+def _render_content_to_cell(doc: Document, cell, markdown_content: str):
+    """마크다운 콘텐츠를 렌더링하여 테이블 셀에 삽입"""
+    body = doc.element.body
+    tc = cell._tc
+
+    # 렌더링 전 기존 요소를 lxml 요소 set으로 보관 (id() 대신 lxml 네이티브 비교)
+    existing = set(body)
+
+    # 문서 끝에 렌더링
+    _render_markdown_content(doc, markdown_content)
+
+    # 새 요소 수집 (lxml 네이티브 비교로 안전하게 식별)
+    new_elements = [child for child in list(body)
+                    if child not in existing and not child.tag.endswith('}sectPr')]
+
+    # body에서 제거
+    for elem in new_elements:
+        body.remove(elem)
+
+    # 셀의 기존 내용 제거
+    for p_elem in list(tc.findall(qn('w:p'))):
+        tc.remove(p_elem)
+    for t_elem in list(tc.findall(qn('w:tbl'))):
+        tc.remove(t_elem)
+
+    # 새 요소를 셀에 추가
+    if new_elements:
+        for elem in new_elements:
+            tc.append(elem)
+    else:
+        # Word 규약: 셀에 최소 하나의 단락 필요
+        tc.append(parse_xml(f'<w:p {nsdecls("w")}/>'))
+
+
+def _fill_table_template(doc: Document, sections: list, template_structure: list):
+    """테이블 기반 템플릿의 플레이스홀더 셀을 AI 콘텐츠로 교체"""
+    # AI 섹션을 순서대로 매핑 (테이블 기반은 순서 매칭)
+    ai_map = {}
+    for s in sections:
+        title = s.get('title', '').strip()
+        if title:
+            ai_map[title] = s
+
+    matched = 0
+    for ts in template_structure:
+        if ts.get('type') != 'table_cell':
+            continue
+
+        ti = ts['table_index']
+        ri = ts['cell_row']
+        ci = ts['cell_col']
+        placeholder = ts.get('placeholder', '')
+
+        if ti >= len(doc.tables):
+            continue
+
+        table = doc.tables[ti]
+        if ri >= len(table.rows):
+            continue
+
+        try:
+            row_cells = table.rows[ri].cells
+            if ci >= len(row_cells):
+                continue
+            cell = row_cells[ci]
+        except Exception:
+            continue
+
+        # AI 섹션 매칭 (제목=플레이스홀더 텍스트)
+        ai_section = _find_matching_ai_section(placeholder, ai_map)
+
+        if not ai_section:
+            # 순서 기반 폴백 매칭
+            if matched < len(sections):
+                ai_section = sections[matched]
+            else:
+                print(f"[WordService] 테이블 셀 매칭 실패: [{ti},{ri},{ci}] '{placeholder[:40]}'")
+                continue
+
+        content = ai_section.get('content', '')
+        if not content:
+            matched += 1
+            continue
+
+        print(f"[WordService] 테이블 셀 매칭: [{ti},{ri},{ci}] → 콘텐츠 {len(content)}자")
+
+        # 셀 내용 교체
+        _render_content_to_cell(doc, cell, content)
+        matched += 1
+
+
+def _generate_from_template(template_path: str, sections: list, meta: dict) -> Document:
+    """템플릿의 구조/서식을 보존하면서 AI 콘텐츠를 채워넣기"""
+    doc = Document(template_path)
+    body = doc.element.body
+
+    print(f"[WordService] 템플릿 기반 문서 생성: {template_path}")
+
+    # 1단계: 단락 기반 섹션 식별
+    template_sections = _identify_template_sections(doc)
+
+    if template_sections:
+        # 단락 기반 템플릿 처리
+        ai_map = {}
+        for s in sections:
+            title = s.get('title', '').strip()
+            if title:
+                ai_map[title] = s
+
+        print(f"[WordService] 단락 기반 템플릿: {len(template_sections)}개, AI: {len(ai_map)}개")
+
+        for ts in reversed(template_sections):
+            heading_title = ts['title']
+            placeholder_elements = ts['placeholder_elements']
+            heading_element = ts['heading_element']
+
+            ai_section = _find_matching_ai_section(heading_title, ai_map)
+            if not ai_section:
+                print(f"[WordService] 매칭 실패: '{heading_title}'")
+                continue
+
+            content = ai_section.get('content', '')
+            if not content:
+                continue
+
+            print(f"[WordService] 섹션 매칭: '{heading_title}' → {len(content)}자")
+
+            for elem in placeholder_elements:
+                body.remove(elem)
+
+            _insert_content_after(doc, heading_element, content)
+
+        return doc
+
+    # 2단계: 테이블 기반 섹션 식별
+    table_structure = _extract_table_based_structure(doc)
+
+    if table_structure:
+        print(f"[WordService] 테이블 기반 템플릿: {len(table_structure)}개 섹션")
+        _fill_table_template(doc, sections, table_structure)
+        return doc
+
+    # 3단계: 모두 실패 → 기존 방식 폴백
+    print("[WordService] 템플릿 섹션 식별 실패 → 기본 방식 폴백")
+    doc = _load_template_document(template_path)
+    _fill_document_content(doc, sections, meta)
+    return doc
+
+
+def _fill_document_content(doc: Document, sections: list, meta: dict):
+    """문서에 섹션 콘텐츠 채우기 (기본 하드코딩 스타일)"""
     # 문서 제목
     title = meta.get("title", "")
     if title:
@@ -421,7 +810,6 @@ async def generate_docx(project_id: str) -> str:
         run = p.add_run(description)
         _set_run_font(run, color=_COLORS["description"], size=Pt(10), italic=True)
         _set_paragraph_spacing(p, space_before=0, space_after=Pt(4))
-        # 구분선
         hr = doc.add_paragraph()
         hr_pf = hr.paragraph_format
         hr_pf.space_before = Pt(8)
@@ -441,13 +829,68 @@ async def generate_docx(project_id: str) -> str:
         level = section.get("level", 1)
         content = section.get("content", "")
 
-        # 제목 추가
         if section_title:
             _add_styled_heading(doc, section_title, level=min(level, 4))
 
-        # 본문 처리 (Markdown → docx)
         if content:
             _render_markdown_content(doc, content)
+
+
+async def create_empty_docx(project_id: str, template_path: str = None) -> str:
+    """빈 docx 파일 생성 (OnlyOffice 에디터용) - 템플릿 지원"""
+    if template_path and os.path.exists(template_path):
+        doc = _load_template_document(template_path)
+    else:
+        doc = Document()
+        # 기본 스타일 설정
+        style = doc.styles["Normal"]
+        font = style.font
+        font.name = "맑은 고딕"
+        font.size = Pt(11)
+        font.color.rgb = _COLORS["body"]
+        style.element.rPr.rFonts.set(qn("w:eastAsia"), "맑은 고딕")
+        pf = style.paragraph_format
+        pf.line_spacing = 1.6
+        pf.space_after = Pt(6)
+
+    output_dir = os.path.join(settings.UPLOAD_DIR, "documents")
+    os.makedirs(output_dir, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.docx"
+    output_path = os.path.join(output_dir, filename)
+    doc.save(output_path)
+
+    return f"/uploads/documents/{filename}"
+
+
+async def generate_docx(project_id: str, template_path: str = None) -> str:
+    """generated_docx 데이터를 .docx 파일로 변환"""
+    db = get_db()
+    docx_data = await db.generated_docx.find_one({"project_id": project_id})
+    if not docx_data:
+        raise ValueError("생성된 문서 데이터가 없습니다")
+
+    sections = docx_data.get("sections", [])
+    if not sections:
+        raise ValueError("섹션 데이터가 없습니다")
+
+    meta = docx_data.get("meta", {})
+
+    # 템플릿 기반 생성: 템플릿 구조/서식 보존 + 플레이스홀더를 AI 콘텐츠로 교체
+    if template_path and os.path.exists(template_path):
+        doc = _generate_from_template(template_path, sections, meta)
+    else:
+        # 기본 생성 (하드코딩 스타일)
+        doc = Document()
+        style = doc.styles["Normal"]
+        font = style.font
+        font.name = "맑은 고딕"
+        font.size = Pt(11)
+        font.color.rgb = _COLORS["body"]
+        style.element.rPr.rFonts.set(qn("w:eastAsia"), "맑은 고딕")
+        pf = style.paragraph_format
+        pf.line_spacing = 1.6
+        pf.space_after = Pt(6)
+        _fill_document_content(doc, sections, meta)
 
     # 파일 저장
     output_dir = os.path.join(settings.UPLOAD_DIR, "documents")
@@ -537,7 +980,11 @@ def _render_markdown_content(doc: Document, content: str):
         # 불릿 리스트
         if stripped.startswith("- ") or stripped.startswith("* "):
             text = stripped[2:]
-            p = doc.add_paragraph(style="List Bullet")
+            try:
+                p = doc.add_paragraph(style="List Bullet")
+            except KeyError:
+                p = doc.add_paragraph()
+                p.add_run("• ")
             _add_inline_formatting(p, text)
             _set_paragraph_spacing(p, space_before=Pt(2), space_after=Pt(2))
             i += 1
@@ -547,7 +994,10 @@ def _render_markdown_content(doc: Document, content: str):
         num_match = re.match(r"^\d+\.\s+(.+)$", stripped)
         if num_match:
             text = num_match.group(1)
-            p = doc.add_paragraph(style="List Number")
+            try:
+                p = doc.add_paragraph(style="List Number")
+            except KeyError:
+                p = doc.add_paragraph()
             _add_inline_formatting(p, text)
             _set_paragraph_spacing(p, space_before=Pt(2), space_after=Pt(2))
             i += 1
@@ -644,7 +1094,10 @@ def _add_table(doc: Document, table_lines: list):
     num_rows = len(data_lines)
 
     table = doc.add_table(rows=num_rows, cols=num_cols)
-    table.style = "Table Grid"
+    try:
+        table.style = "Table Grid"
+    except KeyError:
+        pass  # 템플릿에 해당 스타일이 없으면 기본 스타일 사용
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
     for row_idx, row_data in enumerate(data_lines):

@@ -55,6 +55,10 @@ async def init_indexes():
     await db.onlyoffice_documents.create_index("project_id", unique=True)
     await db.onlyoffice_documents.create_index("document_key")
 
+    # docx_templates 컬렉션
+    await db.docx_templates.create_index("project_id")
+    await db.docx_templates.create_index("created_at")
+
     # generated_docx 컬렉션
     await db.generated_docx.create_index("project_id", unique=True)
 

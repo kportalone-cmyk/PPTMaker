@@ -10,7 +10,7 @@ from routers.collaboration import check_project_access
 from services.template_service import recommend_slide, get_template_slides
 from services.ppt_service import generate_pptx
 from services.excel_service import generate_xlsx, auto_generate_chart_definition
-from services.word_service import generate_docx, create_empty_docx
+from services.word_service import generate_docx, create_empty_docx, extract_docx_template_structure
 from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content, generate_excel_content_stream, modify_excel_content_stream, generate_docx_content_stream, rewrite_text_stream
 from services.search_service import search_web
 from services.onlyoffice_service import create_onlyoffice_document
@@ -36,6 +36,28 @@ async def get_user_key(jwt_token: str) -> str:
     if user:
         return user.get("ky", "")
     raise HTTPException(status_code=401, detail="사용자를 확인할 수 없습니다")
+
+
+async def _get_docx_template_path(db, docx_template_id: str = None, project_id: str = None) -> str:
+    """docx 템플릿 파일 경로 반환. 없으면 None"""
+    if docx_template_id:
+        template = await db.docx_templates.find_one({"_id": ObjectId(docx_template_id)})
+    elif project_id:
+        template = await db.docx_templates.find_one(
+            {"project_id": project_id},
+            sort=[("created_at", -1)]
+        )
+    else:
+        return None
+
+    if not template:
+        return None
+
+    file_path = template.get("file_path", "")
+    abs_path = os.path.join(".", file_path.lstrip("/"))
+    if os.path.exists(abs_path):
+        return abs_path
+    return None
 
 
 @router.post("/{jwt_token}/api/generate/prepare")
@@ -1848,8 +1870,11 @@ async def prepare_onlyoffice_docx(jwt_token: str, data: DocxPrepareRequest):
     # 기존 문서 정리
     await db.generated_docx.delete_many({"project_id": data.project_id})
 
+    # 템플릿 경로 조회
+    template_path = await _get_docx_template_path(db, data.docx_template_id, data.project_id)
+
     # 빈 docx 생성 + OnlyOffice 등록
-    file_url = await create_empty_docx(data.project_id)
+    file_url = await create_empty_docx(data.project_id, template_path)
     oo_doc = await create_onlyoffice_document(data.project_id, "docx", file_url)
 
     await db.projects.update_one(
@@ -1901,6 +1926,8 @@ async def generate_onlyoffice_docx_stream(jwt_token: str, data: DocxGenerateRequ
     async def event_stream():
         nonlocal combined_text, needs_web_search
         try:
+            template_path = await _get_docx_template_path(db, data.docx_template_id, data.project_id)
+
             if needs_web_search:
                 yield _sse("searching", {"message": "인터넷에서 자료를 검색하고 있습니다..."})
                 search_result = await search_web(data.instructions)
@@ -1928,9 +1955,17 @@ async def generate_onlyoffice_docx_stream(jwt_token: str, data: DocxGenerateRequ
             sections_emitted = 0
             meta_emitted = False
 
+            # 템플릿 구조 추출
+            template_structure = None
+            if template_path:
+                template_structure = extract_docx_template_structure(template_path)
+                if template_structure:
+                    print(f"[OO-DOCX] 템플릿 구조 감지: {len(template_structure)}개 섹션")
+
             async for event_type, event_data in generate_docx_content_stream(
                 combined_text, data.instructions, data.lang,
                 section_count=data.section_count,
+                template_structure=template_structure,
             ):
                 if event_type == "delta":
                     full_text += event_data
@@ -1973,7 +2008,7 @@ async def generate_onlyoffice_docx_stream(jwt_token: str, data: DocxGenerateRequ
                             "created_at": datetime.utcnow(),
                             "updated_at": datetime.utcnow(),
                         })
-                        file_url = await generate_docx(data.project_id)
+                        file_url = await generate_docx(data.project_id, template_path)
                         oo_doc = await create_onlyoffice_document(data.project_id, "docx", file_url)
                         yield _sse("file_updated", {"project_id": data.project_id, "document": oo_doc})
                     except Exception as e:
@@ -2008,7 +2043,7 @@ async def generate_onlyoffice_docx_stream(jwt_token: str, data: DocxGenerateRequ
             # 최종 DOCX 파일 생성 + OnlyOffice 업데이트
             yield _sse("file_creating", {"message": "최종 문서를 생성하고 있습니다..."})
             try:
-                file_url = await generate_docx(data.project_id)
+                file_url = await generate_docx(data.project_id, template_path)
                 oo_doc = await create_onlyoffice_document(data.project_id, "docx", file_url)
                 yield _sse("file_updated", {"project_id": data.project_id, "document": oo_doc})
             except Exception as e:
@@ -2113,6 +2148,8 @@ async def generate_docx_stream(jwt_token: str, data: DocxGenerateRequest):
     async def event_stream():
         nonlocal combined_text, needs_web_search
         try:
+            template_path = await _get_docx_template_path(db, data.docx_template_id, data.project_id)
+
             # 리소스가 없으면 인터넷 검색으로 자료 수집
             if needs_web_search:
                 yield _sse("searching", {"message": "인터넷에서 자료를 검색하고 있습니다..."})
@@ -2144,9 +2181,17 @@ async def generate_docx_stream(jwt_token: str, data: DocxGenerateRequest):
             llm_result = None
             chunk_count = 0
             cancelled = False
+            # 템플릿 구조 추출
+            template_structure = None
+            if template_path:
+                template_structure = extract_docx_template_structure(template_path)
+                if template_structure:
+                    print(f"[DOCX] 템플릿 구조 감지: {len(template_structure)}개 섹션")
+
             async for event_type, event_data in generate_docx_content_stream(
                 combined_text, data.instructions, data.lang,
                 section_count=data.section_count,
+                template_structure=template_structure,
             ):
                 if event_type == "delta":
                     yield _sse("delta", {"text": event_data})
@@ -2370,12 +2415,13 @@ async def download_docx(jwt_token: str, project_id: str):
     """DOCX 파일 다운로드"""
     await get_user_key(jwt_token)
     try:
-        file_url = await generate_docx(project_id)
+        db = get_db()
+        template_path = await _get_docx_template_path(db, project_id=project_id)
+        file_url = await generate_docx(project_id, template_path)
         file_path = os.path.join(".", file_url.lstrip("/"))
         if not os.path.exists(file_path):
             raise HTTPException(status_code=500, detail="파일 생성 실패")
 
-        db = get_db()
         project = await db.projects.find_one({"_id": ObjectId(project_id)})
         filename = f"{project.get('name', 'document')}.docx"
 

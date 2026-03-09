@@ -225,3 +225,72 @@ async def delete_resource(jwt_token: str, resource_id: str):
             os.remove(file_path)
     await db.resources.delete_one({"_id": ObjectId(resource_id)})
     return {"success": True}
+
+
+# ============ DOCX 템플릿 관리 ============
+
+@router.post("/{jwt_token}/api/resources/docx-template")
+async def upload_docx_template(
+    jwt_token: str,
+    project_id: str = Form(...),
+    file: UploadFile = File(...)
+):
+    """프로젝트용 .docx 템플릿 업로드"""
+    await get_user_key(jwt_token)
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext != ".docx":
+        raise HTTPException(status_code=400, detail=".docx 파일만 업로드 가능합니다")
+
+    filename = f"{uuid.uuid4().hex}.docx"
+    save_dir = os.path.join(settings.UPLOAD_DIR, "docx_templates")
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, filename)
+
+    async with aiofiles.open(save_path, "wb") as f:
+        content = await file.read()
+        await f.write(content)
+
+    # 템플릿 스타일 정보 추출
+    from services.word_service import extract_docx_template_info
+    template_info = extract_docx_template_info(save_path)
+
+    db = get_db()
+    doc = {
+        "project_id": project_id,
+        "original_filename": file.filename,
+        "file_path": f"/uploads/docx_templates/{filename}",
+        "template_info": template_info,
+        "created_at": datetime.utcnow(),
+    }
+    result = await db.docx_templates.insert_one(doc)
+    doc["_id"] = str(result.inserted_id)
+    return {"template": doc}
+
+
+@router.get("/{jwt_token}/api/resources/docx-template/{project_id}")
+async def get_docx_template(jwt_token: str, project_id: str):
+    """프로젝트의 docx 템플릿 조회"""
+    await get_user_key(jwt_token)
+    db = get_db()
+    template = await db.docx_templates.find_one(
+        {"project_id": project_id},
+        sort=[("created_at", -1)]
+    )
+    if template:
+        template["_id"] = str(template["_id"])
+    return {"template": template}
+
+
+@router.delete("/{jwt_token}/api/resources/docx-template/{template_id}")
+async def delete_docx_template(jwt_token: str, template_id: str):
+    """docx 템플릿 삭제"""
+    await get_user_key(jwt_token)
+    db = get_db()
+    template = await db.docx_templates.find_one({"_id": ObjectId(template_id)})
+    if template and template.get("file_path"):
+        file_path = os.path.join(".", template["file_path"].lstrip("/"))
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    await db.docx_templates.delete_one({"_id": ObjectId(template_id)})
+    return {"success": True}

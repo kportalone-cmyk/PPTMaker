@@ -2194,6 +2194,40 @@ body {
 .btn-modify-excel:active { transform: scale(0.97); }
 .btn-modify-excel:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* DOCX 양식 템플릿 버튼 */
+.btn-docx-template {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border: 1px dashed rgba(99, 102, 241, 0.4);
+    border-radius: 6px;
+    background: rgba(99, 102, 241, 0.06);
+    color: #6366f1;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+.btn-docx-template:hover {
+    background: rgba(99, 102, 241, 0.12);
+    border-color: rgba(99, 102, 241, 0.6);
+}
+.btn-docx-template.has-template {
+    border-style: solid;
+    background: rgba(99, 102, 241, 0.1);
+    border-color: rgba(99, 102, 241, 0.5);
+}
+.btn-docx-template .template-remove {
+    margin-left: 4px;
+    opacity: 0.6;
+    cursor: pointer;
+}
+.btn-docx-template .template-remove:hover {
+    opacity: 1;
+    color: #ef4444;
+}
+
 /* 우측 버튼 그룹 (슬라이드 추가 + 생성) */
 .input-actions-right {
     display: flex;

@@ -631,6 +631,11 @@
                                     <option value="25">25장</option>
                                     <option value="30">30장</option>
                                 </select>
+                                <button class="btn-docx-template" id="btnDocxTemplate" style="display:none" onclick="handleDocxTemplate()">
+                                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6M9 15l3-3 3 3"/></svg>
+                                    <span id="docxTemplateLabel">양식 업로드</span>
+                                </button>
+                                <input type="file" id="docxTemplateFileInput" accept=".docx" style="display:none">
                             </div>
                             <div class="input-actions-right">
                             <button class="btn-add-slide" id="btnAddSlide" onclick="openAddSlideModal()">

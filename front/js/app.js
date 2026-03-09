@@ -51,6 +51,8 @@ const state = {
     onlyofficeDoc: null,
     onlyofficeEditor: null,
     generatedDocx: null,
+    // DOCX 양식 템플릿
+    docxTemplateId: null,
 };
 
 let _animationCancelled = false;
@@ -1582,6 +1584,7 @@ function renderProjectWorkspace() {
     $('#onlyofficeWorkspace').hide();
     $('#wordWorkspace').hide();
     $('#btnModifyExcel').hide();
+    $('#btnDocxTemplate').hide();
     _destroyExcelCharts();
     // 전체화면 상태 해제
     $('#appView').removeClass('canvas-fullscreen');
@@ -1626,6 +1629,7 @@ function renderProjectWorkspace() {
         // onlyoffice_docx는 페이지 수 선택 표시
         if (projectType === 'onlyoffice_docx') {
             $('#docxPageCountSelect').show();
+            $('#btnDocxTemplate').show();
         }
 
         // OnlyOffice 워크스페이스 초기화
@@ -1651,6 +1655,7 @@ function renderProjectWorkspace() {
         $('#templateSelectBtn').hide();
         $('#slideCountSelect').hide();
         $('#docxPageCountSelect').show();
+        $('#btnDocxTemplate').show();
         $('#btnAddSlide').hide();
         $('#btnGenerate span').text(t('generateWord'));
         $('#instructionsInput').attr('placeholder', '문서에 작성할 내용에 대한 지침을 입력하세요...');
@@ -1691,6 +1696,13 @@ function renderProjectWorkspace() {
 
     // 협업 UI 업데이트
     updateCollabUI();
+
+    // docx 템플릿 로드
+    if (projectType === 'word' || projectType === 'onlyoffice_docx') {
+        loadDocxTemplate();
+    } else {
+        state.docxTemplateId = null;
+    }
 }
 
 function showEditProjectModal() {
@@ -2833,7 +2845,7 @@ function _handleStreamEvent(data) {
         }
 
         case 'slides_skeleton': {
-            // 모든 슬라이드를 배경+빈 텍스트로 즉시 렌더링
+            // 스켈레톤 데이터 저장 (썸네일은 slide_content 도착 시 한 장씩 추가)
             const skeletonSlides = data.slides || [];
             state.generatedSlides = skeletonSlides;
             state.currentSlideIndex = 0;
@@ -2848,15 +2860,17 @@ function _handleStreamEvent(data) {
 
             // 첫 슬라이드 캔버스 렌더링 (배경만 보임)
             renderSlideAtIndex(0);
-            renderSlideThumbnails();
-            renderSlideThumbList();
             updateSlideNav();
+
+            // 썸네일 초기화 (한 장씩 추가될 예정)
+            $('#slideThumbnails').empty();
+            $('#slideThumbList').empty();
 
             // 모든 배경 이미지 프리로드 시작
             _preloadSlideImages(skeletonSlides);
 
-            $('#slideCounter').text(`1 / ${skeletonSlides.length}`);
-            $('#slideCounterInline').text(`1 / ${skeletonSlides.length}`);
+            $('#slideCounter').text(`0 / ${skeletonSlides.length}`);
+            $('#slideCounterInline').text(`0 / ${skeletonSlides.length}`);
             break;
         }
 
@@ -3677,9 +3691,10 @@ async function _processContentQueue() {
             }
         }
 
-        // 썸네일을 텍스트 포함 버전으로 업데이트
+        // 타이핑 완료 후 해당 슬라이드 썸네일 추가 (한 장씩)
         if (!_animationCancelled) {
-            _updateThumbnailAtIndex(idx);
+            _appendSingleThumbnail(idx);
+            _appendSingleThumbV(idx);
             $('#slideCounter').text(`${idx + 1} / ${state.generatedSlides.length}`);
             $('#slideCounterInline').text(`${idx + 1} / ${state.generatedSlides.length}`);
         }
@@ -3692,10 +3707,17 @@ async function _processContentQueue() {
 
     _isAnimating = false;
 
-    // 애니메이션 취소 시 모든 썸네일 갱신
+    // 애니메이션 취소 시 아직 추가 안 된 썸네일을 모두 채우기
     if (_animationCancelled) {
-        renderSlideThumbnails();
-        renderSlideThumbList();
+        const addedCount = $('#slideThumbList .slide-thumb-v').length;
+        for (let j = addedCount; j < state.generatedSlides.length; j++) {
+            if (state.generatedSlides[j] && state.generatedSlides[j].items && state.generatedSlides[j].items.length > 0) {
+                _appendSingleThumbnail(j);
+                _appendSingleThumbV(j);
+            }
+        }
+        $('#slideCounter').text(`${state.currentSlideIndex + 1} / ${state.generatedSlides.length}`);
+        $('#slideCounterInline').text(`${state.currentSlideIndex + 1} / ${state.generatedSlides.length}`);
         updateSlideNav();
     }
 
@@ -5466,12 +5488,65 @@ function exitPresentation() {
 }
 
 // ============ 다운로드 & 공유 ============
+
+async function _downloadFile(url, defaultFilename) {
+    // 다운로드 오버레이 표시
+    let $overlay = $('#downloadOverlay');
+    if (!$overlay.length) {
+        $('body').append(`
+            <div id="downloadOverlay" style="position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35);backdrop-filter:blur(4px);opacity:0;transition:opacity .2s">
+                <div style="background:#fff;border-radius:16px;padding:32px 48px;display:flex;flex-direction:column;align-items:center;gap:16px;box-shadow:0 20px 60px rgba(0,0,0,.2)">
+                    <div class="dl-spinner" style="width:40px;height:40px;border:3px solid #e5e7eb;border-top-color:#6366f1;border-radius:50%;animation:dlSpin .7s linear infinite"></div>
+                    <div style="font-size:15px;font-weight:600;color:#1f2937" id="downloadOverlayMsg">문서를 준비하고 있습니다...</div>
+                    <div style="font-size:12px;color:#9ca3af">잠시만 기다려 주세요</div>
+                </div>
+            </div>
+            <style>@keyframes dlSpin{to{transform:rotate(360deg)}}</style>
+        `);
+        $overlay = $('#downloadOverlay');
+    }
+    $('#downloadOverlayMsg').text('문서를 준비하고 있습니다...');
+    $overlay.show();
+    requestAnimationFrame(() => $overlay.css('opacity', '1'));
+
+    try {
+        const res = await fetch(url);
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `다운로드 실패 (${res.status})`);
+        }
+
+        // Content-Disposition에서 파일명 추출
+        const cd = res.headers.get('Content-Disposition') || '';
+        let filename = defaultFilename;
+        const match = cd.match(/filename\*?=(?:UTF-8''|"?)([^";]+)/i);
+        if (match) filename = decodeURIComponent(match[1].replace(/"/g, ''));
+
+        $('#downloadOverlayMsg').text('다운로드 중...');
+        const blob = await res.blob();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 100);
+        showToast('다운로드가 완료되었습니다.', 'success');
+    } catch (e) {
+        console.error('[Download]', e);
+        showToast(e.message || '다운로드 실패', 'error');
+    } finally {
+        $overlay.css('opacity', '0');
+        setTimeout(() => $overlay.hide(), 200);
+    }
+}
+
 function downloadPPTX() {
     if (!state.currentProject || state.generatedSlides.length === 0) {
         showToast(t('noSlides'), 'error');
         return;
     }
-    window.open(apiUrl('/api/generate/' + state.currentProject._id + '/download/pptx'), '_blank');
+    const url = apiUrl('/api/generate/' + state.currentProject._id + '/download/pptx');
+    _downloadFile(url, (state.currentProject.name || 'presentation') + '.pptx');
 }
 
 function downloadPDF() {
@@ -5479,7 +5554,8 @@ function downloadPDF() {
         showToast(t('noSlides'), 'error');
         return;
     }
-    window.open(apiUrl('/api/generate/' + state.currentProject._id + '/download/pdf'), '_blank');
+    const url = apiUrl('/api/generate/' + state.currentProject._id + '/download/pdf');
+    _downloadFile(url, (state.currentProject.name || 'presentation') + '.pdf');
 }
 
 async function copyShareLink() {
@@ -7425,7 +7501,8 @@ function downloadXLSX() {
         showToast(t('msgNoExcelData'), 'error');
         return;
     }
-    window.open(`/${state.jwtToken}/api/generate/${state.currentProject._id}/download/xlsx`, '_blank');
+    const url = `/${state.jwtToken}/api/generate/${state.currentProject._id}/download/xlsx`;
+    _downloadFile(url, (state.currentProject.name || 'spreadsheet') + '.xlsx');
 }
 
 
@@ -8387,6 +8464,96 @@ function _elementToMarkdown(el) {
     return el.textContent.trim();
 }
 
+// ============ DOCX 템플릿 관리 ============
+
+async function loadDocxTemplate() {
+    if (!state.currentProject) return;
+    try {
+        const res = await apiGet(`/api/resources/docx-template/${state.currentProject._id}`);
+        if (res.template) {
+            state.docxTemplateId = res.template._id;
+            _updateDocxTemplateButton(res.template.original_filename);
+        } else {
+            state.docxTemplateId = null;
+            _updateDocxTemplateButton(null);
+        }
+    } catch(e) {
+        state.docxTemplateId = null;
+        _updateDocxTemplateButton(null);
+    }
+}
+
+function _updateDocxTemplateButton(filename) {
+    const $btn = $('#btnDocxTemplate');
+    if (filename) {
+        // 파일명 15자 제한
+        const short = filename.length > 15 ? filename.substring(0, 12) + '...' : filename;
+        $btn.addClass('has-template');
+        $('#docxTemplateLabel').html(
+            `<span style="max-width:100px;overflow:hidden;text-overflow:ellipsis" title="${filename}">${short}</span>` +
+            `<span class="template-remove" onclick="event.stopPropagation();removeDocxTemplate()">✕</span>`
+        );
+    } else {
+        $btn.removeClass('has-template');
+        $('#docxTemplateLabel').text('양식 업로드');
+    }
+}
+
+function handleDocxTemplate() {
+    if (state.docxTemplateId) {
+        // 이미 템플릿이 있으면 교체 확인
+        if (confirm('기존 양식을 교체하시겠습니까?')) {
+            $('#docxTemplateFileInput').click();
+        }
+    } else {
+        $('#docxTemplateFileInput').click();
+    }
+}
+
+async function removeDocxTemplate() {
+    if (!state.docxTemplateId) return;
+    try {
+        await apiDelete(`/api/resources/docx-template/${state.docxTemplateId}`);
+        state.docxTemplateId = null;
+        _updateDocxTemplateButton(null);
+        showToast('양식이 제거되었습니다.', 'success');
+    } catch(e) {
+        showToast('양식 제거 실패', 'error');
+    }
+}
+
+// 파일 인풋 변경 핸들러 - 초기화 시점에 등록
+$(document).on('change', '#docxTemplateFileInput', async function() {
+    const file = this.files[0];
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.docx')) {
+        showToast('.docx 파일만 업로드 가능합니다.', 'error');
+        this.value = '';
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('project_id', state.currentProject._id);
+    formData.append('file', file);
+
+    try {
+        // 기존 템플릿 삭제
+        if (state.docxTemplateId) {
+            await apiDelete(`/api/resources/docx-template/${state.docxTemplateId}`);
+        }
+
+        const res = await apiUpload('/api/resources/docx-template', formData);
+        state.docxTemplateId = res.template._id;
+        _updateDocxTemplateButton(res.template.original_filename);
+        showToast('양식 템플릿이 등록되었습니다.', 'success');
+    } catch(e) {
+        showToast(e.message || '양식 업로드 실패', 'error');
+    }
+
+    this.value = '';
+});
+
 async function generateWord() {
     const instructions = $('#instructionsInput').val().trim();
     const lang = $('#langSelect').val();
@@ -8419,6 +8586,7 @@ async function generateWord() {
                 instructions: instructions,
                 lang: lang,
                 section_count: $('#docxPageCountSelect').val(),
+                docx_template_id: state.docxTemplateId || null,
             }),
             signal: _abortController.signal,
         });
@@ -8706,16 +8874,15 @@ function downloadDOCX() {
     // 먼저 CKEditor에서 편집된 내용을 저장
     if (_ckEditorInstance) {
         const parsed = _htmlToDocxSections(_ckEditorInstance.getData());
-        // 서버에 저장 후 다운로드
         _saveAndDownloadDocx(parsed);
     } else {
-        window.open(`/${state.jwtToken}/api/generate/${state.currentProject._id}/download/docx`, '_blank');
+        const url = `/${state.jwtToken}/api/generate/${state.currentProject._id}/download/docx`;
+        _downloadFile(url, (state.currentProject.name || 'document') + '.docx');
     }
 }
 
 async function _saveAndDownloadDocx(parsed) {
     try {
-        // 먼저 현재 편집 내용 저장
         await fetch(`/${state.jwtToken}/api/generate/${state.currentProject._id}/docx`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -8724,12 +8891,11 @@ async function _saveAndDownloadDocx(parsed) {
                 meta: parsed.meta || state.generatedDocx.meta || {},
             }),
         });
-        // 그 다음 다운로드
-        window.open(`/${state.jwtToken}/api/generate/${state.currentProject._id}/download/docx`, '_blank');
+        const url = `/${state.jwtToken}/api/generate/${state.currentProject._id}/download/docx`;
+        await _downloadFile(url, (state.currentProject.name || 'document') + '.docx');
     } catch (e) {
         console.error('[Word] 저장 후 다운로드 실패:', e);
-        // 그래도 다운로드 시도
-        window.open(`/${state.jwtToken}/api/generate/${state.currentProject._id}/download/docx`, '_blank');
+        showToast('다운로드 실패', 'error');
     }
 }
 
@@ -9204,7 +9370,9 @@ function downloadOnlyOfficeDoc() {
         showToast('다운로드할 문서가 없습니다', 'error');
         return;
     }
-    window.open(`/${state.jwtToken}/api/generate/${state.currentProject._id}/download/onlyoffice`, '_blank');
+    const ext = { 'onlyoffice_pptx': '.pptx', 'onlyoffice_xlsx': '.xlsx', 'onlyoffice_docx': '.docx' }[state.currentProject.project_type] || '.docx';
+    const url = `/${state.jwtToken}/api/generate/${state.currentProject._id}/download/onlyoffice`;
+    _downloadFile(url, (state.currentProject.name || 'document') + ext);
 }
 
 // OnlyOffice SSE 진행 상태 표시
@@ -9506,6 +9674,7 @@ async function generateOnlyOfficeDocx() {
         instructions,
         lang,
         section_count: sectionCount,
+        docx_template_id: state.docxTemplateId || null,
     });
 }
 
