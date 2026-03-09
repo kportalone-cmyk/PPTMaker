@@ -23,6 +23,10 @@
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 1H2a1 1 0 00-1 1v12a1 1 0 001 1h12a1 1 0 001-1V2a1 1 0 00-1-1zM4 4h8v1H4V4zm0 3h8v1H4V7zm0 3h5v1H4v-1z"/></svg>
                 프롬프트 관리
             </button>
+            <button class="header-btn" onclick="showDashboard()" title="사용 현황">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2 2h3v12H2V2zm4.5 4H10v8H6.5V6zM11 8h3v6h-3V8z"/></svg>
+                사용 현황
+            </button>
         </div>
         <div class="user-info" id="userInfo"></div>
     </div>
@@ -106,7 +110,22 @@
                 </button>
                 <button class="btn btn-danger" onclick="deleteCurrentSlide()" id="btnDeleteSlide" style="display:none;">삭제</button>
                 <div style="flex:1;"></div>
+                <button class="btn btn-publish" onclick="togglePublishTemplate()" id="btnPublishTemplate" style="display:none;">사용자 적용</button>
                 <button class="btn btn-danger" onclick="deleteCurrentTemplate()" id="btnDeleteTemplate" style="display:none;">템플릿 삭제</button>
+            </div>
+
+            <!-- 템플릿 이름 -->
+            <div class="template-name-bar" id="templateNameBar" style="display:none;">
+                <div class="template-name-display" id="templateNameDisplay">
+                    <span class="template-name-prefix">선택된 템플릿명 : </span>
+                    <span class="template-name-label" id="templateNameLabel" ondblclick="startEditTemplateName()" title="더블클릭하여 이름 수정">템플릿 이름</span>
+                    <span class="template-name-hint">(더블클릭하여 이름을 수정할 수 있습니다)</span>
+                </div>
+                <div class="template-name-edit" id="templateNameEdit" style="display:none;">
+                    <input type="text" id="templateNameInput" onkeydown="handleTemplateNameKey(event)" placeholder="템플릿 이름">
+                    <button class="btn btn-primary btn-sm" onclick="saveTemplateName()">변경</button>
+                    <button class="btn btn-sm" onclick="cancelEditTemplateName()">취소</button>
+                </div>
             </div>
 
             <!-- 캔버스 -->
@@ -195,6 +214,24 @@
                     <div class="prop-group">
                         <label>높이</label>
                         <input type="number" id="propH" onchange="updateObjPosition()">
+                    </div>
+                </div>
+                <div class="prop-group">
+                    <label>레이어 순서</label>
+                    <div class="layer-controls">
+                        <button class="layer-btn" onclick="sendToBack()" title="맨 뒤로">
+                            <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="0" y="0" width="8" height="8" rx="1" opacity="0.3"/><rect x="6" y="6" width="8" height="8" rx="1"/></svg>
+                        </button>
+                        <button class="layer-btn" onclick="sendBackward()" title="뒤로">
+                            <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M1 1h6v6H1z" opacity="0.3"/><path d="M7 7h6v6H7z"/><path d="M5 9L5 7 7 7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+                        </button>
+                        <input type="number" id="propZIndex" min="1" style="width:50px;text-align:center;" onchange="updateZIndex(this.value)">
+                        <button class="layer-btn" onclick="bringForward()" title="앞으로">
+                            <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M7 7h6v6H7z" opacity="0.3"/><path d="M1 1h6v6H1z"/><path d="M9 5L9 7 7 7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+                        </button>
+                        <button class="layer-btn" onclick="bringToFront()" title="맨 앞으로">
+                            <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="6" y="6" width="8" height="8" rx="1" opacity="0.3"/><rect x="0" y="0" width="8" height="8" rx="1"/></svg>
+                        </button>
                     </div>
                 </div>
             </div>
@@ -540,6 +577,147 @@
         </div>
     </div>
 
+    <!-- 사용 현황 대시보드 -->
+    <div id="dashboardOverlay" style="display:none;">
+        <div class="dashboard-sidebar">
+            <div class="dashboard-sidebar-header">
+                <h2>사용 현황</h2>
+                <button class="dashboard-close-btn" onclick="closeDashboard()" title="닫기">&times;</button>
+            </div>
+            <nav class="dashboard-nav">
+                <button class="dashboard-nav-item active" data-section="overview" onclick="switchDashboardSection('overview')">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M0 0h4v16H0zm6 6h4v10H6zm6 3h4v7h-4z"/></svg>
+                    전체 현황
+                </button>
+                <button class="dashboard-nav-item" data-section="users" onclick="switchDashboardSection('users')">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 8a3 3 0 100-6 3 3 0 000 6zm2-3a2 2 0 11-4 0 2 2 0 014 0zm4 8c0 1-1 1-1 1H3s-1 0-1-1 1-4 6-4 6 3 6 4z"/></svg>
+                    사용자 현황
+                </button>
+                <button class="dashboard-nav-item" data-section="projects" onclick="switchDashboardSection('projects')">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M1 3.5A1.5 1.5 0 012.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0115 5.5v7a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 011 12.5v-9z"/></svg>
+                    프로젝트 현황
+                </button>
+                <button class="dashboard-nav-item" data-section="activity" onclick="switchDashboardSection('activity')">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 3.5a.5.5 0 00-1 0V9a.5.5 0 00.252.434l3.5 2a.5.5 0 00.496-.868L8 8.71V3.5z"/><path d="M8 16A8 8 0 108 0a8 8 0 000 16zm7-8A7 7 0 111 8a7 7 0 0114 0z"/></svg>
+                    활동 로그
+                </button>
+            </nav>
+        </div>
+        <div class="dashboard-content">
+            <!-- 전체 현황 -->
+            <div id="dashSection-overview" class="dashboard-section active">
+                <h2 class="dashboard-title">전체 현황</h2>
+                <p class="dashboard-subtitle">솔루션 사용 현황을 한눈에 확인하세요</p>
+                <div class="stat-cards" id="overviewStatCards"></div>
+                <div class="dashboard-charts-row">
+                    <div class="dashboard-chart-card" style="flex:2;">
+                        <h3>일별 프로젝트 생성 추이 <span class="chart-period">최근 30일</span></h3>
+                        <div style="height:240px;"><canvas id="chartDailyTrend"></canvas></div>
+                    </div>
+                    <div class="dashboard-chart-card" style="flex:1;">
+                        <h3>프로젝트 유형 분포</h3>
+                        <div style="height:240px;"><canvas id="chartProjectType"></canvas></div>
+                    </div>
+                </div>
+                <div class="dashboard-charts-row">
+                    <div class="dashboard-chart-card" style="flex:1;">
+                        <h3>리소스 유형 분포</h3>
+                        <div style="height:240px;"><canvas id="chartResourceType"></canvas></div>
+                    </div>
+                    <div class="dashboard-chart-card" style="flex:1;">
+                        <h3>생성 결과물 현황</h3>
+                        <div style="height:240px;"><canvas id="chartGenerationBreakdown"></canvas></div>
+                    </div>
+                </div>
+            </div>
+            <!-- 사용자 현황 -->
+            <div id="dashSection-users" class="dashboard-section">
+                <h2 class="dashboard-title">사용자 현황</h2>
+                <p class="dashboard-subtitle">등록된 사용자와 활동 현황을 확인합니다</p>
+                <div class="dashboard-filter-bar">
+                    <input type="text" id="dashUserSearch" placeholder="이름, 부서, 이메일 검색..." onkeydown="if(event.key==='Enter') loadDashboardUsers()">
+                    <button class="btn btn-primary" onclick="loadDashboardUsers()">검색</button>
+                </div>
+                <div id="dashUserList" class="dashboard-list"><div class="dashboard-loading">로딩 중...</div></div>
+                <div id="dashUserPagination" class="dashboard-pagination"></div>
+            </div>
+            <!-- 프로젝트 현황 -->
+            <div id="dashSection-projects" class="dashboard-section">
+                <h2 class="dashboard-title">프로젝트 현황</h2>
+                <p class="dashboard-subtitle">전체 프로젝트 목록과 상태를 확인합니다</p>
+                <div class="dashboard-filter-bar">
+                    <input type="text" id="dashProjectSearch" placeholder="프로젝트명 검색..." onkeydown="if(event.key==='Enter') loadDashboardProjects()">
+                    <select id="dashProjectTypeFilter" onchange="loadDashboardProjects()">
+                        <option value="">전체 유형</option>
+                        <option value="slide">슬라이드</option>
+                        <option value="excel">엑셀</option>
+                        <option value="onlyoffice_pptx">OO PPTX</option>
+                        <option value="onlyoffice_xlsx">OO XLSX</option>
+                        <option value="onlyoffice_docx">OO DOCX</option>
+                    </select>
+                    <select id="dashProjectStatusFilter" onchange="loadDashboardProjects()">
+                        <option value="">전체 상태</option>
+                        <option value="draft">초안</option>
+                        <option value="preparing">준비중</option>
+                        <option value="generating">생성중</option>
+                        <option value="generated">생성완료</option>
+                    </select>
+                    <button class="btn btn-primary" onclick="loadDashboardProjects()">검색</button>
+                </div>
+                <div id="dashProjectList" class="dashboard-list"><div class="dashboard-loading">로딩 중...</div></div>
+                <div id="dashProjectPagination" class="dashboard-pagination"></div>
+            </div>
+            <!-- 사용자 상세 -->
+            <div id="dashSection-userDetail" class="dashboard-section">
+                <div class="user-detail-header">
+                    <button class="user-detail-back" onclick="switchDashboardSection('users')" title="사용자 목록으로 돌아가기">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M11.354 1.646a.5.5 0 010 .708L5.707 8l5.647 5.646a.5.5 0 01-.708.708l-6-6a.5.5 0 010-.708l6-6a.5.5 0 01.708 0z"/></svg>
+                        돌아가기
+                    </button>
+                </div>
+                <div class="user-detail-profile" id="userDetailProfile"></div>
+                <div class="stat-cards" id="userDetailStats"></div>
+                <div class="dashboard-charts-row">
+                    <div class="dashboard-chart-card" style="flex:2;">
+                        <h3>일별 프로젝트 생성 추이 <span class="chart-period">최근 30일</span></h3>
+                        <div style="height:220px;"><canvas id="userChartDailyTrend"></canvas></div>
+                    </div>
+                    <div class="dashboard-chart-card" style="flex:1;">
+                        <h3>프로젝트 유형 분포</h3>
+                        <div style="height:220px;"><canvas id="userChartProjectType"></canvas></div>
+                    </div>
+                </div>
+                <div class="dashboard-charts-row">
+                    <div class="dashboard-chart-card" style="flex:1;">
+                        <h3>프로젝트 상태 분포</h3>
+                        <div style="height:220px;"><canvas id="userChartProjectStatus"></canvas></div>
+                    </div>
+                    <div class="dashboard-chart-card" style="flex:1;">
+                        <h3>리소스 유형 분포</h3>
+                        <div style="height:220px;"><canvas id="userChartResourceType"></canvas></div>
+                    </div>
+                </div>
+                <h3 class="user-detail-section-title">최근 프로젝트</h3>
+                <div id="userDetailProjects" class="dashboard-list"></div>
+            </div>
+            <!-- 활동 로그 -->
+            <div id="dashSection-activity" class="dashboard-section">
+                <h2 class="dashboard-title">활동 로그</h2>
+                <p class="dashboard-subtitle">AI 생성 완료된 프로젝트의 활동 기록입니다</p>
+                <div class="dashboard-filter-bar">
+                    <input type="text" id="dashActivityUserSearch" placeholder="사용자명/부서 검색..." onkeydown="if(event.key==='Enter') loadDashboardActivity()">
+                    <input type="date" id="dashActivityDateFrom">
+                    <span style="color:#888;">~</span>
+                    <input type="date" id="dashActivityDateTo">
+                    <button class="btn btn-primary" onclick="loadDashboardActivity()">검색</button>
+                </div>
+                <div id="dashActivityList" class="dashboard-list"><div class="dashboard-loading">로딩 중...</div></div>
+                <div id="dashActivityPagination" class="dashboard-pagination"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
     <script src="/admin/js/admin.js"></script>
 </body>

@@ -38,6 +38,8 @@ class SlideObject(BaseModel):
     text_style: Optional[TextObjectStyle] = None
     # 도형용
     shape_style: Optional[ShapeStyle] = None
+    # 레이어 순서 (z-index)
+    z_index: int = 10
     # 메타 정보 (슬라이드 추천용)
     role: Optional[str] = None  # "title" | "governance" | "subtitle" | "body" | "description"
     placeholder: Optional[str] = None  # 사용자 데이터가 들어갈 플레이스홀더 이름
@@ -62,12 +64,14 @@ class TemplateCreate(BaseModel):
     name: str
     description: str = ""
     background_image: Optional[str] = None
+    is_published: bool = False
 
 
 class TemplateUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     background_image: Optional[str] = None
+    is_published: Optional[bool] = None
 
 
 class BulkFontUpdate(BaseModel):

@@ -324,7 +324,7 @@ if __name__ == "__main__":
     uvicorn_kwargs = {
         "host": settings.SERVER_HOST,
         "port": settings.SERVER_PORT,
-        "reload": True,
+        "reload": settings.AUTO_RELOAD,
     }
 
     # SSL 설정
@@ -347,6 +347,7 @@ if __name__ == "__main__":
     print(f"  Host         : {settings.SERVER_HOST}")
     print(f"  Port         : {settings.SERVER_PORT}")
     print(f"  URL          : {protocol}://{settings.SERVER_HOST}:{settings.SERVER_PORT}")
+    print(f"  Auto Reload  : {'ON' if settings.AUTO_RELOAD else 'OFF'}")
     print("-" * 60)
     print(f"  MongoDB      : {settings.MONGO_URI.split('@')[-1].split('?')[0] if '@' in settings.MONGO_URI else settings.MONGO_URI}")
     print(f"  OfficeCoWork DB : {settings.PPTMAKER_DB}")

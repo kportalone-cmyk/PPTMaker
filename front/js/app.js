@@ -9181,11 +9181,774 @@ async function generateOnlyOfficeDocx() {
         return;
     }
 
-    await _onlyofficeStreamGenerate('/api/generate/onlyoffice/docx/stream', {
+    _isGenerating = true;
+    _showStopButton();
+    state.currentProject.status = 'generating';
+    $('#wsProjectStatus').text(t('statusGenerating')).attr('class', 'ws-status generating');
+
+    // 기존 에디터 숨기고 HTML 미리보기로 스트리밍
+    destroyOnlyOfficeEditor();
+    _showOoDocxHtmlPreview();
+
+    await _onlyofficeDocxHtmlStream('/api/generate/onlyoffice/docx/stream', {
         project_id: state.currentProject._id,
         instructions,
         lang,
     });
+}
+
+// ============ OnlyOffice 실시간 스트리밍 (Word) ============
+
+let _ooConnector = null;
+let _ooDocReadyResolve = null;
+
+async function _openOnlyOfficeForStreaming(projectId) {
+    const res = await apiGet(`/api/onlyoffice/${projectId}/config`);
+    const config = res.config;
+    const onlyofficeUrl = res.onlyoffice_url;
+
+    await loadOnlyOfficeScript(onlyofficeUrl);
+    destroyOnlyOfficeEditor();
+    _ooConnector = null;
+
+    // 에디터 컨테이너 + 하단 플로팅 진행 표시
+    $('#onlyofficeContainer').html(
+        '<div id="ooEditorDiv" style="width:100%;height:100%;"></div>' +
+        '<div id="ooStreamOverlay" style="position:absolute;bottom:60px;left:50%;transform:translateX(-50%);' +
+        'background:rgba(30,30,50,0.85);color:#fff;padding:10px 24px;border-radius:24px;font-size:13px;' +
+        'display:flex;align-items:center;gap:10px;z-index:10000;box-shadow:0 4px 20px rgba(0,0,0,0.3);' +
+        'backdrop-filter:blur(8px);pointer-events:none;">' +
+        '<div style="width:16px;height:16px;border:2px solid rgba(255,255,255,0.3);border-top-color:#fff;' +
+        'border-radius:50%;animation:spin 0.8s linear infinite;"></div>' +
+        '<span id="ooStreamMsg">AI가 문서를 작성하고 있습니다...</span>' +
+        '<span id="ooStreamTimer" style="opacity:0.6;margin-left:4px;">0:00</span>' +
+        '</div>'
+    );
+
+    const docReadyPromise = new Promise(resolve => { _ooDocReadyResolve = resolve; });
+
+    config.events = {
+        onAppReady: function() {
+            console.log('[OnlyOffice-Stream] 에디터 준비 완료');
+        },
+        onDocumentReady: function() {
+            console.log('[OnlyOffice-Stream] 문서 로드 완료');
+            // Connector 생성 시도
+            try {
+                _ooConnector = state.onlyofficeEditor.createConnector();
+                console.log('[OnlyOffice-Stream] Connector 생성 완료');
+            } catch (e) {
+                console.warn('[OnlyOffice-Stream] Connector 생성 실패 (버전 미지원):', e);
+                _ooConnector = null;
+            }
+            if (_ooDocReadyResolve) {
+                _ooDocReadyResolve();
+                _ooDocReadyResolve = null;
+            }
+        },
+        onError: function(event) {
+            console.error('[OnlyOffice-Stream] 에디터 오류:', event.data);
+            if (_ooDocReadyResolve) {
+                _ooDocReadyResolve();
+                _ooDocReadyResolve = null;
+            }
+        }
+    };
+
+    state.onlyofficeEditor = new DocsAPI.DocEditor('ooEditorDiv', config);
+
+    // iframe 권한 설정
+    setTimeout(function() {
+        var ooIframe = document.querySelector('#ooEditorDiv iframe');
+        if (ooIframe) {
+            ooIframe.setAttribute('allow', 'clipboard-read; clipboard-write; unload');
+        }
+    }, 500);
+
+    // 에디터 로드 대기
+    await docReadyPromise;
+}
+
+
+let _ooStreamTimerInterval = null;
+let _ooStreamStartTime = 0;
+
+function _startStreamTimer() {
+    _ooStreamStartTime = Date.now();
+    if (_ooStreamTimerInterval) clearInterval(_ooStreamTimerInterval);
+    _updateStreamTimer();
+    _ooStreamTimerInterval = setInterval(_updateStreamTimer, 1000);
+}
+
+function _stopStreamTimer() {
+    if (_ooStreamTimerInterval) { clearInterval(_ooStreamTimerInterval); _ooStreamTimerInterval = null; }
+}
+
+function _updateStreamTimer() {
+    const elapsed = Math.floor((Date.now() - _ooStreamStartTime) / 1000);
+    const m = Math.floor(elapsed / 60);
+    const s = elapsed % 60;
+    const el = document.getElementById('ooStreamTimer');
+    if (el) el.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+
+async function _onlyofficeDocxStreamWithEditor(url, body) {
+    _startStreamTimer();
+
+    try {
+        const response = await fetch(`/${state.jwtToken}${url}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+            let errMsg = `HTTP ${response.status}`;
+            try {
+                const errBody = await response.json();
+                errMsg = errBody.detail || errBody.message || errMsg;
+            } catch {}
+            _isGenerating = false;
+            _stopStreamTimer();
+            $('#ooStreamOverlay').remove();
+            _showGenerateOrRestartButton();
+            state.currentProject.status = 'draft';
+            $('#wsProjectStatus').text(t('statusDraft')).attr('class', 'ws-status draft');
+            showToast(errMsg, 'error');
+            return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let sectionCount = 0;
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                let evt;
+                try { evt = JSON.parse(line.substring(6)); } catch { continue; }
+
+                switch (evt.event) {
+                    case 'searching':
+                        $('#ooStreamMsg').text('인터넷에서 자료를 검색하고 있습니다...');
+                        break;
+                    case 'search_done':
+                        $('#ooStreamMsg').text('검색 완료! 문서를 작성합니다...');
+                        break;
+                    case 'start':
+                        $('#ooStreamMsg').text('AI가 문서를 작성하고 있습니다...');
+                        break;
+                    case 'delta':
+                        // 진행 상황만 표시 (section_ready에서 실제 삽입)
+                        break;
+                    case 'meta_ready':
+                        // 메타 데이터는 섹션 리로드 시 함께 반영됨
+                        break;
+                    case 'section_ready':
+                        sectionCount++;
+                        const section = evt.section;
+                        $('#ooStreamMsg').text(`섹션 ${sectionCount} 작성 완료: ${section.title || ''}`);
+                        // 1. 커넥터로 실시간 삽입 시도
+                        if (_ooConnector) {
+                            _insertSectionViaConnector(section, sectionCount === 1);
+                        }
+                        // 2. 서버사이드: 문서 업데이트 후 에디터 리로드
+                        if (evt.document_updated) {
+                            state.onlyofficeDoc = evt.document_updated;
+                            _debounceEditorReload();
+                        }
+                        break;
+                    case 'file_creating':
+                        $('#ooStreamMsg').text('최종 문서를 정리하고 있습니다...');
+                        break;
+                    case 'file_updated':
+                        state.onlyofficeDoc = evt.document || null;
+                        break;
+                    case 'complete':
+                        _isGenerating = false;
+                        // 대기 중인 리로드 타이머 취소
+                        if (_editorReloadTimer) { clearTimeout(_editorReloadTimer); _editorReloadTimer = null; }
+                        _editorReloadPending = false;
+                        _stopStreamTimer();
+                        $('#ooStreamOverlay').fadeOut(300, function() { $(this).remove(); });
+                        _showGenerateOrRestartButton();
+                        state.currentProject.status = 'generated';
+                        $('#wsProjectStatus').text(t('statusGenerated')).attr('class', 'ws-status generated');
+                        showToast('생성 완료!', 'success');
+                        // 최종 스타일 적용된 문서로 에디터 새로고침
+                        if (state.onlyofficeDoc) {
+                            // 리로드 진행 중이면 완료 후 최종 리로드
+                            var _finalReload = async () => {
+                                if (_editorReloading) {
+                                    setTimeout(_finalReload, 500);
+                                    return;
+                                }
+                                await openOnlyOfficeEditor(state.currentProject._id);
+                            };
+                            setTimeout(_finalReload, 300);
+                        }
+                        break;
+                    case 'stopped':
+                        _isGenerating = false;
+                        if (_editorReloadTimer) { clearTimeout(_editorReloadTimer); _editorReloadTimer = null; }
+                        _editorReloadPending = false;
+                        _stopStreamTimer();
+                        $('#ooStreamOverlay').fadeOut(300, function() { $(this).remove(); });
+                        _showGenerateOrRestartButton();
+                        state.currentProject.status = 'stopped';
+                        $('#wsProjectStatus').text(t('statusStopped')).attr('class', 'ws-status stopped');
+                        showToast(evt.message || '중단됨', 'info');
+                        break;
+                    case 'error':
+                        _isGenerating = false;
+                        _stopStreamTimer();
+                        $('#ooStreamOverlay').fadeOut(300, function() { $(this).remove(); });
+                        _showGenerateOrRestartButton();
+                        showToast(evt.message || '생성 실패', 'error');
+                        break;
+                }
+            }
+        }
+
+        // 스트림이 끝났는데 complete/error 없이 종료된 경우
+        if ($('#ooStreamOverlay').is(':visible')) {
+            _isGenerating = false;
+            _stopStreamTimer();
+            $('#ooStreamOverlay').remove();
+            _showGenerateOrRestartButton();
+        }
+    } catch (e) {
+        _isGenerating = false;
+        _stopStreamTimer();
+        $('#ooStreamOverlay').remove();
+        _showGenerateOrRestartButton();
+        showToast('생성 오류: ' + e.message, 'error');
+    }
+}
+
+
+function _insertMetaViaConnector(meta) {
+    if (!_ooConnector) return;
+    try {
+        var paras = [];
+        if (meta.title) {
+            paras.push({ text: meta.title, bold: true, size: 44, color: [26, 26, 46], font: '맑은 고딕', align: 'center' });
+        }
+        if (meta.description) {
+            paras.push({ text: meta.description, size: 20, italic: true, color: [100, 116, 139], font: '맑은 고딕', align: 'center' });
+            paras.push({ text: '' });
+        }
+        _pushParagraphsToEditor(paras);
+    } catch (e) {
+        console.warn('[OO-Stream] meta insert failed:', e);
+    }
+}
+
+
+function _insertSectionViaConnector(section, isFirst) {
+    if (!_ooConnector) return;
+    try {
+        var paras = _parseSectionToParagraphs(section);
+        _pushParagraphsToEditor(paras);
+    } catch (e) {
+        console.warn('[OO-Stream] section insert failed:', e);
+    }
+}
+
+function _parseSectionToParagraphs(section) {
+    var result = [];
+    var title = section.title || '';
+    var level = section.level || 1;
+    var content = section.content || '';
+
+    // 섹션 제목
+    if (title) {
+        var fontSize, color;
+        if (level <= 1) { fontSize = 40; color = [26, 26, 46]; }
+        else if (level === 2) { fontSize = 30; color = [30, 41, 59]; }
+        else if (level === 3) { fontSize = 26; color = [51, 65, 81]; }
+        else { fontSize = 22; color = [71, 85, 105]; }
+        result.push({ text: title, bold: true, size: fontSize, color: color, font: '맑은 고딕' });
+    }
+
+    // 본문 파싱
+    if (content) {
+        var lines = content.split('\n');
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim();
+            if (!line) continue;
+
+            // 마크다운 헤딩
+            var hMatch = line.match(/^(#{1,4})\s+(.+)/);
+            if (hMatch) {
+                var hLevel = hMatch[1].length;
+                var hText = hMatch[2].replace(/\*\*/g, '');
+                var fs, cl;
+                if (hLevel === 1) { fs = 36; cl = [26, 26, 46]; }
+                else if (hLevel === 2) { fs = 28; cl = [30, 41, 59]; }
+                else if (hLevel === 3) { fs = 24; cl = [51, 65, 81]; }
+                else { fs = 22; cl = [71, 85, 105]; }
+                result.push({ text: hText, bold: true, size: fs, color: cl, font: '맑은 고딕' });
+                continue;
+            }
+
+            // 인용문
+            if (line.charAt(0) === '>') {
+                result.push({ text: line.replace(/^>\s*/, ''), italic: true, color: [79, 70, 229], font: '맑은 고딕' });
+                continue;
+            }
+
+            // 불릿 리스트
+            var bm = line.match(/^[-*]\s+(.+)/);
+            if (bm) {
+                result.push({ text: '• ' + bm[1].replace(/\*\*/g, '').replace(/\*/g, ''), font: '맑은 고딕' });
+                continue;
+            }
+
+            // 숫자 리스트
+            var nm = line.match(/^(\d+)\.\s+(.+)/);
+            if (nm) {
+                result.push({ text: nm[1] + '. ' + nm[2].replace(/\*\*/g, '').replace(/\*/g, ''), font: '맑은 고딕' });
+                continue;
+            }
+
+            // 테이블/구분선 스킵
+            if (line.charAt(0) === '|') continue;
+            if (line.match(/^[-=]{3,}$/)) continue;
+
+            // 일반 텍스트
+            var plain = line.replace(/\*\*(.+?)\*\*/g, '$1').replace(/\*(.+?)\*/g, '$1').replace(/`(.+?)`/g, '$1');
+            result.push({ text: plain, font: '맑은 고딕' });
+        }
+    }
+
+    // 빈 줄 구분
+    result.push({ text: '' });
+    return result;
+}
+
+
+function _pushParagraphsToEditor(paras) {
+    if (!_ooConnector || !paras.length) return;
+    try {
+        var json = JSON.stringify(paras);
+        // Unicode escape: 모든 비-ASCII 문자와 특수문자를 \\uXXXX로 변환
+        // atob/btoa 없이 안전하게 데이터를 함수 본문에 삽입
+        var safe = '';
+        for (var i = 0; i < json.length; i++) {
+            var ch = json.charAt(i);
+            var c = json.charCodeAt(i);
+            if (c > 127) {
+                safe += '\\u' + c.toString(16).padStart(4, '0');
+            } else if (ch === '\\') {
+                safe += '\\\\';
+            } else if (ch === '"') {
+                safe += '\\"';
+            } else if (ch === '\n') {
+                safe += '\\n';
+            } else if (ch === '\r') {
+                safe += '\\r';
+            } else {
+                safe += ch;
+            }
+        }
+
+        var fnBody =
+            'var _ps = JSON.parse("' + safe + '");' +
+            'var oDoc = Api.GetDocument();' +
+            'for (var i = 0; i < _ps.length; i++) {' +
+            '  var p = _ps[i];' +
+            '  var oPara = Api.CreateParagraph();' +
+            '  if (p.align) oPara.SetJc(p.align);' +
+            '  if (p.text) {' +
+            '    var oRun = oPara.AddText(p.text);' +
+            '    if (p.bold) oRun.SetBold(true);' +
+            '    if (p.italic) oRun.SetItalic(true);' +
+            '    if (p.size) oRun.SetFontSize(p.size);' +
+            '    if (p.color) oRun.SetColor(p.color[0], p.color[1], p.color[2]);' +
+            '    if (p.font) oRun.SetFontFamily(p.font);' +
+            '  }' +
+            '  oDoc.Push(oPara);' +
+            '}';
+
+        _ooConnector.callCommand(new Function(fnBody), true);
+        console.log('[OO-Stream] Pushed', paras.length, 'paragraphs to editor');
+        return true;
+    } catch (e) {
+        console.warn('[OO-Stream] pushParagraphs failed:', e);
+        return false;
+    }
+}
+
+let _editorReloadTimer = null;
+let _editorReloading = false;
+let _editorReloadPending = false;
+let _lastReloadSectionCount = 0;
+
+function _debounceEditorReload() {
+    // 리로드 진행 중이면 대기열에 추가
+    if (_editorReloading) {
+        _editorReloadPending = true;
+        return;
+    }
+    if (_editorReloadTimer) clearTimeout(_editorReloadTimer);
+    _editorReloadTimer = setTimeout(async () => {
+        _editorReloadTimer = null;
+        _editorReloading = true;
+        _editorReloadPending = false;
+        try {
+            console.log('[OO-Stream] 에디터 리로드 시작...');
+
+            // 기존 에디터 위에 로딩 오버레이 표시 (깜빡임 방지)
+            var $container = $('#onlyofficeContainer');
+            $container.append('<div id="ooReloadOverlay" style="position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(255,255,255,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;"><div style="background:rgba(30,30,50,0.85);color:#fff;padding:10px 20px;border-radius:20px;font-size:13px;">문서 업데이트 중...</div></div>');
+
+            await openOnlyOfficeEditor(state.currentProject._id);
+            console.log('[OO-Stream] 에디터 리로드 완료');
+
+            // 로딩 오버레이 제거
+            $('#ooReloadOverlay').remove();
+
+            // 스크롤을 문서 끝으로 이동 시도
+            _scrollEditorToBottom();
+
+            // 리로드 후 플로팅 진행 오버레이 복원
+            if ($('#ooStreamOverlay').length === 0 && _isGenerating) {
+                var elapsed = _ooStreamStartTime ? Math.floor((Date.now() - _ooStreamStartTime) / 1000) : 0;
+                var m = Math.floor(elapsed / 60);
+                var s = elapsed % 60;
+                $('#onlyofficeContainer').append(
+                    '<div id="ooStreamOverlay" style="position:absolute;bottom:60px;left:50%;transform:translateX(-50%);' +
+                    'background:rgba(30,30,50,0.85);color:#fff;padding:10px 24px;border-radius:24px;font-size:13px;' +
+                    'display:flex;align-items:center;gap:10px;z-index:10000;box-shadow:0 4px 20px rgba(0,0,0,0.3);' +
+                    'backdrop-filter:blur(8px);pointer-events:none;">' +
+                    '<div style="width:16px;height:16px;border:2px solid rgba(255,255,255,0.3);border-top-color:#fff;' +
+                    'border-radius:50%;animation:spin 0.8s linear infinite;"></div>' +
+                    '<span id="ooStreamMsg">AI가 문서를 작성하고 있습니다...</span>' +
+                    '<span id="ooStreamTimer" style="opacity:0.6;margin-left:4px;">' + m + ':' + s.toString().padStart(2, '0') + '</span>' +
+                    '</div>'
+                );
+            }
+        } catch (e) {
+            console.warn('[OO-Stream] Editor reload failed:', e);
+            $('#ooReloadOverlay').remove();
+        } finally {
+            _editorReloading = false;
+            // 대기 중인 리로드가 있으면 다시 실행
+            if (_editorReloadPending) {
+                _editorReloadPending = false;
+                _debounceEditorReload();
+            }
+        }
+    }, 3000); // 3초 디바운스 - 여러 섹션을 묶어서 한 번에 리로드
+}
+
+
+function _scrollEditorToBottom() {
+    // 에디터 로드 후 문서 끝으로 스크롤
+    setTimeout(function() {
+        try {
+            // 방법 1: Ctrl+End 키 이벤트 시뮬레이션
+            var iframe = document.querySelector('#ooEditorDiv iframe');
+            if (iframe && iframe.contentDocument) {
+                var body = iframe.contentDocument.body || iframe.contentDocument.querySelector('.doc-body');
+                if (body) body.scrollTop = body.scrollHeight;
+            }
+        } catch (e) {
+            // cross-origin iframe - 접근 불가
+        }
+
+        // 방법 2: connector로 커서를 문서 끝으로 이동
+        if (_ooConnector) {
+            try {
+                _ooConnector.callCommand(function() {
+                    var oDoc = Api.GetDocument();
+                    var cnt = oDoc.GetElementsCount();
+                    if (cnt > 0) {
+                        var last = oDoc.GetElement(cnt - 1);
+                        last.MoveCursorToElement(false);
+                    }
+                }, false);
+            } catch (e) {}
+        }
+    }, 1500);
+}
+
+// ============ OnlyOffice DOCX HTML 미리보기 스트리밍 ============
+
+let _ooDocxStreamBuffer = '';
+let _ooDocxStreamRenderTimer = null;
+let _ooDocxChartCache = new Map();
+let _ooDocxPendingCharts = [];
+let _ooDocxTimerInterval = null;
+let _ooDocxStartTime = 0;
+
+function _showOoDocxHtmlPreview() {
+    _ooDocxStreamBuffer = '';
+    _ooDocxChartCache.clear();
+    _ooDocxPendingCharts = [];
+
+    // 에디터 컨테이너를 HTML 미리보기로 교체
+    $('#onlyofficeContainer').html(
+        '<div id="ooDocxPreviewWrap" class="oo-docx-preview-wrap">' +
+            '<div class="oo-docx-preview-header">' +
+                '<div class="oo-docx-preview-spinner"></div>' +
+                '<span id="ooDocxPreviewMsg">AI가 문서를 작성하고 있습니다...</span>' +
+                '<span id="ooDocxPreviewTimer" class="oo-docx-preview-timer">0:00</span>' +
+            '</div>' +
+            '<div id="ooDocxPreviewScroll" class="oo-docx-preview-scroll">' +
+                '<div class="word-streaming-content" id="ooDocxPreviewContent"></div>' +
+            '</div>' +
+        '</div>'
+    );
+
+    // 타이머 시작
+    _ooDocxStartTime = Date.now();
+    if (_ooDocxTimerInterval) clearInterval(_ooDocxTimerInterval);
+    _ooDocxTimerInterval = setInterval(_updateOoDocxTimer, 1000);
+}
+
+function _hideOoDocxHtmlPreview() {
+    if (_ooDocxStreamRenderTimer) {
+        clearTimeout(_ooDocxStreamRenderTimer);
+        _ooDocxStreamRenderTimer = null;
+    }
+    if (_ooDocxTimerInterval) {
+        clearInterval(_ooDocxTimerInterval);
+        _ooDocxTimerInterval = null;
+    }
+}
+
+function _updateOoDocxTimer() {
+    const elapsed = Math.floor((Date.now() - _ooDocxStartTime) / 1000);
+    const m = Math.floor(elapsed / 60);
+    const s = elapsed % 60;
+    const el = document.getElementById('ooDocxPreviewTimer');
+    if (el) el.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function _appendOoDocxDelta(text) {
+    _ooDocxStreamBuffer += text;
+    if (!_ooDocxStreamRenderTimer) {
+        _ooDocxStreamRenderTimer = setTimeout(() => {
+            _ooDocxStreamRenderTimer = null;
+            _renderOoDocxPreview();
+        }, 80);
+    }
+}
+
+function _renderOoDocxPreview() {
+    // Word 모듈의 기존 렌더링 함수 재사용
+    const cleaned = _cleanStreamingJsonToReadable(_ooDocxStreamBuffer);
+    // 차트 설정 임시 교체
+    const savedChartCache = _wordChartCache;
+    const savedPending = _pendingChartConfigs;
+    _wordChartCache = _ooDocxChartCache;
+    _pendingChartConfigs = _ooDocxPendingCharts;
+
+    const html = _streamingMarkdownToHtml(cleaned);
+
+    _ooDocxPendingCharts = _pendingChartConfigs;
+    _wordChartCache = savedChartCache;
+    _pendingChartConfigs = savedPending;
+
+    const container = document.getElementById('ooDocxPreviewContent');
+    if (!container) return;
+    container.innerHTML = html + '<span class="word-typing-cursor"></span>';
+
+    // 차트 렌더링
+    _renderOoDocxInlineCharts(container);
+
+    // 자동 스크롤
+    const scroll = document.getElementById('ooDocxPreviewScroll');
+    if (scroll) scroll.scrollTop = scroll.scrollHeight;
+}
+
+function _renderOoDocxInlineCharts(container) {
+    const pendingDivs = container.querySelectorAll('.docx-stream-chart-pending');
+    if (!pendingDivs.length) return;
+
+    if (typeof echarts === 'undefined') {
+        loadEChartsScript().catch(() => {});
+        return;
+    }
+
+    pendingDivs.forEach(div => {
+        const idx = parseInt(div.getAttribute('data-chart-idx'));
+        if (isNaN(idx) || !_ooDocxPendingCharts[idx]) return;
+        const jsonStr = _ooDocxPendingCharts[idx];
+        try {
+            const config = JSON.parse(jsonStr);
+            const option = _buildEChartsOptionFromChartJson(config);
+            const offDiv = document.createElement('div');
+            offDiv.style.cssText = 'width:900px;height:450px;position:absolute;left:-9999px;top:-9999px;';
+            document.body.appendChild(offDiv);
+            const chart = echarts.init(offDiv);
+            chart.setOption(option);
+            const dataUrl = chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#fff' });
+            chart.dispose();
+            document.body.removeChild(offDiv);
+            _ooDocxChartCache.set(jsonStr, dataUrl);
+            const safeJson = jsonStr.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            div.innerHTML = `<img src="${dataUrl}" style="max-width:100%;border-radius:8px;" data-chart-json="${safeJson}" />`;
+            div.className = 'docx-stream-chart';
+        } catch (e) {
+            console.error('[OO-DOCX Preview] chart render error:', e);
+        }
+    });
+}
+
+async function _onlyofficeDocxHtmlStream(url, body) {
+    try {
+        const response = await fetch(`/${state.jwtToken}${url}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+            let errMsg = `HTTP ${response.status}`;
+            try {
+                const errBody = await response.json();
+                errMsg = errBody.detail || errBody.message || errMsg;
+            } catch {}
+            _isGenerating = false;
+            _hideOoDocxHtmlPreview();
+            _showGenerateOrRestartButton();
+            state.currentProject.status = 'draft';
+            $('#wsProjectStatus').text(t('statusDraft')).attr('class', 'ws-status draft');
+            showToast(errMsg, 'error');
+            return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let sectionCount = 0;
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                let evt;
+                try { evt = JSON.parse(line.substring(6)); } catch { continue; }
+
+                switch (evt.event) {
+                    case 'searching':
+                        $('#ooDocxPreviewMsg').text('인터넷에서 자료를 검색하고 있습니다...');
+                        break;
+                    case 'search_done':
+                        $('#ooDocxPreviewMsg').text('검색 완료! 문서를 작성합니다...');
+                        break;
+                    case 'start':
+                        $('#ooDocxPreviewMsg').text('AI가 문서를 작성하고 있습니다...');
+                        break;
+                    case 'delta':
+                        _appendOoDocxDelta(evt.text || '');
+                        break;
+                    case 'meta_ready':
+                        // meta는 스트리밍 텍스트에서 자동 추출되어 표시됨
+                        break;
+                    case 'section_ready':
+                        sectionCount++;
+                        const section = evt.section;
+                        $('#ooDocxPreviewMsg').text(`섹션 ${sectionCount} 작성 완료: ${section.title || ''}`);
+                        break;
+                    case 'file_creating':
+                        $('#ooDocxPreviewMsg').text('최종 문서를 생성하고 있습니다...');
+                        // 마지막 렌더링 강제 실행
+                        if (_ooDocxStreamRenderTimer) {
+                            clearTimeout(_ooDocxStreamRenderTimer);
+                            _ooDocxStreamRenderTimer = null;
+                        }
+                        _renderOoDocxPreview();
+                        // 커서 제거 (작성 완료)
+                        $('.word-typing-cursor', '#ooDocxPreviewContent').remove();
+                        break;
+                    case 'file_updated':
+                        state.onlyofficeDoc = evt.document || null;
+                        break;
+                    case 'complete':
+                        _isGenerating = false;
+                        _hideOoDocxHtmlPreview();
+                        _showGenerateOrRestartButton();
+                        state.currentProject.status = 'generated';
+                        $('#wsProjectStatus').text(t('statusGenerated')).attr('class', 'ws-status generated');
+
+                        // 완료 메시지 + 페이드 전환
+                        $('#ooDocxPreviewMsg').text('문서 생성 완료! 에디터를 열고 있습니다...');
+                        $('.oo-docx-preview-spinner').hide();
+
+                        // 약간의 딜레이 후 OnlyOffice 에디터로 전환
+                        setTimeout(async () => {
+                            if (state.onlyofficeDoc) {
+                                // 미리보기 페이드아웃 + 에디터 열기
+                                $('#ooDocxPreviewWrap').fadeOut(400, async function() {
+                                    $(this).remove();
+                                    await openOnlyOfficeEditor(state.currentProject._id);
+                                    showToast('문서 생성 완료!', 'success');
+                                });
+                            } else {
+                                $('#ooDocxPreviewWrap').remove();
+                                showToast('문서 생성 완료!', 'success');
+                            }
+                        }, 800);
+                        break;
+                    case 'stopped':
+                        _isGenerating = false;
+                        _hideOoDocxHtmlPreview();
+                        _showGenerateOrRestartButton();
+                        state.currentProject.status = 'stopped';
+                        $('#wsProjectStatus').text(t('statusStopped')).attr('class', 'ws-status stopped');
+                        // 중단 시에도 부분 생성된 문서가 있으면 에디터 열기
+                        if (state.onlyofficeDoc) {
+                            $('#ooDocxPreviewWrap').fadeOut(400, async function() {
+                                $(this).remove();
+                                await openOnlyOfficeEditor(state.currentProject._id);
+                            });
+                        } else {
+                            $('#ooDocxPreviewWrap').fadeOut(300, function() { $(this).remove(); });
+                        }
+                        showToast(evt.message || '중단됨', 'info');
+                        break;
+                    case 'error':
+                        _isGenerating = false;
+                        _hideOoDocxHtmlPreview();
+                        _showGenerateOrRestartButton();
+                        $('#ooDocxPreviewWrap').fadeOut(300, function() { $(this).remove(); });
+                        showToast(evt.message || '생성 실패', 'error');
+                        break;
+                }
+            }
+        }
+
+        // 스트림이 끝났는데 complete/error 없이 종료된 경우
+        if ($('#ooDocxPreviewWrap').is(':visible') && _isGenerating) {
+            _isGenerating = false;
+            _hideOoDocxHtmlPreview();
+            _showGenerateOrRestartButton();
+            $('#ooDocxPreviewWrap').remove();
+        }
+    } catch (e) {
+        _isGenerating = false;
+        _hideOoDocxHtmlPreview();
+        _showGenerateOrRestartButton();
+        $('#ooDocxPreviewWrap').remove();
+        showToast('생성 오류: ' + e.message, 'error');
+    }
 }
 
 

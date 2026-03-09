@@ -12,6 +12,12 @@ const state = {
     slides: [],
     objects: [],
     selectedObject: null,
+    selectedObjects: [],
+    // 마퀴(영역) 선택
+    isMarqueeSelecting: false,
+    marqueeStart: null,
+    // 멀티 드래그
+    multiDragOffsets: [],
     fonts: [],
     slideMeta: {
         content_type: 'body',
@@ -599,10 +605,17 @@ function renderTemplateList() {
 
     state.templates.forEach(t => {
         const active = state.currentTemplate && state.currentTemplate._id === t._id ? 'active' : '';
+        const published = t.is_published;
+        const statusBadge = published
+            ? '<span class="template-status-badge published" title="사용자 공개 중">공개</span>'
+            : '<span class="template-status-badge draft" title="비공개 (작업 중)">비공개</span>';
         list.append(`
-            <div class="template-option ${active}" onclick="selectTemplate('${t._id}')">
-                <div class="option-title">${escapeHtml(t.name)}</div>
-                <div class="option-meta">${escapeHtml(t.template_type || '')} ${t.description ? '· ' + escapeHtml(t.description) : ''}</div>
+            <div class="template-option ${active}" onclick="selectTemplate('${t._id}')" oncontextmenu="showTemplateContextMenu(event, '${t._id}')">
+                <div class="option-title-row">
+                    <span class="option-title">${escapeHtml(t.name)}</span>
+                    ${statusBadge}
+                </div>
+                <div class="option-meta">${t.description ? escapeHtml(t.description) : ''}</div>
             </div>
         `);
     });
@@ -670,6 +683,8 @@ async function selectTemplate(templateId) {
         state.currentSlide = null;
         state.objects = [];
         state.selectedObject = null;
+        state.selectedObjects = [];
+        removeGroupBoundingBox();
 
         renderTemplateList();
         renderSlideList();
@@ -678,6 +693,9 @@ async function selectTemplate(templateId) {
         $('#slideSection').show();
         $('#btnDeleteTemplate').show();
         $('#btnBulkFont').show();
+        $('#btnPublishTemplate').show();
+        updatePublishButton();
+        updateTemplateNameBar();
 
         // 캔버스 초기화
         clearCanvas();
@@ -729,6 +747,149 @@ async function deleteCurrentTemplate() {
         hideEditor();
     } catch (e) {
         showToast('삭제 실패', 'error');
+    }
+}
+
+// ============ 템플릿 게시/이름 수정 ============
+
+function updatePublishButton() {
+    if (!state.currentTemplate) return;
+    const btn = $('#btnPublishTemplate');
+    if (state.currentTemplate.is_published) {
+        btn.text('사용자 비공개').removeClass('btn-publish').addClass('btn-unpublish');
+        btn.attr('title', '사용자에게 비공개 처리');
+    } else {
+        btn.text('사용자 적용').removeClass('btn-unpublish').addClass('btn-publish');
+        btn.attr('title', '사용자에게 공개 (템플릿 선택 가능)');
+    }
+}
+
+async function togglePublishTemplate() {
+    if (!state.currentTemplate) return;
+    const isPublished = state.currentTemplate.is_published;
+    const action = isPublished ? '비공개' : '사용자 적용(공개)';
+    if (!confirm(`이 템플릿을 ${action} 처리하시겠습니까?`)) return;
+
+    try {
+        const res = await apiPut('/api/admin/templates/' + state.currentTemplate._id + '/publish');
+        state.currentTemplate.is_published = res.is_published;
+        // 목록 데이터도 갱신
+        const tpl = state.templates.find(t => t._id === state.currentTemplate._id);
+        if (tpl) tpl.is_published = res.is_published;
+        updatePublishButton();
+        renderTemplateList();
+        const msg = res.is_published ? '사용자에게 공개되었습니다' : '비공개 처리되었습니다';
+        showToast(msg, 'success');
+    } catch (e) {
+        showToast('상태 변경 실패', 'error');
+    }
+}
+
+// 템플릿 이름 바 표시/숨김
+function updateTemplateNameBar() {
+    if (!state.currentTemplate) {
+        $('#templateNameBar').hide();
+        return;
+    }
+    $('#templateNameBar').show();
+    $('#templateNameLabel').text(state.currentTemplate.name);
+    $('#templateNameDisplay').show();
+    $('#templateNameEdit').hide();
+}
+
+function startEditTemplateName() {
+    if (!state.currentTemplate) return;
+    $('#templateNameDisplay').hide();
+    $('#templateNameEdit').show();
+    $('#templateNameInput').val(state.currentTemplate.name).focus().select();
+}
+
+function cancelEditTemplateName() {
+    $('#templateNameEdit').hide();
+    $('#templateNameDisplay').show();
+}
+
+function handleTemplateNameKey(e) {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        saveTemplateName();
+    } else if (e.key === 'Escape') {
+        cancelEditTemplateName();
+    }
+}
+
+async function saveTemplateName() {
+    if (!state.currentTemplate) return;
+    const newName = $('#templateNameInput').val().trim();
+    if (!newName || newName === state.currentTemplate.name) {
+        cancelEditTemplateName();
+        return;
+    }
+
+    try {
+        await apiPut('/api/admin/templates/' + state.currentTemplate._id, { name: newName });
+        state.currentTemplate.name = newName;
+        const tpl = state.templates.find(t => t._id === state.currentTemplate._id);
+        if (tpl) tpl.name = newName;
+        renderTemplateList();
+        updateTemplateComboText();
+        updateTemplateNameBar();
+        showToast('템플릿 이름이 변경되었습니다', 'success');
+    } catch (e) {
+        showToast('이름 변경 실패', 'error');
+    }
+}
+
+function showTemplateContextMenu(e, templateId) {
+    e.preventDefault();
+    e.stopPropagation();
+    $('.template-context-menu').remove();
+
+    const tpl = state.templates.find(t => t._id === templateId);
+    if (!tpl) return;
+
+    const publishLabel = tpl.is_published ? '비공개 전환' : '사용자 적용(공개)';
+    const menu = $(`
+        <div class="template-context-menu" style="position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:10000;">
+            <div class="ctx-item" onclick="startEditTemplateNameById('${templateId}')">이름 수정</div>
+            <div class="ctx-item" onclick="contextTogglePublish('${templateId}')">${publishLabel}</div>
+        </div>
+    `);
+    $('body').append(menu);
+    $(document).one('mousedown', function () {
+        $('.template-context-menu').remove();
+    });
+}
+
+function startEditTemplateNameById(templateId) {
+    $('.template-context-menu').remove();
+    // 먼저 해당 템플릿 선택
+    if (!state.currentTemplate || state.currentTemplate._id !== templateId) {
+        selectTemplate(templateId).then(() => {
+            startEditTemplateName();
+        });
+    } else {
+        startEditTemplateName();
+    }
+}
+
+async function contextTogglePublish(templateId) {
+    $('.template-context-menu').remove();
+    const tpl = state.templates.find(t => t._id === templateId);
+    if (!tpl) return;
+
+    try {
+        const res = await apiPut('/api/admin/templates/' + templateId + '/publish');
+        tpl.is_published = res.is_published;
+        if (state.currentTemplate && state.currentTemplate._id === templateId) {
+            state.currentTemplate.is_published = res.is_published;
+            updatePublishButton();
+        }
+        renderTemplateList();
+        const msg = res.is_published ? '사용자에게 공개되었습니다' : '비공개 처리되었습니다';
+        showToast(msg, 'success');
+    } catch (e) {
+        showToast('상태 변경 실패', 'error');
     }
 }
 
@@ -923,6 +1084,8 @@ function selectSlide(slideId) {
     state.currentSlide = slide;
     state.objects = (slide.objects || []).map(obj => ({ ...obj }));
     state.selectedObject = null;
+    state.selectedObjects = [];
+    removeGroupBoundingBox();
     state.slideMeta = slide.slide_meta || {
         content_type: 'body',
         layout: '',
@@ -1055,6 +1218,8 @@ function hideEditor() {
     $('#btnDeleteTemplate').hide();
     $('#btnBulkFont').hide();
     $('#btnRemoveBg').hide();
+    $('#btnPublishTemplate').hide();
+    $('#templateNameBar').hide();
 }
 
 function scaleCanvas() {
@@ -1129,6 +1294,7 @@ function renderCanvas() {
 function createObjectElement(obj) {
     const typeClass = obj.obj_type === 'image' ? 'obj-image' :
                       obj.obj_type === 'shape' ? 'obj-shape' : 'obj-text';
+    const zIndex = obj.z_index !== undefined ? obj.z_index : 10;
     const div = $('<div>')
         .addClass('canvas-object')
         .addClass(typeClass)
@@ -1138,6 +1304,7 @@ function createObjectElement(obj) {
             top: obj.y + 'px',
             width: obj.width + 'px',
             height: obj.height + 'px',
+            zIndex: zIndex,
         });
 
     if (obj.obj_type === 'image' && obj.image_url) {
@@ -1176,8 +1343,10 @@ function createObjectElement(obj) {
         if ($(e.target).hasClass('resize-handle')) {
             startResize(e, obj.obj_id, e.target);
         } else if (!$(e.target).hasClass('delete-btn')) {
-            // Ctrl+클릭: 오브젝트 복사 후 복사본 드래그
-            if ((e.ctrlKey || e.metaKey) && (obj.obj_type !== 'text' || !$(e.target).hasClass('text-content'))) {
+            const isTextContent = obj.obj_type === 'text' && $(e.target).hasClass('text-content');
+
+            // Alt+클릭: 오브젝트 복사 후 복사본 드래그
+            if (e.altKey && !isTextContent) {
                 const clonedId = duplicateObject(obj.obj_id);
                 if (clonedId) {
                     selectObject(clonedId);
@@ -1185,9 +1354,34 @@ function createObjectElement(obj) {
                     return;
                 }
             }
-            selectObject(obj.obj_id);
-            if (obj.obj_type !== 'text' || !$(e.target).hasClass('text-content')) {
-                startDrag(e, obj.obj_id);
+
+            // Ctrl+클릭: 멀티셀렉트 토글
+            if ((e.ctrlKey || e.metaKey) && !isTextContent) {
+                toggleInSelection(obj.obj_id);
+                if (isObjectSelected(obj.obj_id) && state.selectedObjects.length > 1) {
+                    startGroupDrag(e);
+                } else if (state.selectedObjects.length === 1) {
+                    startDrag(e, state.selectedObjects[0].obj_id);
+                }
+                return;
+            }
+
+            // 일반 클릭
+            if (!isObjectSelected(obj.obj_id)) {
+                selectObjectSingle(obj.obj_id);
+            } else if (state.selectedObjects.length > 1) {
+                // 이미 멀티셀렉트 상태에서 선택된 객체 클릭: 주 선택만 변경
+                state.selectedObject = state.objects.find(o => o.obj_id === obj.obj_id);
+                updatePropertiesPanel();
+            }
+
+            // 드래그 시작
+            if (!isTextContent) {
+                if (state.selectedObjects.length > 1) {
+                    startGroupDrag(e);
+                } else {
+                    startDrag(e, obj.obj_id);
+                }
             }
         }
     });
@@ -1199,12 +1393,19 @@ function generateObjId() {
     return 'obj_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
 }
 
+function getNextZIndex() {
+    if (state.objects.length === 0) return 10;
+    const maxZ = Math.max(...state.objects.map(o => o.z_index !== undefined ? o.z_index : 10));
+    return maxZ + 1;
+}
+
 function duplicateObject(objId) {
     const src = state.objects.find(o => o.obj_id === objId);
     if (!src) return null;
 
     const clone = JSON.parse(JSON.stringify(src));
     clone.obj_id = generateObjId();
+    clone.z_index = getNextZIndex();
 
     state.objects.push(clone);
     const el = createObjectElement(clone);
@@ -1225,6 +1426,7 @@ function addTextObject() {
         y: 100,
         width: 300,
         height: 60,
+        z_index: getNextZIndex(),
         text_content: '텍스트를 입력하세요',
         text_style: {
             font_family: 'Arial',
@@ -1269,6 +1471,7 @@ async function handleImageUpload(event) {
             y: 100,
             width: 200,
             height: 150,
+            z_index: getNextZIndex(),
             image_url: res.image_url,
             image_fit: 'contain',
             role: null,
@@ -1351,8 +1554,10 @@ async function setImageAsBackground() {
         // 이미지 오브젝트 제거
         const objId = state.selectedObject.obj_id;
         state.objects = state.objects.filter(o => o.obj_id !== objId);
+        state.selectedObjects = state.selectedObjects.filter(o => o.obj_id !== objId);
         $(`[data-obj-id="${objId}"]`).remove();
         state.selectedObject = null;
+        removeGroupBoundingBox();
         $('#objProperties').hide();
         $('#imageProperties').hide();
         $('#textProperties').hide();
@@ -1390,24 +1595,180 @@ async function removeSlideBackground() {
 
 function deleteObject(objId) {
     state.objects = state.objects.filter(o => o.obj_id !== objId);
+    state.selectedObjects = state.selectedObjects.filter(o => o.obj_id !== objId);
     $(`[data-obj-id="${objId}"]`).remove();
+
+    if (state.selectedObject && state.selectedObject.obj_id === objId) {
+        state.selectedObject = state.selectedObjects.length > 0
+            ? state.selectedObjects[state.selectedObjects.length - 1]
+            : null;
+    }
+    updateGroupBoundingBox();
+    updatePropertiesPanel();
+}
+
+function selectObject(objId) {
+    selectObjectSingle(objId);
+}
+
+// ============ 멀티셀렉트 헬퍼 ============
+
+function isObjectSelected(objId) {
+    return state.selectedObjects.some(o => o.obj_id === objId);
+}
+
+function clearSelection() {
+    state.selectedObjects = [];
     state.selectedObject = null;
+    $('.canvas-object').removeClass('selected');
+    removeGroupBoundingBox();
     $('#objProperties').hide();
     $('#imageProperties').hide();
     $('#textProperties').hide();
     $('#shapeProperties').hide();
 }
 
-function selectObject(objId) {
-    state.selectedObject = state.objects.find(o => o.obj_id === objId) || null;
+function selectObjectSingle(objId) {
+    const obj = state.objects.find(o => o.obj_id === objId);
+    if (!obj) return;
 
-    // UI 업데이트
+    state.selectedObjects = [obj];
+    state.selectedObject = obj;
+
     $('.canvas-object').removeClass('selected');
     $(`[data-obj-id="${objId}"]`).addClass('selected');
+    removeGroupBoundingBox();
 
-    if (state.selectedObject) {
-        updatePropertiesPanel();
+    updatePropertiesPanel();
+}
+
+function addToSelection(objId) {
+    const obj = state.objects.find(o => o.obj_id === objId);
+    if (!obj) return;
+    if (isObjectSelected(objId)) return;
+
+    state.selectedObjects.push(obj);
+    state.selectedObject = obj;
+    $(`[data-obj-id="${objId}"]`).addClass('selected');
+    updateGroupBoundingBox();
+    updatePropertiesPanel();
+}
+
+function removeFromSelection(objId) {
+    state.selectedObjects = state.selectedObjects.filter(o => o.obj_id !== objId);
+    $(`[data-obj-id="${objId}"]`).removeClass('selected');
+
+    if (state.selectedObjects.length > 0) {
+        state.selectedObject = state.selectedObjects[state.selectedObjects.length - 1];
+    } else {
+        state.selectedObject = null;
     }
+    updateGroupBoundingBox();
+    updatePropertiesPanel();
+}
+
+function toggleInSelection(objId) {
+    if (isObjectSelected(objId)) {
+        removeFromSelection(objId);
+    } else {
+        addToSelection(objId);
+    }
+}
+
+function setSelection(objIds) {
+    state.selectedObjects = [];
+    state.selectedObject = null;
+    $('.canvas-object').removeClass('selected');
+
+    objIds.forEach(id => {
+        const obj = state.objects.find(o => o.obj_id === id);
+        if (obj) {
+            state.selectedObjects.push(obj);
+            $(`[data-obj-id="${id}"]`).addClass('selected');
+        }
+    });
+
+    if (state.selectedObjects.length > 0) {
+        state.selectedObject = state.selectedObjects[state.selectedObjects.length - 1];
+    }
+    updateGroupBoundingBox();
+    updatePropertiesPanel();
+}
+
+function rectsIntersect(ax, ay, aw, ah, bx, by, bw, bh) {
+    return !(ax + aw <= bx || bx + bw <= ax || ay + ah <= by || by + bh <= ay);
+}
+
+function updateGroupBoundingBox() {
+    removeGroupBoundingBox();
+    if (state.selectedObjects.length <= 1) return;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    state.selectedObjects.forEach(obj => {
+        minX = Math.min(minX, obj.x);
+        minY = Math.min(minY, obj.y);
+        maxX = Math.max(maxX, obj.x + obj.width);
+        maxY = Math.max(maxY, obj.y + obj.height);
+    });
+
+    const bbox = $('<div id="groupBoundingBox"></div>').css({
+        position: 'absolute',
+        left: (minX - 3) + 'px',
+        top: (minY - 3) + 'px',
+        width: (maxX - minX + 6) + 'px',
+        height: (maxY - minY + 6) + 'px',
+        border: '2px dashed #ff6b35',
+        background: 'transparent',
+        zIndex: 9,
+        pointerEvents: 'none',
+        borderRadius: '2px',
+    });
+
+    const badge = $('<div class="group-count-badge"></div>')
+        .text(state.selectedObjects.length + '개 선택')
+        .css({
+            position: 'absolute',
+            top: '-22px',
+            left: '0',
+            background: '#ff6b35',
+            color: 'white',
+            padding: '1px 8px',
+            borderRadius: '3px',
+            fontSize: '11px',
+            fontWeight: '500',
+            whiteSpace: 'nowrap',
+            pointerEvents: 'none',
+        });
+
+    bbox.append(badge);
+    $('#canvas').append(bbox);
+}
+
+function removeGroupBoundingBox() {
+    $('#groupBoundingBox').remove();
+}
+
+function deleteSelectedObjects() {
+    if (state.selectedObjects.length === 0) return;
+    const idsToDelete = state.selectedObjects.map(o => o.obj_id);
+    idsToDelete.forEach(id => {
+        state.objects = state.objects.filter(o => o.obj_id !== id);
+        $(`[data-obj-id="${id}"]`).remove();
+    });
+    clearSelection();
+}
+
+function startGroupDrag(e) {
+    state.isDragging = true;
+    const canvasRect = document.getElementById('canvas').getBoundingClientRect();
+    const scale = 960 / canvasRect.width;
+
+    state.multiDragOffsets = state.selectedObjects.map(obj => ({
+        obj_id: obj.obj_id,
+        offsetX: (e.clientX - canvasRect.left) * scale - obj.x,
+        offsetY: (e.clientY - canvasRect.top) * scale - obj.y,
+    }));
+    e.preventDefault();
 }
 
 // ============ 드래그 & 리사이즈 ============
@@ -1488,22 +1849,69 @@ $(document).on('mousemove', function (e) {
         return;
     }
 
-    if (state.isDragging && state.selectedObject) {
+    // 마퀴(영역) 선택 드래그 중
+    if (state.isMarqueeSelecting && state.marqueeStart) {
+        const coords = clientToCanvasCoords(e.clientX, e.clientY);
+        const marquee = $('#marqueeSelect');
+        if (marquee.length === 0) return;
+
+        const x1 = state.marqueeStart.x;
+        const y1 = state.marqueeStart.y;
+        const left = Math.min(x1, coords.x);
+        const top = Math.min(y1, coords.y);
+        const width = Math.abs(coords.x - x1);
+        const height = Math.abs(coords.y - y1);
+
+        marquee.css({ left: left + 'px', top: top + 'px', width: width + 'px', height: height + 'px' });
+
+        // 실시간 교차 객체 하이라이트
+        $('.canvas-object').removeClass('marquee-hover');
+        state.objects.forEach(obj => {
+            if (rectsIntersect(left, top, width, height, obj.x, obj.y, obj.width, obj.height)) {
+                $(`[data-obj-id="${obj.obj_id}"]`).addClass('marquee-hover');
+            }
+        });
+        return;
+    }
+
+    if (state.isDragging && state.selectedObjects.length > 0) {
         const canvasRect = document.getElementById('canvas').getBoundingClientRect();
-        let x = e.clientX - canvasRect.left - state.dragOffset.x;
-        let y = e.clientY - canvasRect.top - state.dragOffset.y;
+        const scale = 960 / canvasRect.width;
 
-        // 캔버스 경계 제한
-        x = Math.max(0, Math.min(x, 960 - state.selectedObject.width));
-        y = Math.max(0, Math.min(y, 540 - state.selectedObject.height));
+        if (state.multiDragOffsets.length > 0) {
+            // 그룹 드래그: 모든 선택 객체 이동
+            state.multiDragOffsets.forEach(info => {
+                const obj = state.objects.find(o => o.obj_id === info.obj_id);
+                if (!obj) return;
 
-        state.selectedObject.x = Math.round(x);
-        state.selectedObject.y = Math.round(y);
+                let x = (e.clientX - canvasRect.left) * scale - info.offsetX;
+                let y = (e.clientY - canvasRect.top) * scale - info.offsetY;
 
-        const el = $(`[data-obj-id="${state.selectedObject.obj_id}"]`);
-        el.css({ left: x + 'px', top: y + 'px' });
+                x = Math.max(0, Math.min(x, 960 - obj.width));
+                y = Math.max(0, Math.min(y, 540 - obj.height));
 
-        updatePositionInputs();
+                obj.x = Math.round(x);
+                obj.y = Math.round(y);
+                $(`[data-obj-id="${obj.obj_id}"]`).css({ left: obj.x + 'px', top: obj.y + 'px' });
+            });
+            updatePositionInputs();
+            updateGroupBoundingBox();
+        } else if (state.selectedObject) {
+            // 단일 드래그
+            let x = e.clientX - canvasRect.left - state.dragOffset.x;
+            let y = e.clientY - canvasRect.top - state.dragOffset.y;
+
+            x = Math.max(0, Math.min(x, 960 - state.selectedObject.width));
+            y = Math.max(0, Math.min(y, 540 - state.selectedObject.height));
+
+            state.selectedObject.x = Math.round(x);
+            state.selectedObject.y = Math.round(y);
+
+            const el = $(`[data-obj-id="${state.selectedObject.obj_id}"]`);
+            el.css({ left: x + 'px', top: y + 'px' });
+
+            updatePositionInputs();
+        }
     }
 
     if (state.isResizing && state.selectedObject) {
@@ -1597,43 +2005,104 @@ $(document).on('mouseup', function (e) {
         return;
     }
 
+    // 마퀴 선택 완료
+    if (state.isMarqueeSelecting) {
+        const coords = clientToCanvasCoords(e.clientX, e.clientY);
+        const marquee = $('#marqueeSelect');
+
+        const x1 = state.marqueeStart.x;
+        const y1 = state.marqueeStart.y;
+        const left = Math.min(x1, coords.x);
+        const top = Math.min(y1, coords.y);
+        const width = Math.abs(coords.x - x1);
+        const height = Math.abs(coords.y - y1);
+
+        marquee.remove();
+        $('.canvas-object').removeClass('marquee-hover');
+
+        state.isMarqueeSelecting = false;
+        state.marqueeStart = null;
+
+        // 3px 미만 이동이면 단순 클릭 = 선택 해제
+        if (width < 3 && height < 3) {
+            if (!e.ctrlKey && !e.metaKey) clearSelection();
+            return;
+        }
+
+        // 교차하는 객체 찾기
+        const selectedIds = [];
+        state.objects.forEach(obj => {
+            if (rectsIntersect(left, top, width, height, obj.x, obj.y, obj.width, obj.height)) {
+                selectedIds.push(obj.obj_id);
+            }
+        });
+
+        if (e.ctrlKey || e.metaKey) {
+            selectedIds.forEach(id => addToSelection(id));
+        } else {
+            setSelection(selectedIds);
+        }
+        return;
+    }
+
     state.isDragging = false;
     state.isResizing = false;
+    state.multiDragOffsets = [];
 });
 
 // 키보드 이벤트 처리
 $(document).on('keydown', function (e) {
-    // ESC: 드로잉 모드 취소
-    if (e.key === 'Escape' && state.isDrawing) {
-        cancelDrawMode();
+    // ESC: 드로잉 모드 취소 또는 선택 해제
+    if (e.key === 'Escape') {
+        if (state.isDrawing) {
+            cancelDrawMode();
+        } else if (state.selectedObjects.length > 0) {
+            clearSelection();
+        }
         e.preventDefault();
         return;
     }
 
-    // 화살표 키: 선택된 오브젝트 이동
-    if (!state.selectedObject) return;
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].indexOf(e.key) === -1) return;
-
-    // 텍스트 편집 중이면 무시
+    // 텍스트 편집 중이면 이후 단축키 무시
     const active = document.activeElement;
-    if (active && (active.isContentEditable || active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return;
+    const isEditing = active && (active.isContentEditable || active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+
+    // Delete: 선택된 객체 삭제
+    if (e.key === 'Delete' && state.selectedObjects.length > 0 && !isEditing) {
+        e.preventDefault();
+        deleteSelectedObjects();
+        return;
+    }
+
+    // Ctrl+A: 전체 선택
+    if ((e.ctrlKey || e.metaKey) && e.key === 'a' && !isEditing) {
+        e.preventDefault();
+        setSelection(state.objects.map(o => o.obj_id));
+        return;
+    }
+
+    // 화살표 키: 선택된 모든 오브젝트 이동
+    if (state.selectedObjects.length === 0) return;
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].indexOf(e.key) === -1) return;
+    if (isEditing) return;
 
     e.preventDefault();
     const step = e.shiftKey ? 10 : 1;
-    const obj = state.selectedObject;
 
-    switch (e.key) {
-        case 'ArrowLeft':  obj.x = Math.max(0, obj.x - step); break;
-        case 'ArrowRight': obj.x = Math.min(960 - obj.width, obj.x + step); break;
-        case 'ArrowUp':    obj.y = Math.max(0, obj.y - step); break;
-        case 'ArrowDown':  obj.y = Math.min(540 - obj.height, obj.y + step); break;
-    }
+    state.selectedObjects.forEach(obj => {
+        switch (e.key) {
+            case 'ArrowLeft':  obj.x = Math.max(0, obj.x - step); break;
+            case 'ArrowRight': obj.x = Math.min(960 - obj.width, obj.x + step); break;
+            case 'ArrowUp':    obj.y = Math.max(0, obj.y - step); break;
+            case 'ArrowDown':  obj.y = Math.min(540 - obj.height, obj.y + step); break;
+        }
+        obj.x = Math.round(obj.x);
+        obj.y = Math.round(obj.y);
+        $(`[data-obj-id="${obj.obj_id}"]`).css({ left: obj.x + 'px', top: obj.y + 'px' });
+    });
 
-    obj.x = Math.round(obj.x);
-    obj.y = Math.round(obj.y);
-
-    $(`[data-obj-id="${obj.obj_id}"]`).css({ left: obj.x + 'px', top: obj.y + 'px' });
     updatePositionInputs();
+    updateGroupBoundingBox();
 });
 
 // 캔버스 외부 클릭 시 드로잉 모드 취소
@@ -1645,7 +2114,7 @@ $(document).on('mousedown', function (e) {
 
 // 캔버스 클릭 (선택 해제 또는 도형 드로잉 시작)
 $('#canvas').on('mousedown', function (e) {
-    if (e.target !== this && e.target.id !== 'canvasBg') return;
+    if (e.target !== this && e.target.id !== 'canvasBg' && e.target.id !== 'canvasGrid') return;
 
     if (state.isDrawing) {
         // 드로잉 모드: 드래그 시작
@@ -1664,70 +2133,236 @@ $('#canvas').on('mousedown', function (e) {
         });
         $('#canvas').append(ghost);
     } else {
-        // 일반 모드: 선택 해제
-        $('.canvas-object').removeClass('selected');
-        state.selectedObject = null;
-        $('#objProperties').hide();
-        $('#imageProperties').hide();
-        $('#textProperties').hide();
-        $('#shapeProperties').hide();
+        // 일반 모드: 마퀴(영역) 선택 시작
+        e.preventDefault();
+        const coords = clientToCanvasCoords(e.clientX, e.clientY);
+        state.isMarqueeSelecting = true;
+        state.marqueeStart = { x: coords.x, y: coords.y };
+
+        const marquee = $('<div id="marqueeSelect"></div>').css({
+            position: 'absolute',
+            left: coords.x + 'px',
+            top: coords.y + 'px',
+            width: '0px',
+            height: '0px',
+            border: '1px dashed #2d5a8e',
+            background: 'rgba(45, 90, 142, 0.08)',
+            zIndex: 50,
+            pointerEvents: 'none',
+        });
+        $('#canvas').append(marquee);
+
+        // Ctrl 미누름 시 기존 선택 해제
+        if (!e.ctrlKey && !e.metaKey) {
+            clearSelection();
+        }
     }
 });
 
 // ============ 속성 패널 ============
 function updatePropertiesPanel() {
-    const obj = state.selectedObject;
-    if (!obj) return;
+    const count = state.selectedObjects.length;
 
-    $('#objProperties').show();
-    $('#propRole').val(obj.role || '');
-    $('#propPlaceholder').val(obj.placeholder || '');
-    $('#propX').val(Math.round(obj.x));
-    $('#propY').val(Math.round(obj.y));
-    $('#propW').val(Math.round(obj.width));
-    $('#propH').val(Math.round(obj.height));
-
-    if (obj.obj_type === 'image') {
-        $('#imageProperties').show();
+    if (count === 0) {
+        $('#objProperties').hide();
+        $('#imageProperties').hide();
         $('#textProperties').hide();
         $('#shapeProperties').hide();
-        $('#propImageFit').val(obj.image_fit || 'contain');
-    } else if (obj.obj_type === 'text') {
+        $('.multi-select-info').remove();
+        return;
+    }
+
+    if (count === 1) {
+        // 단일 선택: 기존 동작
+        $('.multi-select-info').remove();
+        const obj = state.selectedObject;
+        if (!obj) return;
+
+        $('#objProperties').show();
+        $('#propRole').val(obj.role || '');
+        $('#propPlaceholder').val(obj.placeholder || '').prop('disabled', false);
+        $('#propX').val(Math.round(obj.x));
+        $('#propY').val(Math.round(obj.y));
+        $('#propW').val(Math.round(obj.width));
+        $('#propH').val(Math.round(obj.height));
+        $('#propZIndex').val(obj.z_index !== undefined ? obj.z_index : 10);
+        // W/H 편집 가능
+        $('#propW').prop('disabled', false);
+        $('#propH').prop('disabled', false);
+
+        if (obj.obj_type === 'image') {
+            $('#imageProperties').show();
+            $('#textProperties').hide();
+            $('#shapeProperties').hide();
+            $('#propImageFit').val(obj.image_fit || 'contain');
+        } else if (obj.obj_type === 'text') {
+            $('#imageProperties').hide();
+            $('#textProperties').show();
+            $('#shapeProperties').hide();
+            const style = obj.text_style || {};
+            $('#propFont').val(style.font_family || 'Arial');
+            $('#propFontSize').val(style.font_size || 16);
+            $('#propColor').val(style.color || '#000000');
+            $('#propBold').toggleClass('active', !!style.bold).removeClass('mixed');
+            $('#propItalic').toggleClass('active', !!style.italic).removeClass('mixed');
+            $('#propAlign').val(style.align || 'left');
+            $('#propTextContent').val(obj.text_content || '').prop('disabled', false);
+        } else if (obj.obj_type === 'shape') {
+            $('#imageProperties').hide();
+            $('#textProperties').hide();
+            $('#shapeProperties').show();
+            const s = obj.shape_style || {};
+            $('#propShapeType').val(s.shape_type || 'rectangle');
+            $('#propFillColor').val(s.fill_color || '#4A90D9');
+            const opVal = Math.round((s.fill_opacity !== undefined ? s.fill_opacity : 1) * 100);
+            $('#propFillOpacity').val(opVal);
+            $('#opacityVal').text(opVal);
+            $('#propStrokeColor').val(s.stroke_color || '#333333');
+            $('#propStrokeWidth').val(s.stroke_width !== undefined ? s.stroke_width : 2);
+            $('#propStrokeDash').val(s.stroke_dash || 'solid');
+            $('#propBorderRadius').val(s.border_radius || 0);
+            $('#propArrowHead').val(s.arrow_head || 'end');
+            updateShapePropertyVisibility();
+        } else {
+            $('#imageProperties').hide();
+            $('#textProperties').hide();
+            $('#shapeProperties').hide();
+        }
+        return;
+    }
+
+    // 멀티셀렉트 모드
+    $('#objProperties').show();
+
+    // 멀티선택 안내 배지
+    if ($('.multi-select-info').length === 0) {
+        $('#objProperties').prepend(
+            '<div class="multi-select-info">' +
+            '<span style="font-size:14px;">&#9776;</span> ' +
+            '<span class="multi-select-count">' + count + '개 객체 선택됨</span>' +
+            '</div>'
+        );
+    } else {
+        $('.multi-select-count').text(count + '개 객체 선택됨');
+    }
+
+    // 그룹 바운딩박스 좌표
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    state.selectedObjects.forEach(obj => {
+        minX = Math.min(minX, obj.x);
+        minY = Math.min(minY, obj.y);
+        maxX = Math.max(maxX, obj.x + obj.width);
+        maxY = Math.max(maxY, obj.y + obj.height);
+    });
+    $('#propX').val(Math.round(minX));
+    $('#propY').val(Math.round(minY));
+    $('#propW').val(Math.round(maxX - minX)).prop('disabled', true);
+    $('#propH').val(Math.round(maxY - minY)).prop('disabled', true);
+
+    // z_index: 공통값 또는 혼합
+    const zValues = [...new Set(state.selectedObjects.map(o => o.z_index !== undefined ? o.z_index : 10))];
+    $('#propZIndex').val(zValues.length === 1 ? zValues[0] : '');
+
+    // Role: 공통값 또는 혼합
+    const roles = [...new Set(state.selectedObjects.map(o => o.role || ''))];
+    $('#propRole').val(roles.length === 1 ? roles[0] : '');
+    $('#propPlaceholder').val('').prop('disabled', true);
+
+    // 타입별 패널
+    const types = [...new Set(state.selectedObjects.map(o => o.obj_type))];
+
+    if (types.length === 1 && types[0] === 'text') {
         $('#imageProperties').hide();
         $('#textProperties').show();
         $('#shapeProperties').hide();
-        const style = obj.text_style || {};
-        $('#propFont').val(style.font_family || 'Arial');
-        $('#propFontSize').val(style.font_size || 16);
-        $('#propColor').val(style.color || '#000000');
-        $('#propBold').toggleClass('active', !!style.bold);
-        $('#propItalic').toggleClass('active', !!style.italic);
-        $('#propAlign').val(style.align || 'left');
-        $('#propTextContent').val(obj.text_content || '');
-    } else if (obj.obj_type === 'shape') {
+        updateMultiTextPanel();
+    } else if (types.length === 1 && types[0] === 'shape') {
         $('#imageProperties').hide();
         $('#textProperties').hide();
         $('#shapeProperties').show();
-        const s = obj.shape_style || {};
-        $('#propShapeType').val(s.shape_type || 'rectangle');
-        $('#propFillColor').val(s.fill_color || '#4A90D9');
-        const opVal = Math.round((s.fill_opacity !== undefined ? s.fill_opacity : 1) * 100);
-        $('#propFillOpacity').val(opVal);
-        $('#opacityVal').text(opVal);
-        $('#propStrokeColor').val(s.stroke_color || '#333333');
-        $('#propStrokeWidth').val(s.stroke_width !== undefined ? s.stroke_width : 2);
-        $('#propStrokeDash').val(s.stroke_dash || 'solid');
-        $('#propBorderRadius').val(s.border_radius || 0);
-        $('#propArrowHead').val(s.arrow_head || 'end');
-        updateShapePropertyVisibility();
+        updateMultiShapePanel();
+    } else if (types.length === 1 && types[0] === 'image') {
+        $('#imageProperties').show();
+        $('#textProperties').hide();
+        $('#shapeProperties').hide();
+        const fits = [...new Set(state.selectedObjects.map(o => o.image_fit || 'contain'))];
+        $('#propImageFit').val(fits.length === 1 ? fits[0] : 'contain');
     } else {
+        // 혼합 타입: 타입별 패널 숨김
         $('#imageProperties').hide();
         $('#textProperties').hide();
         $('#shapeProperties').hide();
     }
 }
 
+function getCommonValue(objects, getter) {
+    const values = objects.map(getter);
+    const unique = [...new Set(values.map(v => JSON.stringify(v)))];
+    if (unique.length === 1) return JSON.parse(unique[0]);
+    return '__mixed__';
+}
+
+function updateMultiTextPanel() {
+    const textObjs = state.selectedObjects.filter(o => o.obj_type === 'text');
+    const fontFamily = getCommonValue(textObjs, o => (o.text_style || {}).font_family || 'Arial');
+    const fontSize = getCommonValue(textObjs, o => (o.text_style || {}).font_size || 16);
+    const color = getCommonValue(textObjs, o => (o.text_style || {}).color || '#000000');
+    const bold = getCommonValue(textObjs, o => !!(o.text_style || {}).bold);
+    const italic = getCommonValue(textObjs, o => !!(o.text_style || {}).italic);
+    const align = getCommonValue(textObjs, o => (o.text_style || {}).align || 'left');
+
+    $('#propFont').val(fontFamily === '__mixed__' ? '' : fontFamily);
+    $('#propFontSize').val(fontSize === '__mixed__' ? '' : fontSize);
+    $('#propFontSize').attr('placeholder', fontSize === '__mixed__' ? '혼합' : '');
+    $('#propColor').val(color === '__mixed__' ? '#000000' : color);
+    $('#propBold').toggleClass('active', bold === true).toggleClass('mixed', bold === '__mixed__');
+    $('#propItalic').toggleClass('active', italic === true).toggleClass('mixed', italic === '__mixed__');
+    $('#propAlign').val(align === '__mixed__' ? '' : align);
+    $('#propTextContent').val('').attr('placeholder', textObjs.length + '개 텍스트 선택됨').prop('disabled', true);
+}
+
+function updateMultiShapePanel() {
+    const shapeObjs = state.selectedObjects.filter(o => o.obj_type === 'shape');
+    const fillColor = getCommonValue(shapeObjs, o => (o.shape_style || {}).fill_color || '#4A90D9');
+    const fillOpacity = getCommonValue(shapeObjs, o => {
+        const op = (o.shape_style || {}).fill_opacity;
+        return op !== undefined ? op : 1;
+    });
+    const strokeColor = getCommonValue(shapeObjs, o => (o.shape_style || {}).stroke_color || '#333333');
+    const strokeWidth = getCommonValue(shapeObjs, o => {
+        const sw = (o.shape_style || {}).stroke_width;
+        return sw !== undefined ? sw : 2;
+    });
+    const strokeDash = getCommonValue(shapeObjs, o => (o.shape_style || {}).stroke_dash || 'solid');
+    const shapeType = getCommonValue(shapeObjs, o => (o.shape_style || {}).shape_type || 'rectangle');
+
+    $('#propShapeType').val(shapeType === '__mixed__' ? '' : shapeType);
+    $('#propFillColor').val(fillColor === '__mixed__' ? '#4A90D9' : fillColor);
+    const opVal = fillOpacity === '__mixed__' ? 100 : Math.round(fillOpacity * 100);
+    $('#propFillOpacity').val(opVal);
+    $('#opacityVal').text(opVal);
+    $('#propStrokeColor').val(strokeColor === '__mixed__' ? '#333333' : strokeColor);
+    $('#propStrokeWidth').val(strokeWidth === '__mixed__' ? '' : strokeWidth);
+    $('#propStrokeDash').val(strokeDash === '__mixed__' ? '' : strokeDash);
+    updateShapePropertyVisibility();
+}
+
 function updatePositionInputs() {
+    if (state.selectedObjects.length > 1) {
+        // 멀티셀렉트: 그룹 바운딩박스 좌표
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        state.selectedObjects.forEach(obj => {
+            minX = Math.min(minX, obj.x);
+            minY = Math.min(minY, obj.y);
+            maxX = Math.max(maxX, obj.x + obj.width);
+            maxY = Math.max(maxY, obj.y + obj.height);
+        });
+        $('#propX').val(Math.round(minX));
+        $('#propY').val(Math.round(minY));
+        $('#propW').val(Math.round(maxX - minX));
+        $('#propH').val(Math.round(maxY - minY));
+        return;
+    }
     if (!state.selectedObject) return;
     $('#propX').val(Math.round(state.selectedObject.x));
     $('#propY').val(Math.round(state.selectedObject.y));
@@ -1736,12 +2371,36 @@ function updatePositionInputs() {
 }
 
 function updateObjProperty(prop, value) {
-    if (!state.selectedObject) return;
-    state.selectedObject[prop] = value;
+    if (state.selectedObjects.length === 0) return;
+    state.selectedObjects.forEach(obj => {
+        obj[prop] = value;
+    });
     if (prop === 'role') updateSlideMetaUI();
 }
 
 function updateObjPosition() {
+    if (state.selectedObjects.length > 1) {
+        // 멀티셀렉트: X/Y 변경 시 그룹 전체 이동
+        let oldMinX = Infinity, oldMinY = Infinity;
+        state.selectedObjects.forEach(obj => {
+            oldMinX = Math.min(oldMinX, obj.x);
+            oldMinY = Math.min(oldMinY, obj.y);
+        });
+
+        const newX = parseInt($('#propX').val()) || 0;
+        const newY = parseInt($('#propY').val()) || 0;
+        const deltaX = newX - oldMinX;
+        const deltaY = newY - oldMinY;
+
+        state.selectedObjects.forEach(obj => {
+            obj.x = Math.max(0, Math.min(960 - obj.width, Math.round(obj.x + deltaX)));
+            obj.y = Math.max(0, Math.min(540 - obj.height, Math.round(obj.y + deltaY)));
+            $(`[data-obj-id="${obj.obj_id}"]`).css({ left: obj.x + 'px', top: obj.y + 'px' });
+        });
+        updateGroupBoundingBox();
+        return;
+    }
+
     if (!state.selectedObject) return;
     state.selectedObject.x = parseInt($('#propX').val()) || 0;
     state.selectedObject.y = parseInt($('#propY').val()) || 0;
@@ -1758,43 +2417,47 @@ function updateObjPosition() {
 }
 
 function updateImageFit(value) {
-    if (!state.selectedObject || state.selectedObject.obj_type !== 'image') return;
-    state.selectedObject.image_fit = value;
-    const img = $(`[data-obj-id="${state.selectedObject.obj_id}"] img`);
-    img.css('object-fit', value);
+    const imgObjs = state.selectedObjects.filter(o => o.obj_type === 'image');
+    if (imgObjs.length === 0) return;
+    imgObjs.forEach(obj => {
+        obj.image_fit = value;
+        $(`[data-obj-id="${obj.obj_id}"] img`).css('object-fit', value);
+    });
     renderSlideThumbnail(state.slides.find(s => s._id === state.currentSlide));
 }
 
 function updateTextStyle(prop, value) {
-    if (!state.selectedObject || state.selectedObject.obj_type !== 'text') return;
-    if (!state.selectedObject.text_style) {
-        state.selectedObject.text_style = {};
-    }
-    state.selectedObject.text_style[prop] = value;
+    // 멀티셀렉트: 선택된 모든 텍스트 객체에 적용
+    const textObjs = state.selectedObjects.filter(o => o.obj_type === 'text');
+    if (textObjs.length === 0) return;
 
-    // 캔버스 오브젝트에 스타일 반영
-    const textEl = $(`[data-obj-id="${state.selectedObject.obj_id}"] .text-content`);
-    switch (prop) {
-        case 'font_family': textEl.css('fontFamily', value); break;
-        case 'font_size': textEl.css('fontSize', value + 'px'); break;
-        case 'color': textEl.css('color', value); break;
-        case 'bold': textEl.css('fontWeight', value ? 'bold' : 'normal'); break;
-        case 'italic': textEl.css('fontStyle', value ? 'italic' : 'normal'); break;
-        case 'align': textEl.css('textAlign', value); break;
-    }
+    textObjs.forEach(obj => {
+        if (!obj.text_style) obj.text_style = {};
+        obj.text_style[prop] = value;
+
+        const textEl = $(`[data-obj-id="${obj.obj_id}"] .text-content`);
+        switch (prop) {
+            case 'font_family': textEl.css('fontFamily', value); break;
+            case 'font_size': textEl.css('fontSize', value + 'px'); break;
+            case 'color': textEl.css('color', value); break;
+            case 'bold': textEl.css('fontWeight', value ? 'bold' : 'normal'); break;
+            case 'italic': textEl.css('fontStyle', value ? 'italic' : 'normal'); break;
+            case 'align': textEl.css('textAlign', value); break;
+        }
+    });
 }
 
 function toggleBold() {
     const btn = $('#propBold');
     const newVal = !btn.hasClass('active');
-    btn.toggleClass('active', newVal);
+    btn.toggleClass('active', newVal).removeClass('mixed');
     updateTextStyle('bold', newVal);
 }
 
 function toggleItalic() {
     const btn = $('#propItalic');
     const newVal = !btn.hasClass('active');
-    btn.toggleClass('active', newVal);
+    btn.toggleClass('active', newVal).removeClass('mixed');
     updateTextStyle('italic', newVal);
 }
 
@@ -1802,6 +2465,76 @@ function updateTextContent(value) {
     if (!state.selectedObject || state.selectedObject.obj_type !== 'text') return;
     state.selectedObject.text_content = value;
     $(`[data-obj-id="${state.selectedObject.obj_id}"] .text-content`).text(value);
+}
+
+// ============ 레이어(z-index) 관리 ============
+
+function bringForward() {
+    if (state.selectedObjects.length === 0) return;
+    // 현재 선택된 객체들보다 z_index가 바로 위인 객체 찾기
+    const selectedIds = new Set(state.selectedObjects.map(o => o.obj_id));
+    const maxSelectedZ = Math.max(...state.selectedObjects.map(o => o.z_index !== undefined ? o.z_index : 10));
+
+    // 선택되지 않은 객체 중 바로 위 z_index 가진 것들
+    const above = state.objects.filter(o => !selectedIds.has(o.obj_id) && (o.z_index !== undefined ? o.z_index : 10) > maxSelectedZ);
+    if (above.length === 0) return; // 이미 맨 앞
+
+    const targetZ = Math.min(...above.map(o => o.z_index !== undefined ? o.z_index : 10));
+
+    // 선택된 객체: targetZ 값으로, target 객체: 선택 객체의 원래 z로 교환
+    state.selectedObjects.forEach(obj => {
+        obj.z_index = targetZ + 1;
+        $(`[data-obj-id="${obj.obj_id}"]`).css('zIndex', obj.z_index);
+    });
+    updatePropertiesPanel();
+}
+
+function sendBackward() {
+    if (state.selectedObjects.length === 0) return;
+    const selectedIds = new Set(state.selectedObjects.map(o => o.obj_id));
+    const minSelectedZ = Math.min(...state.selectedObjects.map(o => o.z_index !== undefined ? o.z_index : 10));
+
+    const below = state.objects.filter(o => !selectedIds.has(o.obj_id) && (o.z_index !== undefined ? o.z_index : 10) < minSelectedZ);
+    if (below.length === 0) return; // 이미 맨 뒤
+
+    const targetZ = Math.max(...below.map(o => o.z_index !== undefined ? o.z_index : 10));
+
+    state.selectedObjects.forEach(obj => {
+        obj.z_index = targetZ - 1;
+        if (obj.z_index < 1) obj.z_index = 1;
+        $(`[data-obj-id="${obj.obj_id}"]`).css('zIndex', obj.z_index);
+    });
+    updatePropertiesPanel();
+}
+
+function bringToFront() {
+    if (state.selectedObjects.length === 0) return;
+    const maxZ = Math.max(...state.objects.map(o => o.z_index !== undefined ? o.z_index : 10));
+    state.selectedObjects.forEach((obj, i) => {
+        obj.z_index = maxZ + 1 + i;
+        $(`[data-obj-id="${obj.obj_id}"]`).css('zIndex', obj.z_index);
+    });
+    updatePropertiesPanel();
+}
+
+function sendToBack() {
+    if (state.selectedObjects.length === 0) return;
+    const minZ = Math.min(...state.objects.map(o => o.z_index !== undefined ? o.z_index : 10));
+    const newBase = Math.max(1, minZ - state.selectedObjects.length);
+    state.selectedObjects.forEach((obj, i) => {
+        obj.z_index = newBase + i;
+        $(`[data-obj-id="${obj.obj_id}"]`).css('zIndex', obj.z_index);
+    });
+    updatePropertiesPanel();
+}
+
+function updateZIndex(value) {
+    const z = parseInt(value);
+    if (isNaN(z) || z < 1) return;
+    state.selectedObjects.forEach(obj => {
+        obj.z_index = z;
+        $(`[data-obj-id="${obj.obj_id}"]`).css('zIndex', z);
+    });
 }
 
 // ============ 도형 기능 ============
@@ -1824,6 +2557,7 @@ function createShapeAtRect(shapeType, x, y, width, height) {
         y: y,
         width: width,
         height: isLine ? Math.max(height, 4) : height,
+        z_index: getNextZIndex(),
         shape_style: {
             shape_type: shapeType,
             fill_color: isLine ? 'transparent' : '#4A90D9',
@@ -2509,36 +3243,38 @@ function createShapeSVG(obj) {
 }
 
 function updateShapeStyle(prop, value) {
-    if (!state.selectedObject || state.selectedObject.obj_type !== 'shape') return;
-    if (!state.selectedObject.shape_style) {
-        state.selectedObject.shape_style = {};
-    }
-    state.selectedObject.shape_style[prop] = value;
+    // 멀티셀렉트: 선택된 모든 도형 객체에 적용
+    const shapeObjs = state.selectedObjects.filter(o => o.obj_type === 'shape');
+    if (shapeObjs.length === 0) return;
 
-    // 도형 유형 변경 시 라인 관련 기본값 조정
-    if (prop === 'shape_type') {
-        const isLine = (value === 'line' || value === 'arrow');
-        if (isLine) {
-            state.selectedObject.shape_style.fill_opacity = 0;
-            state.selectedObject.shape_style.fill_color = 'transparent';
-            if (state.selectedObject.height > 20) {
-                state.selectedObject.height = 4;
-                const el = $(`[data-obj-id="${state.selectedObject.obj_id}"]`);
-                el.css('height', '4px');
+    shapeObjs.forEach(obj => {
+        if (!obj.shape_style) obj.shape_style = {};
+        obj.shape_style[prop] = value;
+
+        // 도형 유형 변경 시 라인 관련 기본값 조정
+        if (prop === 'shape_type') {
+            const isLine = (value === 'line' || value === 'arrow');
+            if (isLine) {
+                obj.shape_style.fill_opacity = 0;
+                obj.shape_style.fill_color = 'transparent';
+                if (obj.height > 20) {
+                    obj.height = 4;
+                    $(`[data-obj-id="${obj.obj_id}"]`).css('height', '4px');
+                }
+            }
+            if (value === 'arrow') {
+                obj.shape_style.arrow_head = obj.shape_style.arrow_head || 'end';
+            }
+            if (value === 'rounded_rectangle') {
+                obj.shape_style.border_radius = obj.shape_style.border_radius || 12;
             }
         }
-        if (value === 'arrow') {
-            state.selectedObject.shape_style.arrow_head = state.selectedObject.shape_style.arrow_head || 'end';
-        }
-        if (value === 'rounded_rectangle') {
-            state.selectedObject.shape_style.border_radius = state.selectedObject.shape_style.border_radius || 12;
-        }
-    }
 
-    // SVG 재렌더
-    const el = $(`[data-obj-id="${state.selectedObject.obj_id}"]`);
-    el.find('svg').remove();
-    el.prepend(createShapeSVG(state.selectedObject));
+        // SVG 재렌더
+        const el = $(`[data-obj-id="${obj.obj_id}"]`);
+        el.find('svg').remove();
+        el.prepend(createShapeSVG(obj));
+    });
 
     updateShapePropertyVisibility();
 }
@@ -2845,6 +3581,8 @@ function applyLayoutPreset(layout) {
     // 오브젝트 초기화 및 프리셋 적용
     state.objects = presetData.objects;
     state.selectedObject = null;
+    state.selectedObjects = [];
+    removeGroupBoundingBox();
 
     // 슬라이드 메타 자동 업데이트 (has_title 등은 오브젝트에서 자동 계산)
     var auto = calcMetaFromObjects(state.objects);
@@ -2883,6 +3621,521 @@ function _showMetaTypeGuide(contentType) {
     } else {
         $('#metaTypeGuide').hide();
     }
+}
+
+// ============ 사용 현황 대시보드 ============
+
+const dashState = {
+    currentSection: 'overview',
+    charts: {},
+    users: { page: 1, total: 0 },
+    projects: { page: 1, total: 0 },
+    activity: { page: 1, total: 0 },
+};
+
+function showDashboard() {
+    $('#dashboardOverlay').show();
+    switchDashboardSection('overview');
+}
+
+function closeDashboard() {
+    $('#dashboardOverlay').hide();
+    Object.values(dashState.charts).forEach(c => { try { c.destroy(); } catch(e) {} });
+    dashState.charts = {};
+}
+
+function switchDashboardSection(section) {
+    dashState.currentSection = section;
+    $('.dashboard-nav-item').removeClass('active');
+    $(`.dashboard-nav-item[data-section="${section}"]`).addClass('active');
+    $('.dashboard-section').removeClass('active');
+    $(`#dashSection-${section}`).addClass('active');
+    switch (section) {
+        case 'overview': loadDashboardOverview(); break;
+        case 'users': loadDashboardUsers(); break;
+        case 'projects': loadDashboardProjects(); break;
+        case 'activity': loadDashboardActivity(); break;
+    }
+}
+
+// ---- 전체 현황 ----
+async function loadDashboardOverview() {
+    try {
+        const data = await apiGet('/api/admin/dashboard/overview');
+        renderOverviewStats(data);
+        renderOverviewCharts(data);
+    } catch (e) {
+        showToast('대시보드 로딩 실패', 'error');
+    }
+}
+
+const STAT_COLORS = ['#4f7cac', '#4caf50', '#ff9800', '#9c27b0', '#1976d2', '#26a69a'];
+const STAT_BGS = ['#e8f0fe', '#e8f5e9', '#fff3e0', '#f3e5f5', '#e3f2fd', '#e0f2f1'];
+const STAT_ICONS = ['&#128101;', '&#128196;', '&#128197;', '&#9889;', '&#128203;', '&#128206;'];
+
+function renderOverviewStats(data) {
+    const cards = [
+        { label: '전체 사용자', value: data.total_users, sub: `활성 사용자 ${data.active_users}명`, idx: 0 },
+        { label: '전체 프로젝트', value: data.total_projects, sub: `생성완료 ${data.generated_projects}건`, idx: 1 },
+        { label: '이번 달 프로젝트', value: data.month_projects, sub: `오늘 ${data.today_projects}건`, idx: 2 },
+        { label: 'AI 생성 건수', value: data.total_generations, sub: `슬라이드 ${data.generation_breakdown.slides} | 엑셀 ${data.generation_breakdown.excel} | Word ${data.generation_breakdown.docx}`, idx: 3 },
+        { label: '템플릿', value: data.total_templates, sub: `공개 ${data.published_templates}개`, idx: 4 },
+        { label: '총 리소스', value: data.total_resources, sub: '등록된 전체 리소스', idx: 5 },
+    ];
+    let html = '';
+    cards.forEach(c => {
+        html += `<div class="stat-card">
+            <div class="stat-card-header">
+                <div class="stat-label">${c.label}</div>
+                <div class="stat-icon" style="background:${STAT_BGS[c.idx]};color:${STAT_COLORS[c.idx]};">${STAT_ICONS[c.idx]}</div>
+            </div>
+            <div class="stat-value" style="color:${STAT_COLORS[c.idx]};">${c.value.toLocaleString()}</div>
+            <div class="stat-sub">${c.sub}</div>
+        </div>`;
+    });
+    $('#overviewStatCards').html(html);
+}
+
+function renderOverviewCharts(data) {
+    Object.values(dashState.charts).forEach(c => { try { c.destroy(); } catch(e) {} });
+    dashState.charts = {};
+
+    // 일별 추이
+    const dLabels = data.daily_trend.map(d => d._id.slice(5));
+    const dValues = data.daily_trend.map(d => d.count);
+    dashState.charts.daily = new Chart(document.getElementById('chartDailyTrend'), {
+        type: 'line',
+        data: {
+            labels: dLabels,
+            datasets: [{
+                label: '프로젝트',
+                data: dValues,
+                borderColor: '#4f7cac',
+                backgroundColor: 'rgba(79,124,172,0.08)',
+                fill: true,
+                tension: 0.35,
+                pointRadius: 3,
+                pointBackgroundColor: '#4f7cac',
+                borderWidth: 2,
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } }, x: { ticks: { maxTicksLimit: 15, font: { size: 11 } } } }
+        }
+    });
+
+    // 프로젝트 유형
+    const typeMap = { slide: '슬라이드', excel: '엑셀', onlyoffice_pptx: 'OO PPTX', onlyoffice_xlsx: 'OO XLSX', onlyoffice_docx: 'OO DOCX' };
+    const tColors = ['#4f7cac', '#4caf50', '#ff9800', '#9c27b0', '#1976d2'];
+    dashState.charts.type = new Chart(document.getElementById('chartProjectType'), {
+        type: 'doughnut',
+        data: {
+            labels: data.project_type_distribution.map(d => typeMap[d._id] || d._id),
+            datasets: [{ data: data.project_type_distribution.map(d => d.count), backgroundColor: tColors.slice(0, data.project_type_distribution.length), borderWidth: 0 }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, padding: 12 } } },
+            cutout: '60%'
+        }
+    });
+
+    // 리소스 유형
+    const resMap = { file: '파일', text: '텍스트', web: '웹 검색', url: 'URL' };
+    const rColors = ['#1976d2', '#4caf50', '#ff9800', '#9c27b0'];
+    dashState.charts.resource = new Chart(document.getElementById('chartResourceType'), {
+        type: 'doughnut',
+        data: {
+            labels: data.resource_type_distribution.map(d => resMap[d._id] || d._id),
+            datasets: [{ data: data.resource_type_distribution.map(d => d.count), backgroundColor: rColors.slice(0, data.resource_type_distribution.length), borderWidth: 0 }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, padding: 12 } } },
+            cutout: '60%'
+        }
+    });
+
+    // 생성 현황
+    const gb = data.generation_breakdown;
+    dashState.charts.gen = new Chart(document.getElementById('chartGenerationBreakdown'), {
+        type: 'bar',
+        data: {
+            labels: ['슬라이드', '엑셀', 'Word'],
+            datasets: [{ label: '생성 건수', data: [gb.slides, gb.excel, gb.docx], backgroundColor: ['#4f7cac', '#4caf50', '#ff9800'], borderRadius: 6, barThickness: 40 }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+        }
+    });
+}
+
+// ---- 사용자 현황 ----
+async function loadDashboardUsers(page) {
+    dashState.users.page = page || 1;
+    const search = $('#dashUserSearch').val() || '';
+    try {
+        const data = await apiGet(`/api/admin/dashboard/users?search=${encodeURIComponent(search)}&page=${dashState.users.page}&limit=20`);
+        dashState.users.total = data.total;
+        renderDashUserList(data.users);
+        renderDashPagination('dashUserPagination', data.total, dashState.users.page, 20, 'loadDashboardUsers');
+    } catch (e) {
+        showToast('사용자 목록 로딩 실패', 'error');
+    }
+}
+
+function renderDashUserList(users) {
+    if (!users.length) {
+        $('#dashUserList').html('<div class="dashboard-empty">검색 결과가 없습니다</div>');
+        return;
+    }
+    const avatarColors = ['#4f7cac', '#4caf50', '#ff9800', '#9c27b0', '#1976d2', '#e91e63', '#00897b', '#5c6bc0'];
+    let html = `<div class="dashboard-list-header">
+        <div style="width:48px;"></div>
+        <div style="flex:1;">이름</div>
+        <div style="flex:1;">부서</div>
+        <div style="flex:1.2;">이메일</div>
+        <div style="width:80px;text-align:center;">프로젝트</div>
+        <div style="width:80px;text-align:center;">역할</div>
+        <div style="width:120px;">최근 활동</div>
+    </div>`;
+    users.forEach((u, i) => {
+        const initial = (u.nm || '?')[0];
+        const color = avatarColors[i % avatarColors.length];
+        const roleBadge = u.role === 'admin'
+            ? '<span class="dash-badge role-admin">관리자</span>'
+            : '<span class="dash-badge role-user">일반</span>';
+        const lastAct = u.last_activity ? new Date(u.last_activity).toLocaleDateString('ko-KR') : '-';
+        html += `<div class="dashboard-list-item clickable" onclick="showUserDetail('${escapeHtml(u.ky)}')">
+            <div class="dash-avatar" style="background:${color}22;color:${color};">${escapeHtml(initial)}</div>
+            <div style="flex:1;margin-left:12px;font-weight:500;">${escapeHtml(u.nm)}</div>
+            <div style="flex:1;color:#666;font-size:12px;">${escapeHtml(u.dp || '-')}</div>
+            <div style="flex:1.2;color:#888;font-size:12px;">${escapeHtml(u.em || '-')}</div>
+            <div style="width:80px;text-align:center;font-weight:600;color:#4f7cac;">${u.project_count}</div>
+            <div style="width:80px;text-align:center;">${roleBadge}</div>
+            <div style="width:120px;font-size:12px;color:#888;">${lastAct}</div>
+        </div>`;
+    });
+    $('#dashUserList').html(html);
+}
+
+// ---- 프로젝트 현황 ----
+async function loadDashboardProjects(page) {
+    dashState.projects.page = page || 1;
+    const search = $('#dashProjectSearch').val() || '';
+    const typeFilter = $('#dashProjectTypeFilter').val() || '';
+    const statusFilter = $('#dashProjectStatusFilter').val() || '';
+    try {
+        const data = await apiGet(`/api/admin/dashboard/projects?search=${encodeURIComponent(search)}&project_type=${typeFilter}&status=${statusFilter}&page=${dashState.projects.page}&limit=20`);
+        dashState.projects.total = data.total;
+        renderDashProjectList(data.projects);
+        renderDashPagination('dashProjectPagination', data.total, dashState.projects.page, 20, 'loadDashboardProjects');
+    } catch (e) {
+        showToast('프로젝트 목록 로딩 실패', 'error');
+    }
+}
+
+function renderDashProjectList(projects) {
+    if (!projects.length) {
+        $('#dashProjectList').html('<div class="dashboard-empty">검색 결과가 없습니다</div>');
+        return;
+    }
+    const typeMap = { slide: '슬라이드', excel: '엑셀', onlyoffice_pptx: 'OO PPTX', onlyoffice_xlsx: 'OO XLSX', onlyoffice_docx: 'OO DOCX' };
+    const typeCls = { slide: 'type-slide', excel: 'type-excel', onlyoffice_pptx: 'type-oo', onlyoffice_xlsx: 'type-oo', onlyoffice_docx: 'type-docx' };
+    const statusMap = { draft: '초안', preparing: '준비중', generating: '생성중', generated: '생성완료' };
+    const statusCls = { draft: 'status-draft', preparing: 'status-preparing', generating: 'status-generating', generated: 'status-generated' };
+
+    let html = `<div class="dashboard-list-header">
+        <div style="flex:2;">프로젝트명</div>
+        <div style="flex:1;">작성자</div>
+        <div style="width:100px;text-align:center;">유형</div>
+        <div style="width:80px;text-align:center;">상태</div>
+        <div style="width:60px;text-align:center;">슬라이드</div>
+        <div style="width:60px;text-align:center;">리소스</div>
+        <div style="width:110px;">생성일</div>
+    </div>`;
+    projects.forEach(p => {
+        const pt = p.project_type || 'slide';
+        const st = p.status || 'draft';
+        const createdAt = p.created_at ? new Date(p.created_at).toLocaleDateString('ko-KR') : '-';
+        html += `<div class="dashboard-list-item">
+            <div style="flex:2;">
+                <div style="font-weight:500;">${escapeHtml(p.name || '제목 없음')}</div>
+                <div style="font-size:11px;color:#aaa;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:300px;">${escapeHtml((p.description || '').substring(0, 80))}</div>
+            </div>
+            <div style="flex:1;font-size:12px;">
+                <div style="font-weight:500;">${escapeHtml(p._user_name || '-')}</div>
+                <div style="color:#999;font-size:11px;">${escapeHtml(p._user_dept || '')}</div>
+            </div>
+            <div style="width:100px;text-align:center;"><span class="dash-badge ${typeCls[pt] || 'type-slide'}">${typeMap[pt] || pt}</span></div>
+            <div style="width:80px;text-align:center;"><span class="dash-badge ${statusCls[st] || 'status-draft'}">${statusMap[st] || st}</span></div>
+            <div style="width:60px;text-align:center;font-weight:600;color:#4f7cac;">${p._slide_count || 0}</div>
+            <div style="width:60px;text-align:center;color:#666;">${p._resource_count || 0}</div>
+            <div style="width:110px;font-size:12px;color:#888;">${createdAt}</div>
+        </div>`;
+    });
+    $('#dashProjectList').html(html);
+}
+
+// ---- 활동 로그 ----
+async function loadDashboardActivity(page) {
+    dashState.activity.page = page || 1;
+    const userSearch = $('#dashActivityUserSearch').val() || '';
+    const dateFrom = $('#dashActivityDateFrom').val() || '';
+    const dateTo = $('#dashActivityDateTo').val() || '';
+    try {
+        const data = await apiGet(`/api/admin/dashboard/activity?user_search=${encodeURIComponent(userSearch)}&date_from=${dateFrom}&date_to=${dateTo}&page=${dashState.activity.page}&limit=30`);
+        dashState.activity.total = data.total;
+        renderDashActivityList(data.activities);
+        renderDashPagination('dashActivityPagination', data.total, dashState.activity.page, 30, 'loadDashboardActivity');
+    } catch (e) {
+        showToast('활동 로그 로딩 실패', 'error');
+    }
+}
+
+function renderDashActivityList(activities) {
+    if (!activities.length) {
+        $('#dashActivityList').html('<div class="dashboard-empty">활동 기록이 없습니다</div>');
+        return;
+    }
+    const typeMap = { slide: '슬라이드', excel: '엑셀', onlyoffice_pptx: 'OO PPTX', onlyoffice_xlsx: 'OO XLSX', onlyoffice_docx: 'OO DOCX' };
+    const typeCls = { slide: 'type-slide', excel: 'type-excel', onlyoffice_pptx: 'type-oo', onlyoffice_xlsx: 'type-oo', onlyoffice_docx: 'type-docx' };
+    const avatarColors = ['#4f7cac', '#4caf50', '#ff9800', '#9c27b0', '#1976d2', '#e91e63', '#00897b', '#5c6bc0'];
+
+    let html = '';
+    activities.forEach((a, i) => {
+        const initial = (a.user_name || '?')[0];
+        const color = avatarColors[i % avatarColors.length];
+        const pt = a.project_type || 'slide';
+        const updatedAt = a.updated_at
+            ? new Date(a.updated_at).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+            : '-';
+        html += `<div class="dashboard-list-item" style="gap:12px;">
+            <div class="dash-avatar" style="background:${color}22;color:${color};">${escapeHtml(initial)}</div>
+            <div style="min-width:100px;">
+                <div style="font-weight:500;font-size:13px;">${escapeHtml(a.user_name)}</div>
+                <div style="font-size:11px;color:#999;">${escapeHtml(a.user_dept)}</div>
+            </div>
+            <div style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                <span style="color:#333;">${escapeHtml(a.project_name || '제목 없음')}</span>
+            </div>
+            <div style="width:80px;text-align:center;"><span class="dash-badge ${typeCls[pt] || 'type-slide'}">${typeMap[pt] || pt}</span></div>
+            <div style="width:130px;text-align:right;font-size:12px;color:#888;">${updatedAt}</div>
+        </div>`;
+    });
+    $('#dashActivityList').html(html);
+}
+
+// ---- 사용자 상세 대시보드 ----
+async function showUserDetail(userKey) {
+    // 사용자 상세 섹션으로 전환
+    dashState.currentSection = 'userDetail';
+    $('.dashboard-nav-item').removeClass('active');
+    $('.dashboard-section').removeClass('active');
+    $('#dashSection-userDetail').addClass('active');
+
+    // 로딩 표시
+    $('#userDetailProfile').html('<div class="dashboard-loading">사용자 정보를 불러오는 중...</div>');
+    $('#userDetailStats').html('');
+    $('#userDetailProjects').html('');
+
+    try {
+        const data = await apiGet(`/api/admin/dashboard/user/${encodeURIComponent(userKey)}`);
+        renderUserDetailProfile(data);
+        renderUserDetailStats(data);
+        renderUserDetailCharts(data);
+        renderUserDetailProjects(data.recent_projects);
+    } catch (e) {
+        showToast('사용자 정보 로딩 실패', 'error');
+    }
+}
+
+function renderUserDetailProfile(data) {
+    const u = data.user;
+    const avatarColors = ['#4f7cac', '#4caf50', '#ff9800', '#9c27b0', '#1976d2', '#e91e63'];
+    const color = avatarColors[Math.abs(hashCode(u.ky)) % avatarColors.length];
+    const initial = (u.nm || '?')[0];
+    const roleBadge = u.role === 'admin'
+        ? '<span class="dash-badge role-admin" style="margin-left:8px;">관리자</span>'
+        : '<span class="dash-badge role-user" style="margin-left:8px;">일반</span>';
+
+    const html = `
+        <div class="user-detail-avatar" style="background:${color}22;color:${color};">${escapeHtml(initial)}</div>
+        <div class="user-detail-info">
+            <div class="user-detail-name">${escapeHtml(u.nm)}${roleBadge}</div>
+            <div class="user-detail-meta">
+                <span>&#128188; ${escapeHtml(u.dp || '-')}</span>
+                <span>&#9993; ${escapeHtml(u.em || '-')}</span>
+                <span>&#128273; ${escapeHtml(u.ky)}</span>
+            </div>
+        </div>`;
+    $('#userDetailProfile').html(html);
+}
+
+function hashCode(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+        hash = ((hash << 5) - hash) + str.charCodeAt(i);
+        hash |= 0;
+    }
+    return hash;
+}
+
+function renderUserDetailStats(data) {
+    const gb = data.generation_breakdown;
+    const cards = [
+        { label: '전체 프로젝트', value: data.total_projects, sub: `이번 달 ${data.month_projects}건`, idx: 0 },
+        { label: '생성 완료', value: data.generated_projects, sub: `${data.total_projects ? Math.round(data.generated_projects / data.total_projects * 100) : 0}% 완료율`, idx: 1 },
+        { label: 'AI 생성', value: data.total_generations, sub: `슬라이드 ${gb.slides} | 엑셀 ${gb.excel} | Word ${gb.docx}`, idx: 3 },
+        { label: '리소스', value: data.total_resources, sub: '등록된 리소스', idx: 5 },
+    ];
+    let html = '';
+    cards.forEach(c => {
+        html += `<div class="stat-card">
+            <div class="stat-card-header">
+                <div class="stat-label">${c.label}</div>
+                <div class="stat-icon" style="background:${STAT_BGS[c.idx]};color:${STAT_COLORS[c.idx]};">${STAT_ICONS[c.idx]}</div>
+            </div>
+            <div class="stat-value" style="color:${STAT_COLORS[c.idx]};">${c.value.toLocaleString()}</div>
+            <div class="stat-sub">${c.sub}</div>
+        </div>`;
+    });
+    $('#userDetailStats').html(html);
+}
+
+function renderUserDetailCharts(data) {
+    // 기존 사용자 차트 정리
+    ['userDaily', 'userType', 'userStatus', 'userResource'].forEach(k => {
+        if (dashState.charts[k]) { try { dashState.charts[k].destroy(); } catch(e) {} delete dashState.charts[k]; }
+    });
+
+    // 일별 추이
+    const dLabels = data.daily_trend.map(d => d._id.slice(5));
+    const dValues = data.daily_trend.map(d => d.count);
+    dashState.charts.userDaily = new Chart(document.getElementById('userChartDailyTrend'), {
+        type: 'line',
+        data: {
+            labels: dLabels,
+            datasets: [{
+                label: '프로젝트',
+                data: dValues,
+                borderColor: '#4f7cac',
+                backgroundColor: 'rgba(79,124,172,0.08)',
+                fill: true, tension: 0.35, pointRadius: 3, pointBackgroundColor: '#4f7cac', borderWidth: 2,
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } }, x: { ticks: { maxTicksLimit: 15, font: { size: 11 } } } }
+        }
+    });
+
+    // 프로젝트 유형
+    const typeMap = { slide: '슬라이드', excel: '엑셀', onlyoffice_pptx: 'OO PPTX', onlyoffice_xlsx: 'OO XLSX', onlyoffice_docx: 'OO DOCX' };
+    const tColors = ['#4f7cac', '#4caf50', '#ff9800', '#9c27b0', '#1976d2'];
+    if (data.project_type_distribution.length) {
+        dashState.charts.userType = new Chart(document.getElementById('userChartProjectType'), {
+            type: 'doughnut',
+            data: {
+                labels: data.project_type_distribution.map(d => typeMap[d._id] || d._id),
+                datasets: [{ data: data.project_type_distribution.map(d => d.count), backgroundColor: tColors, borderWidth: 0 }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, padding: 12 } } }, cutout: '60%' }
+        });
+    } else {
+        document.getElementById('userChartProjectType').parentElement.innerHTML = '<div class="dashboard-empty" style="padding:60px 0;">데이터 없음</div>';
+    }
+
+    // 프로젝트 상태
+    const statusMap = { draft: '초안', preparing: '준비중', generating: '생성중', generated: '생성완료' };
+    const sColors = ['#bdbdbd', '#ffa726', '#42a5f5', '#66bb6a'];
+    if (data.project_status_distribution.length) {
+        dashState.charts.userStatus = new Chart(document.getElementById('userChartProjectStatus'), {
+            type: 'doughnut',
+            data: {
+                labels: data.project_status_distribution.map(d => statusMap[d._id] || d._id),
+                datasets: [{ data: data.project_status_distribution.map(d => d.count), backgroundColor: sColors, borderWidth: 0 }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, padding: 12 } } }, cutout: '60%' }
+        });
+    } else {
+        document.getElementById('userChartProjectStatus').parentElement.innerHTML = '<div class="dashboard-empty" style="padding:60px 0;">데이터 없음</div>';
+    }
+
+    // 리소스 유형
+    const resMap = { file: '파일', text: '텍스트', web: '웹 검색', url: 'URL' };
+    const rColors = ['#1976d2', '#4caf50', '#ff9800', '#9c27b0'];
+    if (data.resource_type_distribution.length) {
+        dashState.charts.userResource = new Chart(document.getElementById('userChartResourceType'), {
+            type: 'doughnut',
+            data: {
+                labels: data.resource_type_distribution.map(d => resMap[d._id] || d._id),
+                datasets: [{ data: data.resource_type_distribution.map(d => d.count), backgroundColor: rColors, borderWidth: 0 }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, padding: 12 } } }, cutout: '60%' }
+        });
+    } else {
+        document.getElementById('userChartResourceType').parentElement.innerHTML = '<div class="dashboard-empty" style="padding:60px 0;">데이터 없음</div>';
+    }
+}
+
+function renderUserDetailProjects(projects) {
+    if (!projects.length) {
+        $('#userDetailProjects').html('<div class="dashboard-empty">프로젝트가 없습니다</div>');
+        return;
+    }
+    const typeMap = { slide: '슬라이드', excel: '엑셀', onlyoffice_pptx: 'OO PPTX', onlyoffice_xlsx: 'OO XLSX', onlyoffice_docx: 'OO DOCX' };
+    const typeCls = { slide: 'type-slide', excel: 'type-excel', onlyoffice_pptx: 'type-oo', onlyoffice_xlsx: 'type-oo', onlyoffice_docx: 'type-docx' };
+    const statusMap = { draft: '초안', preparing: '준비중', generating: '생성중', generated: '생성완료' };
+    const statusCls = { draft: 'status-draft', preparing: 'status-preparing', generating: 'status-generating', generated: 'status-generated' };
+
+    let html = `<div class="dashboard-list-header">
+        <div style="flex:2;">프로젝트명</div>
+        <div style="width:100px;text-align:center;">유형</div>
+        <div style="width:80px;text-align:center;">상태</div>
+        <div style="width:60px;text-align:center;">슬라이드</div>
+        <div style="width:120px;">생성일</div>
+        <div style="width:120px;">최근 수정</div>
+    </div>`;
+    projects.forEach(p => {
+        const pt = p.project_type || 'slide';
+        const st = p.status || 'draft';
+        const createdAt = p.created_at ? new Date(p.created_at).toLocaleDateString('ko-KR') : '-';
+        const updatedAt = p.updated_at ? new Date(p.updated_at).toLocaleDateString('ko-KR') : '-';
+        html += `<div class="dashboard-list-item">
+            <div style="flex:2;font-weight:500;">${escapeHtml(p.name || '제목 없음')}</div>
+            <div style="width:100px;text-align:center;"><span class="dash-badge ${typeCls[pt] || 'type-slide'}">${typeMap[pt] || pt}</span></div>
+            <div style="width:80px;text-align:center;"><span class="dash-badge ${statusCls[st] || 'status-draft'}">${statusMap[st] || st}</span></div>
+            <div style="width:60px;text-align:center;font-weight:600;color:#4f7cac;">${p.slide_count || 0}</div>
+            <div style="width:120px;font-size:12px;color:#888;">${createdAt}</div>
+            <div style="width:120px;font-size:12px;color:#888;">${updatedAt}</div>
+        </div>`;
+    });
+    $('#userDetailProjects').html(html);
+}
+
+// ---- 페이지네이션 ----
+function renderDashPagination(containerId, total, currentPage, pageSize, fnName) {
+    const totalPages = Math.ceil(total / pageSize);
+    if (totalPages <= 1) {
+        $(`#${containerId}`).html(total > 0 ? `<span class="dash-page-info">총 ${total}건</span>` : '');
+        return;
+    }
+    let html = '';
+    if (currentPage > 1) html += `<button onclick="${fnName}(${currentPage - 1})">&#8249; 이전</button>`;
+    const startP = Math.max(1, currentPage - 3);
+    const endP = Math.min(totalPages, startP + 6);
+    for (let i = startP; i <= endP; i++) {
+        html += `<button class="${i === currentPage ? 'active' : ''}" onclick="${fnName}(${i})">${i}</button>`;
+    }
+    if (currentPage < totalPages) html += `<button onclick="${fnName}(${currentPage + 1})">다음 &#8250;</button>`;
+    html += `<span class="dash-page-info">총 ${total}건</span>`;
+    $(`#${containerId}`).html(html);
 }
 
 // ============ 유틸리티 ============

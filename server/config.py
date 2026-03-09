@@ -32,6 +32,7 @@ class Settings:
     # Server
     SERVER_HOST: str = os.getenv("SERVER_HOST", "0.0.0.0")
     SERVER_PORT: int = int(os.getenv("SERVER_PORT", "8000"))
+    AUTO_RELOAD: bool = os.getenv("AUTO_RELOAD", "true").lower() in ("true", "1", "yes")
 
     # Upload
     UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", "./uploads")

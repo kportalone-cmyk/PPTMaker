@@ -1,11 +1,11 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Request
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timedelta
 from models.template import (
     TemplateCreate, TemplateUpdate,
     SlideCreate, SlideUpdate, BulkFontUpdate
 )
-from services.mongo_service import get_db
+from services.mongo_service import get_db, get_org_db
 from services.auth_service import decode_jwt_token, get_user_flexible, is_admin
 from services.template_service import invalidate_template_cache
 from config import settings
@@ -51,6 +51,7 @@ async def create_template(jwt_token: str, data: TemplateCreate):
         "name": data.name,
         "description": data.description,
         "background_image": data.background_image,
+        "is_published": data.is_published,
         "created_by": user.get("ky"),
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
@@ -97,6 +98,24 @@ async def update_template(jwt_token: str, template_id: str, data: TemplateUpdate
         raise HTTPException(status_code=404, detail="템플릿을 찾을 수 없습니다")
     await invalidate_template_cache(template_id)
     return {"success": True}
+
+
+@router.put("/{jwt_token}/api/admin/templates/{template_id}/publish")
+async def toggle_publish(jwt_token: str, template_id: str):
+    """템플릿 게시/비게시 토글"""
+    await verify_admin(jwt_token)
+    db = get_db()
+    template = await db.templates.find_one({"_id": ObjectId(template_id)})
+    if not template:
+        raise HTTPException(status_code=404, detail="템플릿을 찾을 수 없습니다")
+
+    new_status = not template.get("is_published", False)
+    await db.templates.update_one(
+        {"_id": ObjectId(template_id)},
+        {"$set": {"is_published": new_status, "updated_at": datetime.utcnow()}}
+    )
+    await invalidate_template_cache(template_id)
+    return {"success": True, "is_published": new_status}
 
 
 @router.delete("/{jwt_token}/api/admin/templates/{template_id}")
@@ -265,3 +284,331 @@ async def bulk_font_update(jwt_token: str, template_id: str, data: BulkFontUpdat
 
     await invalidate_template_cache(template_id)
     return {"success": True, "updated_count": updated_count}
+
+
+# ============ 대시보드 API ============
+
+@router.get("/{jwt_token}/api/admin/dashboard/overview")
+async def dashboard_overview(jwt_token: str):
+    """대시보드 전체 현황"""
+    await verify_admin(jwt_token)
+    db = get_db()
+    org_db = get_org_db()
+    now = datetime.utcnow()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # 전체 사용자
+    total_users = await org_db[settings.ORG_COLLECTION].count_documents({})
+
+    # 활성 사용자 (프로젝트 생성한 고유 사용자)
+    active_pipeline = [{"$group": {"_id": "$user_key"}}, {"$count": "count"}]
+    active_result = await db.projects.aggregate(active_pipeline).to_list(1)
+    active_users = active_result[0]["count"] if active_result else 0
+
+    # 프로젝트 통계
+    total_projects = await db.projects.count_documents({})
+    month_projects = await db.projects.count_documents({"created_at": {"$gte": month_start}})
+    today_projects = await db.projects.count_documents({"created_at": {"$gte": today_start}})
+    generated_projects = await db.projects.count_documents({"status": "generated"})
+
+    # 생성 건수
+    total_gen_slides = await db.generated_slides.count_documents({})
+    total_gen_excel = await db.generated_excel.count_documents({})
+    total_gen_docx = await db.generated_docx.count_documents({})
+
+    # 템플릿
+    total_templates = await db.templates.count_documents({})
+    published_templates = await db.templates.count_documents({"is_published": True})
+
+    # 리소스
+    total_resources = await db.resources.count_documents({})
+
+    # 프로젝트 유형 분포
+    type_pipeline = [{"$group": {"_id": {"$ifNull": ["$project_type", "slide"]}, "count": {"$sum": 1}}}]
+    type_dist = await db.projects.aggregate(type_pipeline).to_list(100)
+
+    # 일별 프로젝트 추이 (30일)
+    thirty_days_ago = now - timedelta(days=30)
+    daily_pipeline = [
+        {"$match": {"created_at": {"$gte": thirty_days_ago}}},
+        {"$group": {
+            "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$created_at"}},
+            "count": {"$sum": 1}
+        }},
+        {"$sort": {"_id": 1}}
+    ]
+    daily_trend = await db.projects.aggregate(daily_pipeline).to_list(100)
+
+    # 리소스 유형 분포
+    res_pipeline = [{"$group": {"_id": "$resource_type", "count": {"$sum": 1}}}]
+    resource_dist = await db.resources.aggregate(res_pipeline).to_list(100)
+
+    return {
+        "total_users": total_users,
+        "active_users": active_users,
+        "total_projects": total_projects,
+        "month_projects": month_projects,
+        "today_projects": today_projects,
+        "generated_projects": generated_projects,
+        "total_generations": total_gen_slides + total_gen_excel + total_gen_docx,
+        "generation_breakdown": {
+            "slides": total_gen_slides,
+            "excel": total_gen_excel,
+            "docx": total_gen_docx,
+        },
+        "total_templates": total_templates,
+        "published_templates": published_templates,
+        "total_resources": total_resources,
+        "project_type_distribution": type_dist,
+        "daily_trend": daily_trend,
+        "resource_type_distribution": resource_dist,
+    }
+
+
+@router.get("/{jwt_token}/api/admin/dashboard/users")
+async def dashboard_users(jwt_token: str, search: str = "", page: int = 1, limit: int = 20):
+    """대시보드 사용자 현황"""
+    await verify_admin(jwt_token)
+    db = get_db()
+    org_db = get_org_db()
+    col = org_db[settings.ORG_COLLECTION]
+
+    query = {}
+    if search:
+        query = {"$or": [
+            {"nm": {"$regex": search, "$options": "i"}},
+            {"dp": {"$regex": search, "$options": "i"}},
+            {"em": {"$regex": search, "$options": "i"}},
+        ]}
+
+    total = await col.count_documents(query)
+    skip = (page - 1) * limit
+
+    users = []
+    async for user in col.find(query).skip(skip).limit(limit).sort("nm", 1):
+        user_key = user.get("ky", "")
+        project_count = await db.projects.count_documents({"user_key": user_key})
+        last_project = await db.projects.find_one(
+            {"user_key": user_key},
+            sort=[("updated_at", -1)],
+            projection={"updated_at": 1}
+        )
+        users.append({
+            "nm": user.get("nm", ""),
+            "dp": user.get("dp", ""),
+            "em": user.get("em", ""),
+            "ky": user_key,
+            "role": user.get("role", ""),
+            "project_count": project_count,
+            "last_activity": last_project.get("updated_at").isoformat() if last_project and last_project.get("updated_at") else None,
+        })
+
+    return {"users": users, "total": total, "page": page, "limit": limit}
+
+
+@router.get("/{jwt_token}/api/admin/dashboard/projects")
+async def dashboard_projects(jwt_token: str, search: str = "", project_type: str = "",
+                              status: str = "", page: int = 1, limit: int = 20):
+    """대시보드 프로젝트 현황"""
+    await verify_admin(jwt_token)
+    db = get_db()
+    org_db = get_org_db()
+
+    query = {}
+    if search:
+        query["name"] = {"$regex": search, "$options": "i"}
+    if project_type:
+        query["project_type"] = project_type
+    if status:
+        query["status"] = status
+
+    total = await db.projects.count_documents(query)
+    skip = (page - 1) * limit
+
+    projects = []
+    async for p in db.projects.find(query).skip(skip).limit(limit).sort("created_at", -1):
+        pid = str(p["_id"])
+        p["_id"] = pid
+        user_key = p.get("user_key", "")
+        user = await org_db[settings.ORG_COLLECTION].find_one(
+            {"ky": user_key}, {"nm": 1, "dp": 1}
+        )
+        p["_user_name"] = user.get("nm", "") if user else user_key
+        p["_user_dept"] = user.get("dp", "") if user else ""
+        p["_slide_count"] = await db.generated_slides.count_documents({"project_id": pid})
+        p["_resource_count"] = await db.resources.count_documents({"project_id": pid})
+        # datetime serialization
+        if p.get("created_at"):
+            p["created_at"] = p["created_at"].isoformat()
+        if p.get("updated_at"):
+            p["updated_at"] = p["updated_at"].isoformat()
+        projects.append(p)
+
+    return {"projects": projects, "total": total, "page": page, "limit": limit}
+
+
+@router.get("/{jwt_token}/api/admin/dashboard/activity")
+async def dashboard_activity(jwt_token: str, page: int = 1, limit: int = 30,
+                               user_search: str = "", date_from: str = "", date_to: str = ""):
+    """대시보드 활동 로그"""
+    await verify_admin(jwt_token)
+    db = get_db()
+    org_db = get_org_db()
+
+    query = {"status": "generated"}
+    if date_from:
+        query.setdefault("updated_at", {})["$gte"] = datetime.fromisoformat(date_from)
+    if date_to:
+        query.setdefault("updated_at", {})["$lte"] = datetime.fromisoformat(date_to + "T23:59:59")
+
+    if user_search:
+        user_cursor = org_db[settings.ORG_COLLECTION].find(
+            {"$or": [
+                {"nm": {"$regex": user_search, "$options": "i"}},
+                {"dp": {"$regex": user_search, "$options": "i"}},
+            ]},
+            {"ky": 1}
+        )
+        user_keys = [u.get("ky") async for u in user_cursor]
+        if user_keys:
+            query["user_key"] = {"$in": user_keys}
+        else:
+            return {"activities": [], "total": 0, "page": page, "limit": limit}
+
+    total = await db.projects.count_documents(query)
+    skip = (page - 1) * limit
+
+    activities = []
+    async for p in db.projects.find(query).skip(skip).limit(limit).sort("updated_at", -1):
+        pid = str(p["_id"])
+        user_key = p.get("user_key", "")
+        user = await org_db[settings.ORG_COLLECTION].find_one(
+            {"ky": user_key}, {"nm": 1, "dp": 1}
+        )
+        activities.append({
+            "project_id": pid,
+            "project_name": p.get("name", ""),
+            "project_type": p.get("project_type", "slide"),
+            "user_key": user_key,
+            "user_name": user.get("nm", "") if user else user_key,
+            "user_dept": user.get("dp", "") if user else "",
+            "template_id": p.get("template_id"),
+            "status": p.get("status"),
+            "created_at": p.get("created_at").isoformat() if p.get("created_at") else None,
+            "updated_at": p.get("updated_at").isoformat() if p.get("updated_at") else None,
+        })
+
+    return {"activities": activities, "total": total, "page": page, "limit": limit}
+
+
+@router.get("/{jwt_token}/api/admin/dashboard/user/{user_key}")
+async def dashboard_user_detail(jwt_token: str, user_key: str):
+    """특정 사용자 상세 사용 현황"""
+    await verify_admin(jwt_token)
+    db = get_db()
+    org_db = get_org_db()
+    now = datetime.utcnow()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    # 사용자 정보
+    user = await org_db[settings.ORG_COLLECTION].find_one({"ky": user_key})
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+
+    user_info = {
+        "nm": user.get("nm", ""),
+        "dp": user.get("dp", ""),
+        "em": user.get("em", ""),
+        "ky": user_key,
+        "role": user.get("role", ""),
+    }
+
+    # 프로젝트 통계
+    total_projects = await db.projects.count_documents({"user_key": user_key})
+    month_projects = await db.projects.count_documents({"user_key": user_key, "created_at": {"$gte": month_start}})
+    generated_projects = await db.projects.count_documents({"user_key": user_key, "status": "generated"})
+
+    # 프로젝트 유형 분포
+    type_pipeline = [
+        {"$match": {"user_key": user_key}},
+        {"$group": {"_id": {"$ifNull": ["$project_type", "slide"]}, "count": {"$sum": 1}}}
+    ]
+    type_dist = await db.projects.aggregate(type_pipeline).to_list(100)
+
+    # 프로젝트 상태 분포
+    status_pipeline = [
+        {"$match": {"user_key": user_key}},
+        {"$group": {"_id": "$status", "count": {"$sum": 1}}}
+    ]
+    status_dist = await db.projects.aggregate(status_pipeline).to_list(100)
+
+    # 생성 건수 (프로젝트 ID 목록으로 조회)
+    project_ids = []
+    async for p in db.projects.find({"user_key": user_key}, {"_id": 1}):
+        project_ids.append(str(p["_id"]))
+
+    gen_slides = 0
+    gen_excel = 0
+    gen_docx = 0
+    if project_ids:
+        gen_slides = await db.generated_slides.count_documents({"project_id": {"$in": project_ids}})
+        gen_excel = await db.generated_excel.count_documents({"project_id": {"$in": project_ids}})
+        gen_docx = await db.generated_docx.count_documents({"project_id": {"$in": project_ids}})
+
+    # 리소스 통계
+    total_resources = 0
+    res_dist = []
+    if project_ids:
+        total_resources = await db.resources.count_documents({"project_id": {"$in": project_ids}})
+        res_pipeline = [
+            {"$match": {"project_id": {"$in": project_ids}}},
+            {"$group": {"_id": "$resource_type", "count": {"$sum": 1}}}
+        ]
+        res_dist = await db.resources.aggregate(res_pipeline).to_list(100)
+
+    # 일별 프로젝트 추이 (30일)
+    thirty_days_ago = now - timedelta(days=30)
+    daily_pipeline = [
+        {"$match": {"user_key": user_key, "created_at": {"$gte": thirty_days_ago}}},
+        {"$group": {
+            "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$created_at"}},
+            "count": {"$sum": 1}
+        }},
+        {"$sort": {"_id": 1}}
+    ]
+    daily_trend = await db.projects.aggregate(daily_pipeline).to_list(100)
+
+    # 최근 프로젝트 목록 (최근 10개)
+    recent_projects = []
+    async for p in db.projects.find({"user_key": user_key}).sort("updated_at", -1).limit(10):
+        pid = str(p["_id"])
+        slide_count = await db.generated_slides.count_documents({"project_id": pid})
+        if p.get("created_at"):
+            p["created_at"] = p["created_at"].isoformat()
+        if p.get("updated_at"):
+            p["updated_at"] = p["updated_at"].isoformat()
+        recent_projects.append({
+            "project_id": pid,
+            "name": p.get("name", ""),
+            "project_type": p.get("project_type", "slide"),
+            "status": p.get("status", "draft"),
+            "slide_count": slide_count,
+            "created_at": p.get("created_at"),
+            "updated_at": p.get("updated_at"),
+        })
+
+    return {
+        "user": user_info,
+        "total_projects": total_projects,
+        "month_projects": month_projects,
+        "generated_projects": generated_projects,
+        "total_generations": gen_slides + gen_excel + gen_docx,
+        "generation_breakdown": {"slides": gen_slides, "excel": gen_excel, "docx": gen_docx},
+        "total_resources": total_resources,
+        "project_type_distribution": type_dist,
+        "project_status_distribution": status_dist,
+        "resource_type_distribution": res_dist,
+        "daily_trend": daily_trend,
+        "recent_projects": recent_projects,
+    }

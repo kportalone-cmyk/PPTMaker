@@ -357,6 +357,30 @@ def _add_code_block(doc: Document, code_text: str):
     pPr.append(shading)
 
 
+async def create_empty_docx(project_id: str) -> str:
+    """빈 docx 파일 생성 (OnlyOffice 에디터용)"""
+    doc = Document()
+
+    # 기본 스타일 설정
+    style = doc.styles["Normal"]
+    font = style.font
+    font.name = "맑은 고딕"
+    font.size = Pt(11)
+    font.color.rgb = _COLORS["body"]
+    style.element.rPr.rFonts.set(qn("w:eastAsia"), "맑은 고딕")
+    pf = style.paragraph_format
+    pf.line_spacing = 1.6
+    pf.space_after = Pt(6)
+
+    output_dir = os.path.join(settings.UPLOAD_DIR, "documents")
+    os.makedirs(output_dir, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.docx"
+    output_path = os.path.join(output_dir, filename)
+    doc.save(output_path)
+
+    return f"/uploads/documents/{filename}"
+
+
 async def generate_docx(project_id: str) -> str:
     """generated_docx 데이터를 .docx 파일로 변환"""
     db = get_db()

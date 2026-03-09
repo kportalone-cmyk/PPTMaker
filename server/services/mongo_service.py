@@ -28,6 +28,7 @@ async def init_indexes():
     # templates 컬렉션
     await db.templates.create_index("created_at")
     await db.templates.create_index("name")
+    await db.templates.create_index("is_published")
 
     # slides 컬렉션
     await db.slides.create_index("template_id")
@@ -36,9 +37,12 @@ async def init_indexes():
     # projects 컬렉션
     await db.projects.create_index("user_key")
     await db.projects.create_index("created_at")
+    await db.projects.create_index("status")
+    await db.projects.create_index("project_type")
 
     # resources 컬렉션
     await db.resources.create_index("project_id")
+    await db.resources.create_index("resource_type")
 
     # generated_slides 컬렉션
     await db.generated_slides.create_index("project_id")

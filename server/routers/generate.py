@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from bson import ObjectId
 from datetime import datetime
-from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest, DocxModifyRequest
+from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest, DocxModifyRequest, DocxPrepareRequest
 from services.mongo_service import get_db
 from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible, get_user_by_key
 from services import redis_service
@@ -10,7 +10,7 @@ from routers.collaboration import check_project_access
 from services.template_service import recommend_slide, get_template_slides
 from services.ppt_service import generate_pptx
 from services.excel_service import generate_xlsx, auto_generate_chart_definition
-from services.word_service import generate_docx
+from services.word_service import generate_docx, create_empty_docx
 from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content, generate_excel_content_stream, modify_excel_content_stream, generate_docx_content_stream
 from services.search_service import search_web
 from services.onlyoffice_service import create_onlyoffice_document
@@ -1734,12 +1734,122 @@ async def generate_onlyoffice_xlsx_stream(jwt_token: str, data: ExcelGenerateReq
     )
 
 
-@router.post("/{jwt_token}/api/generate/onlyoffice/docx/stream")
-async def generate_onlyoffice_docx_stream(jwt_token: str, data: DocxGenerateRequest):
-    """OnlyOffice DOCX: AI 문서 생성 → DOCX 파일 → OnlyOffice 에디터"""
+def _extract_meta_incremental(text: str) -> dict | None:
+    """스트리밍 JSON 텍스트에서 meta 객체 추출"""
+    import re as _re
+    m = _re.search(r'"meta"\s*:\s*\{', text)
+    if not m:
+        return None
+    pos = m.end() - 1
+    in_string = False
+    escape_next = False
+    brace_depth = 0
+    while pos < len(text):
+        ch = text[pos]
+        if escape_next:
+            escape_next = False
+            pos += 1
+            continue
+        if in_string:
+            if ch == '\\':
+                escape_next = True
+            elif ch == '"':
+                in_string = False
+        else:
+            if ch == '"':
+                in_string = True
+            elif ch == '{':
+                brace_depth += 1
+            elif ch == '}':
+                brace_depth -= 1
+                if brace_depth == 0:
+                    meta_json = text[m.end() - 1:pos + 1]
+                    try:
+                        return json.loads(meta_json)
+                    except json.JSONDecodeError:
+                        return None
+        pos += 1
+    return None
+
+
+def _extract_sections_incremental(text: str, already_extracted: int = 0) -> list:
+    """스트리밍 JSON 텍스트에서 완성된 section 객체를 추출"""
+    import re as _re
+    sections = []
+    m = _re.search(r'"sections"\s*:\s*\[', text)
+    if not m:
+        return sections
+    pos = m.end()
+    in_string = False
+    escape_next = False
+    brace_depth = 0
+    section_start = -1
+    section_count = 0
+    while pos < len(text):
+        ch = text[pos]
+        if escape_next:
+            escape_next = False
+            pos += 1
+            continue
+        if in_string:
+            if ch == '\\':
+                escape_next = True
+            elif ch == '"':
+                in_string = False
+        else:
+            if ch == '"':
+                in_string = True
+            elif ch == '{':
+                if brace_depth == 0:
+                    section_start = pos
+                brace_depth += 1
+            elif ch == '}':
+                brace_depth -= 1
+                if brace_depth == 0 and section_start >= 0:
+                    section_count += 1
+                    if section_count > already_extracted:
+                        section_json = text[section_start:pos + 1]
+                        try:
+                            section = json.loads(section_json)
+                            if isinstance(section, dict) and "title" in section:
+                                sections.append(section)
+                        except json.JSONDecodeError:
+                            pass
+                    section_start = -1
+            elif ch == ']' and brace_depth == 0:
+                break
+        pos += 1
+    return sections
+
+
+@router.post("/{jwt_token}/api/generate/onlyoffice/docx/prepare")
+async def prepare_onlyoffice_docx(jwt_token: str, data: DocxPrepareRequest):
+    """빈 DOCX 파일 생성 + OnlyOffice 등록"""
     await get_user_key(jwt_token)
     db = get_db()
 
+    # 기존 문서 정리
+    await db.generated_docx.delete_many({"project_id": data.project_id})
+
+    # 빈 docx 생성 + OnlyOffice 등록
+    file_url = await create_empty_docx(data.project_id)
+    oo_doc = await create_onlyoffice_document(data.project_id, "docx", file_url)
+
+    await db.projects.update_one(
+        {"_id": ObjectId(data.project_id)},
+        {"$set": {"status": "preparing", "updated_at": datetime.utcnow()}}
+    )
+
+    return {"success": True, "document": oo_doc}
+
+
+@router.post("/{jwt_token}/api/generate/onlyoffice/docx/stream")
+async def generate_onlyoffice_docx_stream(jwt_token: str, data: DocxGenerateRequest):
+    """OnlyOffice DOCX: AI 문서 생성 → HTML 미리보기 → 완료 후 DOCX 파일 → OnlyOffice 에디터"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    # 기존 생성 데이터 정리 (prepare 단계 없이 직접 스트리밍)
     await db.generated_docx.delete_many({"project_id": data.project_id})
 
     cursor = db.resources.find({"project_id": data.project_id})
@@ -1797,13 +1907,35 @@ async def generate_onlyoffice_docx_stream(jwt_token: str, data: DocxGenerateRequ
             llm_result = None
             chunk_count = 0
             cancelled = False
+            full_text = ""
+            sections_emitted = 0
+            meta_emitted = False
+
             async for event_type, event_data in generate_docx_content_stream(
                 combined_text, data.instructions, data.lang,
                 section_count=data.section_count,
             ):
                 if event_type == "delta":
+                    full_text += event_data
                     yield _sse("delta", {"text": event_data})
                     chunk_count += 1
+
+                    # 메타 데이터 감지
+                    if not meta_emitted:
+                        meta = _extract_meta_incremental(full_text)
+                        if meta:
+                            meta_emitted = True
+                            yield _sse("meta_ready", {"meta": meta})
+
+                    # 섹션 증분 감지 (HTML 미리보기용 - docx 재생성 없이 섹션 데이터만 전송)
+                    new_sections = _extract_sections_incremental(full_text, sections_emitted)
+                    for section in new_sections:
+                        sections_emitted += 1
+                        yield _sse("section_ready", {
+                            "index": sections_emitted,
+                            "section": section,
+                        })
+
                     if chunk_count % 50 == 0:
                         if await _check_cancelled(db, data.project_id, generation_id):
                             cancelled = True
@@ -1812,6 +1944,23 @@ async def generate_onlyoffice_docx_stream(jwt_token: str, data: DocxGenerateRequ
                     llm_result = event_data
 
             if cancelled:
+                # 중단 시에도 그때까지 생성된 섹션으로 .docx 생성
+                partial_sections = _extract_sections_incremental(full_text, 0)
+                partial_meta = _extract_meta_incremental(full_text)
+                if partial_sections:
+                    try:
+                        await db.generated_docx.insert_one({
+                            "project_id": data.project_id,
+                            "sections": partial_sections,
+                            "meta": partial_meta or {},
+                            "created_at": datetime.utcnow(),
+                            "updated_at": datetime.utcnow(),
+                        })
+                        file_url = await generate_docx(data.project_id)
+                        oo_doc = await create_onlyoffice_document(data.project_id, "docx", file_url)
+                        yield _sse("file_updated", {"project_id": data.project_id, "document": oo_doc})
+                    except Exception as e:
+                        print(f"[OO-DOCX] 중단 시 partial docx 저장 실패: {e}")
                 yield _sse("stopped", {"message": "생성이 중단되었습니다."})
                 await _set_stopped(db, data.project_id)
                 return
@@ -1820,17 +1969,7 @@ async def generate_onlyoffice_docx_stream(jwt_token: str, data: DocxGenerateRequ
                 yield _sse("error", {"message": "문서 생성 실패"})
                 return
 
-            yield _sse("parsing", {"message": "문서를 구성하고 있습니다..."})
-
-            sections = llm_result.get("sections", [])
-            for idx, section in enumerate(sections):
-                yield _sse("item_progress", {
-                    "current": idx + 1,
-                    "total": len(sections),
-                    "title": section.get("title", f"섹션 {idx + 1}"),
-                    "type": "section"
-                })
-
+            # DB에 저장
             docx_doc = {
                 "project_id": data.project_id,
                 "sections": llm_result.get("sections", []),
@@ -1849,12 +1988,12 @@ async def generate_onlyoffice_docx_stream(jwt_token: str, data: DocxGenerateRequ
                 {"$set": update_fields}
             )
 
-            # DOCX 파일 생성 + OnlyOffice 등록
-            yield _sse("file_creating", {"message": "파일을 생성하고 있습니다..."})
+            # 최종 DOCX 파일 생성 + OnlyOffice 업데이트
+            yield _sse("file_creating", {"message": "최종 문서를 생성하고 있습니다..."})
             try:
                 file_url = await generate_docx(data.project_id)
                 oo_doc = await create_onlyoffice_document(data.project_id, "docx", file_url)
-                yield _sse("onlyoffice_ready", {"project_id": data.project_id, "document": oo_doc})
+                yield _sse("file_updated", {"project_id": data.project_id, "document": oo_doc})
             except Exception as e:
                 print(f"[OnlyOffice-DOCX] 파일 생성 실패: {e}")
                 yield _sse("error", {"message": f"파일 생성 실패: {str(e)}"})

@@ -81,3 +81,7 @@ class DocxModifyRequest(BaseModel):
     instruction: str
     current_data: dict
     lang: str = ""
+
+
+class DocxPrepareRequest(BaseModel):
+    project_id: str

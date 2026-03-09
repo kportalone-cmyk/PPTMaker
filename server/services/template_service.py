@@ -85,7 +85,8 @@ async def get_all_templates_summary() -> list:
         return cached
 
     db = get_db()
-    cursor = db.templates.find().sort("name", 1)
+    # 사용자에게는 게시된 템플릿만 표시
+    cursor = db.templates.find({"is_published": True}).sort("name", 1)
     templates = []
     async for t in cursor:
         t["_id"] = str(t["_id"])

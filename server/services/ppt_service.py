@@ -113,11 +113,12 @@ async def generate_pptx(project_id: str) -> str:
                 except Exception:
                     pass
 
-        # 오브젝트 렌더링 (items 소진된 초과 subtitle/description 제거)
+        # 오브젝트 렌더링 (z_index 순서로 정렬, items 소진된 초과 subtitle/description 제거)
+        objects_sorted = sorted(gen_slide.get("objects", []), key=lambda o: o.get("z_index", 10))
         items = gen_slide.get("items", [])
         sub_idx = 0
         desc_idx = 0
-        for obj in gen_slide.get("objects", []):
+        for obj in objects_sorted:
             role = obj.get("role", "") or obj.get("_auto_role", "")
             if items and role == "subtitle":
                 if sub_idx >= len(items):
