@@ -1480,8 +1480,22 @@ async def _build_excel_modify_prompts(
 
     sheets = current_data.get("sheets", [])
 
-    # 타겟 시트만 전송 (토큰 절약)
-    if target_sheet_index is not None and 0 <= target_sheet_index < len(sheets):
+    # 시트 구조 변경 키워드 감지 (추가/삭제/이동 등)
+    _sheet_struct_keywords = [
+        "시트 추가", "시트를 추가", "시트 삭제", "시트를 삭제",
+        "시트 제거", "시트를 제거", "시트 이동", "시트를 이동",
+        "시트 복사", "시트를 복사", "새 시트", "새로운 시트",
+        "마지막에 시트", "마지막 시트", "앞에 시트", "뒤에 시트",
+        "sheet add", "add sheet", "new sheet", "remove sheet", "delete sheet",
+        "시트를 만들", "시트 만들", "시트를 생성", "시트 생성",
+        "시트를 넣", "시트 넣", "시트를 붙", "시트 붙",
+    ]
+    _is_sheet_structure_change = any(kw in instruction.lower() for kw in _sheet_struct_keywords)
+
+    # 타겟 시트만 전송 (토큰 절약) — 단, 시트 구조 변경 요청이면 전체 전송
+    if (target_sheet_index is not None
+            and 0 <= target_sheet_index < len(sheets)
+            and not _is_sheet_structure_change):
         target_sheet = sheets[target_sheet_index]
         # 타겟 시트 데이터만 포함, 다른 시트 이름만 참조로 제공
         other_sheet_names = [s.get("name", f"Sheet{i+1}") for i, s in enumerate(sheets) if i != target_sheet_index]
@@ -1494,6 +1508,8 @@ async def _build_excel_modify_prompts(
             send_data["other_sheets_reference"] = other_sheet_names
         print(f"[LLM-Excel-Modify] 타겟 시트만 전송: index={target_sheet_index}, name={target_sheet.get('name', '?')}")
     else:
+        if _is_sheet_structure_change:
+            print(f"[LLM-Excel-Modify] 시트 구조 변경 감지 → 전체 시트 전송 ({len(sheets)}개)")
         send_data = current_data
 
     current_excel_json = json.dumps(send_data, ensure_ascii=False, indent=2)
@@ -1728,9 +1744,21 @@ async def generate_docx_content_stream(
     prompt_model = await get_prompt_model("docx_generation_system")
     effective_model = prompt_model or settings.ANTHROPIC_MODEL
 
+    # 페이지 수에 따라 max_tokens 동적 조절
+    max_tokens = 16384
+    if section_count and section_count != "auto":
+        try:
+            pages = int(section_count)
+            if pages >= 20:
+                max_tokens = 32768
+            elif pages >= 10:
+                max_tokens = 24576
+        except ValueError:
+            pass
+
     try:
         full_text = ""
-        async for delta in _stream_claude_api(system_prompt, user_prompt, model=effective_model, max_tokens=16384):
+        async for delta in _stream_claude_api(system_prompt, user_prompt, model=effective_model, max_tokens=max_tokens):
             full_text += delta
             yield ("delta", delta)
 
@@ -1756,7 +1784,7 @@ async def _build_docx_generation_prompts(
 ) -> tuple[str, str]:
     """Word 문서 생성용 프롬프트 빌드"""
     if section_count and section_count != "auto":
-        section_count_instruction = f"\n9. **[필수] 섹션을 정확히 {section_count}개 생성하세요.**"
+        section_count_instruction = f"\n9. **[필수] 약 {section_count}페이지 분량의 문서를 생성하세요. A4 기준 1페이지는 약 500~600자입니다. 총 분량이 약 {section_count}페이지가 되도록 섹션 수와 각 섹션의 내용 길이를 충분히 조절하세요.**"
     else:
         section_count_instruction = ""
 
@@ -1854,3 +1882,58 @@ def _docx_fallback(resources_text: str) -> dict:
             }
         ],
     }
+
+
+# ============ 텍스트 리라이트 (선택 영역 수정) ============
+
+async def rewrite_text_stream(
+    selected_text: str,
+    instructions: str,
+    lang: str = "",
+    context_text: str = "",
+):
+    """선택된 텍스트를 AI로 리라이트 (스트리밍)
+
+    Yields:
+        ("delta", str) - 스트리밍 텍스트 청크
+        ("result", str) - 최종 완성 텍스트
+    """
+    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+        yield ("result", selected_text)
+        return
+
+    output_lang = lang or (settings.SUPPORTED_LANGS[0] if settings.SUPPORTED_LANGS else "ko")
+    lang_instruction = {
+        "ko": "모든 콘텐츠를 한국어로 작성하세요.",
+        "en": "Write all content in English.",
+        "ja": "すべてのコンテンツを日本語で作成してください。",
+        "zh": "请用中文撰写所有内容。",
+    }.get(output_lang, "모든 콘텐츠를 한국어로 작성하세요.")
+
+    system_template = await get_prompt_content("rewrite_system")
+    user_template = await get_prompt_content("rewrite_user")
+
+    system_prompt = system_template.format(lang_instruction=lang_instruction)
+    user_prompt = user_template.format(
+        lang_instruction=lang_instruction,
+        instructions=instructions,
+        selected_text=selected_text[:8000],
+        context_text=context_text[:12000] if context_text else "(주변 문맥 없음)",
+    )
+
+    prompt_model = await get_prompt_model("rewrite_system")
+    effective_model = prompt_model or settings.ANTHROPIC_MODEL
+
+    try:
+        full_text = ""
+        async for delta in _stream_claude_api(system_prompt, user_prompt, model=effective_model, max_tokens=8192):
+            full_text += delta
+            yield ("delta", delta)
+
+        print(f"[LLM-Rewrite] 완료 - 응답 길이: {len(full_text)} chars (model: {effective_model})")
+        yield ("result", full_text)
+    except Exception as e:
+        import traceback
+        print(f"[LLM-Rewrite] 호출 실패: {e}")
+        traceback.print_exc()
+        yield ("result", selected_text)

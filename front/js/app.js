@@ -1582,6 +1582,7 @@ function renderProjectWorkspace() {
     $('#onlyofficeWorkspace').hide();
     $('#wordWorkspace').hide();
     $('#btnModifyExcel').hide();
+    _destroyExcelCharts();
     // 전체화면 상태 해제
     $('#appView').removeClass('canvas-fullscreen');
     $('.canvas-fullscreen-exit').remove();
@@ -1595,6 +1596,7 @@ function renderProjectWorkspace() {
         $('#onlyofficeWorkspace').show();
         $('#templateSelectBtn').hide();
         $('#slideCountSelect').hide();
+        $('#docxPageCountSelect').hide();
         $('#btnAddSlide').hide();
 
         const ooLabels = {
@@ -1616,10 +1618,14 @@ function renderProjectWorkspace() {
         $('#onlyofficeTitle').text(ooTitles[projectType] || '문서');
         $('#instructionsInput').attr('placeholder', ooPlaceholders[projectType] || '지침을 입력하세요...');
 
-        // onlyoffice_pptx는 템플릿 선택 필요
+        // onlyoffice_pptx는 템플릿 선택 + 슬라이드 수 필요
         if (projectType === 'onlyoffice_pptx') {
             $('#templateSelectBtn').show();
             $('#slideCountSelect').show();
+        }
+        // onlyoffice_docx는 페이지 수 선택 표시
+        if (projectType === 'onlyoffice_docx') {
+            $('#docxPageCountSelect').show();
         }
 
         // OnlyOffice 워크스페이스 초기화
@@ -1631,6 +1637,7 @@ function renderProjectWorkspace() {
         $('#excelWorkspace').show();
         $('#templateSelectBtn').hide();
         $('#slideCountSelect').hide();
+        $('#docxPageCountSelect').hide();
         $('#btnAddSlide').hide();
         $('#btnGenerate span').text(t('generateExcel'));
         $('#instructionsInput').attr('placeholder', '엑셀에 정리할 내용에 대한 지침을 입력하세요...');
@@ -1643,6 +1650,7 @@ function renderProjectWorkspace() {
         $('#wordWorkspace').show();
         $('#templateSelectBtn').hide();
         $('#slideCountSelect').hide();
+        $('#docxPageCountSelect').show();
         $('#btnAddSlide').hide();
         $('#btnGenerate span').text(t('generateWord'));
         $('#instructionsInput').attr('placeholder', '문서에 작성할 내용에 대한 지침을 입력하세요...');
@@ -1652,6 +1660,7 @@ function renderProjectWorkspace() {
         // 슬라이드 모드
         $('#templateSelectBtn').show();
         $('#slideCountSelect').show();
+        $('#docxPageCountSelect').hide();
         $('#btnAddSlide').show();
         $('#btnGenerate span').text(t('generateBtn'));
         $('#instructionsInput').attr('placeholder', t('instructionsPlaceholder'));
@@ -6459,6 +6468,7 @@ async function initExcelWorkspace() {
             }
             $('#instructionsInput').attr('placeholder', t('excelModifyPlaceholder'));
         } else {
+            _destroyExcelCharts();
             initUniver();
             $('#btnDownloadXlsx').hide();
             $('#btnShareExcel').hide();
@@ -7472,6 +7482,8 @@ function _hideWordProgress() {
 // ====== 워드 실시간 스트리밍 프리뷰 ======
 
 let _wordStreamBuffer = '';
+let _wordDeltaCount = 0;
+let _wordRequestedTotal = 0; // 사용자가 요청한 전체 섹션 수
 let _wordStreamRenderTimer = null;
 const _wordChartCache = new Map(); // 차트 이미지 캐시 (JSON → dataURL)
 let _pendingChartConfigs = []; // 현재 렌더 사이클의 대기 차트 configs
@@ -7994,6 +8006,7 @@ async function initWordWorkspace() {
             _ckEditorInstance.setData(html);
             $('#btnDownloadDocx').show();
             $('#btnShareWord').show();
+            $('#btnRewriteWord').css('display', 'flex');
             if (state.generatedDocx.meta && state.generatedDocx.meta.title) {
                 $('#wordTitle').text(state.generatedDocx.meta.title);
             }
@@ -8001,6 +8014,7 @@ async function initWordWorkspace() {
         } else {
             $('#btnDownloadDocx').hide();
             $('#btnShareWord').hide();
+            $('#btnRewriteWord').hide();
             $('#wordTitle').text(t('typeWord'));
         }
     } catch (e) {
@@ -8383,6 +8397,8 @@ async function generateWord() {
     }
 
     _isGenerating = true;
+    _wordDeltaCount = 0;
+    _wordRequestedTotal = parseInt($('#docxPageCountSelect').val()) || 0; // 요청한 전체 섹션 수
     state.generatedDocx = null;
     $('#btnDownloadDocx').hide();
 
@@ -8402,6 +8418,7 @@ async function generateWord() {
                 project_id: state.currentProject._id,
                 instructions: instructions,
                 lang: lang,
+                section_count: $('#docxPageCountSelect').val(),
             }),
             signal: _abortController.signal,
         });
@@ -8576,10 +8593,24 @@ function _handleWordSSEEvent(evt) {
             break;
 
         case 'delta':
-            _showWordProgress(t('wordStreaming'), '');
             // 실시간 스트리밍 텍스트 표시
             if (evt.text) {
                 _appendWordStreamDelta(evt.text);
+            }
+            // 섹션 진행률 표시 (10 delta마다 체크)
+            _wordDeltaCount = (_wordDeltaCount || 0) + 1;
+            if (_wordDeltaCount % 10 === 0) {
+                const wSecIdx = _wordStreamBuffer.indexOf('"sections"');
+                if (wSecIdx >= 0) {
+                    const wSecText = _wordStreamBuffer.substring(wSecIdx);
+                    const wContentCount = (wSecText.match(/"content"\s*:/g) || []).length;
+                    const wTotalFromBuffer = (wSecText.match(/"title"\s*:/g) || []).length;
+                    // 요청한 전체 섹션 수 우선, 없으면 버퍼에서 추정
+                    const wTotal = _wordRequestedTotal > 0 ? Math.max(_wordRequestedTotal, wContentCount) : wTotalFromBuffer;
+                    if (wTotal > 0) {
+                        _showWordProgress(`섹션 작성 중 (${wContentCount}/${wTotal})`, '');
+                    }
+                }
             }
             break;
 
@@ -8617,6 +8648,7 @@ function _handleWordSSEEvent(evt) {
 
             $('#btnDownloadDocx').show();
             $('#btnShareWord').show();
+            $('#btnRewriteWord').css('display', 'flex');
             if (state.generatedDocx.meta && state.generatedDocx.meta.title) {
                 $('#wordTitle').text(state.generatedDocx.meta.title);
             }
@@ -8807,6 +8839,284 @@ async function openOnlyOfficeEditor(projectId) {
         console.error('[OnlyOffice] 에디터 열기 실패:', e);
         showToast('OnlyOffice 에디터를 열 수 없습니다: ' + e.message, 'error');
     }
+}
+
+// ============ AI 텍스트 리라이트 (선택 영역 수정) ============
+
+let _rewriteSelectedText = '';
+let _rewriteResultText = '';
+let _rewriteSource = ''; // 'ckeditor' | 'manual'
+
+function _getDocumentContextText() {
+    // CKEditor: 전체 텍스트 추출
+    if (_ckEditorInstance && $('#wordWorkspace').is(':visible')) {
+        try {
+            var root = _ckEditorInstance.model.document.getRoot();
+            var text = '';
+            for (var child of root.getChildren()) {
+                var walker = child.getChildren ? child.getChildren() : [];
+                for (var node of walker) {
+                    if (node.is('$text') || node.is('$textProxy')) text += node.data;
+                }
+                text += '\n';
+            }
+            return text.trim();
+        } catch (e) {
+            // 폴백: HTML에서 텍스트 추출
+            try {
+                var html = _ckEditorInstance.getData();
+                var tmp = document.createElement('div');
+                tmp.innerHTML = html;
+                return (tmp.textContent || tmp.innerText || '').trim();
+            } catch (e2) {}
+        }
+    }
+    // OnlyOffice: generated_docx 데이터에서 추출
+    if (state.generatedDocx && state.generatedDocx.sections) {
+        var parts = [];
+        if (state.generatedDocx.meta) {
+            if (state.generatedDocx.meta.title) parts.push(state.generatedDocx.meta.title);
+            if (state.generatedDocx.meta.description) parts.push(state.generatedDocx.meta.description);
+        }
+        state.generatedDocx.sections.forEach(function(sec) {
+            if (sec.title) parts.push(sec.title);
+            if (sec.content) parts.push(sec.content);
+        });
+        return parts.join('\n\n');
+    }
+    return '';
+}
+
+function openRewriteModal() {
+    console.log('[Rewrite] openRewriteModal 호출됨');
+    try {
+        // 모달 초기화
+        _rewriteSelectedText = '';
+        _rewriteResultText = '';
+        _rewriteSource = '';
+
+        _resetRewriteModalUI();
+
+        // 1) CKEditor (일반 워드)
+        if (_ckEditorInstance && $('#wordWorkspace').is(':visible')) {
+            _rewriteSource = 'ckeditor';
+            var sel = _ckEditorInstance.model.document.selection;
+            var range = sel.getFirstRange();
+            if (range && !range.isCollapsed) {
+                var selectedText = '';
+                for (var item of range.getItems()) {
+                    if (item.is('$textProxy')) selectedText += item.data;
+                }
+                if (selectedText.trim()) {
+                    _rewriteSelectedText = selectedText;
+                    $('#rewriteSelectedText').text(selectedText);
+                    _showRewriteModalNow();
+                    return;
+                }
+            }
+            _showRewriteManualInput('텍스트를 선택한 후 다시 시도하거나, 수정할 텍스트를 직접 입력하세요.');
+            _showRewriteModalNow();
+            return;
+        }
+
+        // 2) 그 외 수동 입력
+        _rewriteSource = 'manual';
+        _showRewriteManualInput('');
+        _showRewriteModalNow();
+    } catch (e) {
+        console.error('[Rewrite] openRewriteModal 에러:', e);
+        showToast('AI 수정 기능 오류: ' + e.message, 'error');
+    }
+}
+
+function _resetRewriteModalUI() {
+    if ($('#rewriteSelectedText').is('textarea')) {
+        $('#rewriteSelectedText').replaceWith(
+            '<div id="rewriteSelectedText" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:13px;color:var(--text);max-height:120px;overflow-y:auto;white-space:pre-wrap;"></div>'
+        );
+    }
+    $('#rewriteSelectedText').html('<span style="color:#94a3b8;">선택된 텍스트를 가져오는 중...</span>');
+    $('#rewriteInstructions').val('');
+    $('#rewritePreview').hide();
+    $('#rewriteResultText').text('');
+    $('#btnRewriteApply').hide();
+    $('#btnRewriteSubmit').show().prop('disabled', false).text('AI 수정 시작');
+}
+
+function _showRewriteModalNow() {
+    $('#rewriteModal').css({'display': 'flex', 'z-index': '99999'});
+    setTimeout(function() { $('#rewriteInstructions').focus(); }, 300);
+}
+
+function _showRewriteManualInput(msg) {
+    var placeholder = msg || '수정할 텍스트를 여기에 붙여넣으세요.';
+    $('#rewriteSelectedText').replaceWith(
+        '<textarea id="rewriteSelectedText" rows="4" placeholder="' + placeholder + '" ' +
+        'style="width:100%;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:13px;color:var(--text);max-height:120px;resize:vertical;outline:none;box-sizing:border-box;" ' +
+        'onfocus="this.style.borderColor=\'#6366f1\'" onblur="this.style.borderColor=\'\'"></textarea>'
+    );
+}
+
+function closeRewriteModal() {
+    $('#rewriteModal').css('display', 'none');
+    _rewriteSelectedText = '';
+    _rewriteResultText = '';
+}
+
+async function submitRewrite() {
+    var instructions = $('#rewriteInstructions').val().trim();
+    if (!instructions) {
+        showToast('수정 지시사항을 입력하세요.', 'warning');
+        $('#rewriteInstructions').focus();
+        return;
+    }
+
+    if (!_rewriteSelectedText && $('#rewriteSelectedText').is('textarea')) {
+        _rewriteSelectedText = $('#rewriteSelectedText').val().trim();
+    }
+    if (!_rewriteSelectedText) {
+        showToast('수정할 텍스트를 입력하세요.', 'warning');
+        return;
+    }
+
+    var lang = $('#langSelect').val() || 'ko';
+    $('#btnRewriteSubmit').prop('disabled', true).text('수정 중...');
+    $('#btnRewriteApply').hide();
+    $('#rewritePreview').show();
+    $('#rewriteResultText').text('');
+    _rewriteResultText = '';
+
+    // 전체 문서 내용을 문맥으로 전달
+    var contextText = _getDocumentContextText();
+
+    try {
+        var response = await fetch('/' + state.jwtToken + '/api/generate/rewrite/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                project_id: state.currentProject ? state.currentProject._id : '',
+                selected_text: _rewriteSelectedText,
+                instructions: instructions,
+                lang: lang,
+                context_text: contextText,
+            }),
+        });
+
+        if (!response.ok) {
+            var err = await response.json().catch(function() { return {}; });
+            throw new Error(err.detail || 'Rewrite failed');
+        }
+
+        var reader = response.body.getReader();
+        var decoder = new TextDecoder();
+        var buffer = '';
+
+        while (true) {
+            var chunk = await reader.read();
+            if (chunk.done) break;
+            buffer += decoder.decode(chunk.value, { stream: true });
+            var lines = buffer.split('\n');
+            buffer = lines.pop();
+
+            for (var i = 0; i < lines.length; i++) {
+                var line = lines[i];
+                if (!line.startsWith('data: ')) continue;
+                var evt;
+                try { evt = JSON.parse(line.substring(6)); } catch(e) { continue; }
+
+                if (evt.event === 'delta') {
+                    _rewriteResultText += (evt.text || '');
+                    $('#rewriteResultText').text(_rewriteResultText);
+                    var el = document.getElementById('rewriteResultText');
+                    if (el) el.scrollTop = el.scrollHeight;
+                } else if (evt.event === 'done') {
+                    _rewriteResultText = evt.text || _rewriteResultText;
+                    $('#rewriteResultText').text(_rewriteResultText);
+                } else if (evt.event === 'error') {
+                    showToast(evt.message || '수정 실패', 'error');
+                }
+            }
+        }
+
+        if (_rewriteResultText.trim()) {
+            $('#btnRewriteSubmit').text('다시 수정').prop('disabled', false);
+            $('#btnRewriteApply').show();
+        } else {
+            $('#btnRewriteSubmit').text('AI 수정 시작').prop('disabled', false);
+        }
+    } catch (e) {
+        console.error('[Rewrite] Error:', e);
+        showToast('텍스트 수정 중 오류가 발생했습니다: ' + e.message, 'error');
+        $('#btnRewriteSubmit').text('AI 수정 시작').prop('disabled', false);
+    }
+}
+
+function applyRewrite() {
+    if (!_rewriteResultText.trim()) {
+        showToast('적용할 수정 결과가 없습니다.', 'warning');
+        return;
+    }
+
+    // CKEditor (일반 워드)
+    if (_rewriteSource === 'ckeditor' && _ckEditorInstance) {
+        try {
+            var editor = _ckEditorInstance;
+            var html = _markdownToSimpleHtml(_rewriteResultText);
+            var viewFragment = editor.data.processor.toView(html);
+            var modelFragment = editor.data.toModel(viewFragment);
+            editor.model.change(function(writer) {
+                editor.model.insertContent(modelFragment);
+            });
+            showToast('텍스트가 수정되었습니다.', 'success');
+            closeRewriteModal();
+        } catch (e) {
+            console.error('[Rewrite] CKEditor 적용 실패:', e);
+            _copyToClipboard(_rewriteResultText);
+            showToast('결과가 클립보드에 복사되었습니다. Ctrl+V로 붙여넣으세요.', 'info');
+            closeRewriteModal();
+        }
+        return;
+    }
+
+    // 폴백: 클립보드 복사
+    _copyToClipboard(_rewriteResultText);
+    showToast('결과가 클립보드에 복사되었습니다. Ctrl+V로 붙여넣으세요.', 'info');
+    closeRewriteModal();
+}
+
+function _copyToClipboard(text) {
+    try {
+        navigator.clipboard.writeText(text);
+    } catch (e) {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+    }
+}
+
+function _markdownToSimpleHtml(md) {
+    // 간단한 마크다운 → HTML 변환
+    let html = md;
+    // 빈줄로 문단 구분
+    html = html.replace(/\n{2,}/g, '</p><p>');
+    // 굵게
+    html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+    // 기울임
+    html = html.replace(/\*(.+?)\*/g, '<i>$1</i>');
+    // 불릿 리스트
+    html = html.replace(/^[-*]\s+(.+)$/gm, '<li>$1</li>');
+    html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+    // 번호 리스트
+    html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+    // 줄바꿈
+    html = html.replace(/\n/g, '<br>');
+    // 정리
+    html = '<p>' + html + '</p>';
+    html = html.replace(/<p><\/p>/g, '');
+    return html;
 }
 
 async function initOnlyOfficeWorkspace() {
@@ -9190,10 +9500,12 @@ async function generateOnlyOfficeDocx() {
     destroyOnlyOfficeEditor();
     _showOoDocxHtmlPreview();
 
+    const sectionCount = $('#docxPageCountSelect').val();
     await _onlyofficeDocxHtmlStream('/api/generate/onlyoffice/docx/stream', {
         project_id: state.currentProject._id,
         instructions,
         lang,
+        section_count: sectionCount,
     });
 }
 
@@ -9323,6 +9635,7 @@ async function _onlyofficeDocxStreamWithEditor(url, body) {
         const decoder = new TextDecoder();
         let buffer = '';
         let sectionCount = 0;
+        const _ooStreamRequestedTotal = parseInt(body.slide_count || body.section_count) || 0; // 요청한 전체 수
 
         while (true) {
             const { done, value } = await reader.read();
@@ -9355,7 +9668,8 @@ async function _onlyofficeDocxStreamWithEditor(url, body) {
                     case 'section_ready':
                         sectionCount++;
                         const section = evt.section;
-                        $('#ooStreamMsg').text(`섹션 ${sectionCount} 작성 완료: ${section.title || ''}`);
+                        const _ooTotal = _ooStreamRequestedTotal > 0 ? Math.max(_ooStreamRequestedTotal, sectionCount) : sectionCount;
+                        $('#ooStreamMsg').text(`섹션 작성 중 (${sectionCount}/${_ooTotal}): ${section.title || ''}`);
                         // 1. 커넥터로 실시간 삽입 시도
                         if (_ooConnector) {
                             _insertSectionViaConnector(section, sectionCount === 1);
@@ -9748,17 +10062,26 @@ function _appendOoDocxDelta(text) {
 function _renderOoDocxPreview() {
     // Word 모듈의 기존 렌더링 함수 재사용
     const cleaned = _cleanStreamingJsonToReadable(_ooDocxStreamBuffer);
-    // 차트 설정 임시 교체
-    const savedChartCache = _wordChartCache;
+
+    // _streamingMarkdownToHtml는 _wordChartCache(const Map)와 _pendingChartConfigs(let)를 사용
+    // OO용 차트 캐시를 임시로 주입하고, 호출 후 복원
+    const savedCacheEntries = new Map(_wordChartCache);
     const savedPending = _pendingChartConfigs;
-    _wordChartCache = _ooDocxChartCache;
+    _wordChartCache.clear();
+    _ooDocxChartCache.forEach((v, k) => _wordChartCache.set(k, v));
+    // _streamingMarkdownToHtml 내부에서 _pendingChartConfigs = [] 재할당됨
     _pendingChartConfigs = _ooDocxPendingCharts;
 
     const html = _streamingMarkdownToHtml(cleaned);
 
+    // 함수 내부에서 _pendingChartConfigs가 새 배열로 교체되었으므로 캡처
     _ooDocxPendingCharts = _pendingChartConfigs;
-    _wordChartCache = savedChartCache;
+    // word 쪽 원래 상태 복원
     _pendingChartConfigs = savedPending;
+    _ooDocxChartCache.clear();
+    _wordChartCache.forEach((v, k) => _ooDocxChartCache.set(k, v));
+    _wordChartCache.clear();
+    savedCacheEntries.forEach((v, k) => _wordChartCache.set(k, v));
 
     const container = document.getElementById('ooDocxPreviewContent');
     if (!container) return;
@@ -9806,6 +10129,102 @@ function _renderOoDocxInlineCharts(container) {
     });
 }
 
+function _showOoDocxLoadingOverlay(msg) {
+    // 미리보기 위에 로딩 오버레이 표시
+    if ($('#ooDocxLoadingOverlay').length) {
+        $('#ooDocxLoadingMsg').text(msg);
+        return;
+    }
+    $('#ooDocxPreviewWrap').append(
+        '<div id="ooDocxLoadingOverlay" class="oo-docx-loading-overlay">' +
+            '<div class="oo-docx-loading-card">' +
+                '<div class="oo-docx-loading-pulse"></div>' +
+                '<div class="oo-docx-loading-icon">' +
+                    '<svg width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">' +
+                        '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>' +
+                        '<polyline points="14 2 14 8 20 8"/>' +
+                        '<line x1="16" y1="13" x2="8" y2="13"/>' +
+                        '<line x1="16" y1="17" x2="8" y2="17"/>' +
+                        '<polyline points="10 9 9 9 8 9"/>' +
+                    '</svg>' +
+                '</div>' +
+                '<p id="ooDocxLoadingMsg" class="oo-docx-loading-msg">' + (msg || '') + '</p>' +
+                '<div class="oo-docx-loading-dots"><span></span><span></span><span></span></div>' +
+            '</div>' +
+        '</div>'
+    );
+}
+
+function _updateOoDocxLoadingMsg(msg) {
+    $('#ooDocxLoadingMsg').text(msg);
+}
+
+function _removeOoDocxLoadingOverlay() {
+    $('#ooDocxLoadingOverlay').remove();
+}
+
+async function _loadOoEditorBehindPreview(projectId) {
+    // 미리보기 뒤에 에디터를 로드하고, onDocumentReady에서 미리보기 제거
+    try {
+        const res = await apiGet(`/api/onlyoffice/${projectId}/config`);
+        const config = res.config;
+        const onlyofficeUrl = res.onlyoffice_url;
+
+        await loadOnlyOfficeScript(onlyofficeUrl);
+
+        // 기존 에디터 정리
+        if (state.onlyofficeEditor) {
+            try { state.onlyofficeEditor.destroyEditor(); } catch (e) {}
+            state.onlyofficeEditor = null;
+        }
+
+        // 미리보기 뒤에 에디터 div 삽입 (z-index로 미리보기 아래 위치)
+        if (!$('#ooEditorDiv').length) {
+            $('#onlyofficeContainer').prepend('<div id="ooEditorDiv" style="width:100%;height:100%;position:absolute;top:0;left:0;z-index:0;"></div>');
+        }
+        // 미리보기를 위에 표시
+        $('#ooDocxPreviewWrap').css({ position: 'relative', 'z-index': '10' });
+
+        config.events = {
+            onAppReady: function() {
+                console.log('[OO-DocxPreview] 에디터 준비 완료');
+            },
+            onDocumentReady: function() {
+                console.log('[OO-DocxPreview] 문서 로드 완료 → 미리보기 제거');
+                $('#btnDownloadOO').show();
+                $('#btnFullscreenOO').show();
+                // 미리보기 + 로딩 오버레이 제거, 에디터 표시
+                $('#ooDocxPreviewWrap').fadeOut(400, function() {
+                    $(this).remove();
+                    // 에디터 div를 정상 위치로
+                    $('#ooEditorDiv').css({ position: '', top: '', left: '', 'z-index': '' });
+                });
+                showToast('문서 생성 완료!', 'success');
+            },
+            onError: function(event) {
+                console.error('[OO-DocxPreview] 에디터 오류:', event.data);
+                _removeOoDocxLoadingOverlay();
+                $('#ooDocxPreviewWrap').remove();
+                $('#ooEditorDiv').css({ position: '', top: '', left: '', 'z-index': '' });
+                showToast('OnlyOffice 에디터 오류가 발생했습니다', 'error');
+            },
+        };
+
+        state.onlyofficeEditor = new DocsAPI.DocEditor('ooEditorDiv', config);
+
+        setTimeout(function() {
+            var ooIframe = document.querySelector('#ooEditorDiv iframe');
+            if (ooIframe) ooIframe.setAttribute('allow', 'clipboard-read; clipboard-write; unload');
+        }, 500);
+
+    } catch (e) {
+        console.error('[OO-DocxPreview] 에디터 로드 실패:', e);
+        _removeOoDocxLoadingOverlay();
+        $('#ooDocxPreviewWrap').remove();
+        showToast('에디터 로드 실패: ' + e.message, 'error');
+    }
+}
+
 async function _onlyofficeDocxHtmlStream(url, body) {
     try {
         const response = await fetch(`/${state.jwtToken}${url}`, {
@@ -9833,6 +10252,9 @@ async function _onlyofficeDocxHtmlStream(url, body) {
         const decoder = new TextDecoder();
         let buffer = '';
         let sectionCount = 0;
+        const _ooDocxRequestedTotal = parseInt(body.section_count) || 0; // 사용자가 요청한 전체 섹션 수
+        let _ooDocxTotalSections = 0; // delta에서 지속 추적
+        let _ooDocxDeltaCount = 0;
 
         while (true) {
             const { done, value } = await reader.read();
@@ -9858,6 +10280,15 @@ async function _onlyofficeDocxHtmlStream(url, body) {
                         break;
                     case 'delta':
                         _appendOoDocxDelta(evt.text || '');
+                        // 5 delta마다 전체 섹션 수 추정 업데이트
+                        _ooDocxDeltaCount++;
+                        if (_ooDocxDeltaCount % 5 === 0) {
+                            const _si = _ooDocxStreamBuffer.indexOf('"sections"');
+                            if (_si >= 0) {
+                                const _st = _ooDocxStreamBuffer.substring(_si);
+                                _ooDocxTotalSections = (_st.match(/"title"\s*:/g) || []).length;
+                            }
+                        }
                         break;
                     case 'meta_ready':
                         // meta는 스트리밍 텍스트에서 자동 추출되어 표시됨
@@ -9865,10 +10296,20 @@ async function _onlyofficeDocxHtmlStream(url, body) {
                     case 'section_ready':
                         sectionCount++;
                         const section = evt.section;
-                        $('#ooDocxPreviewMsg').text(`섹션 ${sectionCount} 작성 완료: ${section.title || ''}`);
+                        // 요청한 전체 섹션 수를 기준으로, 없으면 버퍼에서 추정
+                        let total = _ooDocxRequestedTotal;
+                        if (!total) {
+                            const _si2 = _ooDocxStreamBuffer.indexOf('"sections"');
+                            if (_si2 >= 0) {
+                                _ooDocxTotalSections = (_ooDocxStreamBuffer.substring(_si2).match(/"title"\s*:/g) || []).length;
+                            }
+                            total = Math.max(_ooDocxTotalSections, sectionCount);
+                        } else {
+                            total = Math.max(total, sectionCount);
+                        }
+                        $('#ooDocxPreviewMsg').text(`섹션 작성 중 (${sectionCount}/${total}): ${section.title || ''}`);
                         break;
                     case 'file_creating':
-                        $('#ooDocxPreviewMsg').text('최종 문서를 생성하고 있습니다...');
                         // 마지막 렌더링 강제 실행
                         if (_ooDocxStreamRenderTimer) {
                             clearTimeout(_ooDocxStreamRenderTimer);
@@ -9877,6 +10318,8 @@ async function _onlyofficeDocxHtmlStream(url, body) {
                         _renderOoDocxPreview();
                         // 커서 제거 (작성 완료)
                         $('.word-typing-cursor', '#ooDocxPreviewContent').remove();
+                        // 로딩 오버레이 표시
+                        _showOoDocxLoadingOverlay('워드 문서를 생성하고 있습니다...');
                         break;
                     case 'file_updated':
                         state.onlyofficeDoc = evt.document || null;
@@ -9888,24 +10331,15 @@ async function _onlyofficeDocxHtmlStream(url, body) {
                         state.currentProject.status = 'generated';
                         $('#wsProjectStatus').text(t('statusGenerated')).attr('class', 'ws-status generated');
 
-                        // 완료 메시지 + 페이드 전환
-                        $('#ooDocxPreviewMsg').text('문서 생성 완료! 에디터를 열고 있습니다...');
-                        $('.oo-docx-preview-spinner').hide();
-
-                        // 약간의 딜레이 후 OnlyOffice 에디터로 전환
-                        setTimeout(async () => {
-                            if (state.onlyofficeDoc) {
-                                // 미리보기 페이드아웃 + 에디터 열기
-                                $('#ooDocxPreviewWrap').fadeOut(400, async function() {
-                                    $(this).remove();
-                                    await openOnlyOfficeEditor(state.currentProject._id);
-                                    showToast('문서 생성 완료!', 'success');
-                                });
-                            } else {
-                                $('#ooDocxPreviewWrap').remove();
-                                showToast('문서 생성 완료!', 'success');
-                            }
-                        }, 800);
+                        if (state.onlyofficeDoc) {
+                            _updateOoDocxLoadingMsg('에디터에 문서를 불러오고 있습니다...');
+                            // 에디터를 미리보기 아래에 미리 로드, onDocumentReady에서 전환
+                            _loadOoEditorBehindPreview(state.currentProject._id);
+                        } else {
+                            _removeOoDocxLoadingOverlay();
+                            $('#ooDocxPreviewWrap').remove();
+                            showToast('문서 생성 완료!', 'success');
+                        }
                         break;
                     case 'stopped':
                         _isGenerating = false;
@@ -9915,11 +10349,10 @@ async function _onlyofficeDocxHtmlStream(url, body) {
                         $('#wsProjectStatus').text(t('statusStopped')).attr('class', 'ws-status stopped');
                         // 중단 시에도 부분 생성된 문서가 있으면 에디터 열기
                         if (state.onlyofficeDoc) {
-                            $('#ooDocxPreviewWrap').fadeOut(400, async function() {
-                                $(this).remove();
-                                await openOnlyOfficeEditor(state.currentProject._id);
-                            });
+                            _showOoDocxLoadingOverlay('문서를 불러오고 있습니다...');
+                            _loadOoEditorBehindPreview(state.currentProject._id);
                         } else {
+                            _removeOoDocxLoadingOverlay();
                             $('#ooDocxPreviewWrap').fadeOut(300, function() { $(this).remove(); });
                         }
                         showToast(evt.message || '중단됨', 'info');
@@ -9985,6 +10418,12 @@ function _destroyExcelCharts() {
     const grid = document.getElementById('excelChartsGrid');
     if (grid) grid.innerHTML = '';
     $('#excelChartsContainer').hide();
+    $('#excelResizer').hide();
+    // 리사이저로 변경된 높이 초기화
+    const _uniC = document.getElementById('univerContainer');
+    const _chC = document.getElementById('excelChartsContainer');
+    if (_uniC) { _uniC.style.flex = ''; _uniC.style.height = ''; }
+    if (_chC) { _chC.style.height = ''; _chC.style.minHeight = ''; _chC.style.maxHeight = ''; }
 }
 
 async function renderExcelCharts(excelData) {
@@ -10040,6 +10479,8 @@ async function renderExcelCharts(excelData) {
     }
 
     $('#excelChartsContainer').show();
+    $('#excelResizer').show();
+    _initExcelResizer();
 
     // 컨테이너가 보인 후 차트 리사이즈 (레이아웃 반영)
     requestAnimationFrame(() => {
@@ -10053,6 +10494,63 @@ async function renderExcelCharts(excelData) {
         };
         window.addEventListener('resize', window._echartsResizeHandler);
     }
+}
+
+/* ============ 엑셀/차트 리사이저 드래그 ============ */
+function _initExcelResizer() {
+    const resizer = document.getElementById('excelResizer');
+    const univerEl = document.getElementById('univerContainer');
+    const chartsEl = document.getElementById('excelChartsContainer');
+    if (!resizer || !univerEl || !chartsEl || resizer._resizerInit) return;
+    resizer._resizerInit = true;
+
+    let startY = 0, startUH = 0, startCH = 0, dragging = false;
+
+    function onMouseDown(e) {
+        e.preventDefault();
+        dragging = true;
+        startY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
+        startUH = univerEl.getBoundingClientRect().height;
+        startCH = chartsEl.getBoundingClientRect().height;
+        resizer.classList.add('active');
+        document.body.style.cursor = 'row-resize';
+        document.body.style.userSelect = 'none';
+    }
+
+    function onMouseMove(e) {
+        if (!dragging) return;
+        const clientY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
+        const delta = clientY - startY;
+        const minU = 120, minC = 120;
+        let newUH = startUH + delta;
+        let newCH = startCH - delta;
+        if (newUH < minU) { newUH = minU; newCH = startUH + startCH - minU; }
+        if (newCH < minC) { newCH = minC; newUH = startUH + startCH - minC; }
+        univerEl.style.flex = 'none';
+        univerEl.style.height = newUH + 'px';
+        chartsEl.style.height = newCH + 'px';
+        chartsEl.style.minHeight = '0';
+        chartsEl.style.maxHeight = 'none';
+    }
+
+    function onMouseUp() {
+        if (!dragging) return;
+        dragging = false;
+        resizer.classList.remove('active');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        // 차트 리사이즈 반영
+        if (_activeExcelCharts && _activeExcelCharts.length) {
+            _activeExcelCharts.forEach(c => { try { c.resize(); } catch(e) {} });
+        }
+    }
+
+    resizer.addEventListener('mousedown', onMouseDown);
+    resizer.addEventListener('touchstart', onMouseDown, { passive: false });
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('touchmove', onMouseMove, { passive: false });
+    document.addEventListener('mouseup', onMouseUp);
+    document.addEventListener('touchend', onMouseUp);
 }
 
 const _CHART_PALETTE = ['#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de', '#3ba272', '#fc8452', '#9a60b4'];

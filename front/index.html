@@ -477,6 +477,10 @@
                             </div>
                         </div>
                         <div id="univerContainer" class="univer-container"></div>
+                        <!-- 엑셀/차트 리사이저 -->
+                        <div id="excelResizer" class="excel-resizer" style="display:none;">
+                            <div class="excel-resizer-handle"></div>
+                        </div>
                         <!-- 차트 렌더링 영역 -->
                         <div id="excelChartsContainer" class="excel-charts-container" style="display:none;">
                             <div class="excel-charts-header">
@@ -525,6 +529,11 @@
                         <div id="ckeditorContainer" class="ckeditor-container">
                             <div id="ckeditorEditor"></div>
                         </div>
+                        <!-- AI 텍스트 수정 플로팅 버튼 (일반 워드) -->
+                        <button id="btnRewriteWord" class="btn-rewrite-float" onclick="openRewriteModal()">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/><path d="M15 5l3 3"/></svg>
+                            AI 수정
+                        </button>
                     </div>
                     <!-- OnlyOffice 워크스페이스 -->
                     <div id="onlyofficeWorkspace" style="display:none;" class="onlyoffice-workspace">
@@ -612,6 +621,15 @@
                                     <option value="20">20</option>
                                     <option value="25">25</option>
                                     <option value="30">30</option>
+                                </select>
+                                <select id="docxPageCountSelect" class="slide-count-selector" style="display:none">
+                                    <option value="auto">자동</option>
+                                    <option value="5">5장</option>
+                                    <option value="10">10장</option>
+                                    <option value="15">15장</option>
+                                    <option value="20">20장</option>
+                                    <option value="25">25장</option>
+                                    <option value="30">30장</option>
                                 </select>
                             </div>
                             <div class="input-actions-right">
@@ -980,6 +998,38 @@
             <button class="panel-close-btn" onclick="$('#historyPanel').hide()">&times;</button>
         </div>
         <div class="side-panel-body" id="historyList"></div>
+    </div>
+
+    <!-- AI 텍스트 리라이트 모달 -->
+    <div id="rewriteModal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeRewriteModal()">
+        <div class="modal-card" style="max-width:560px;">
+            <div class="modal-header">
+                <h3>
+                    <svg width="16" height="16" fill="none" stroke="#6366f1" stroke-width="2" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:6px;"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    AI 텍스트 수정
+                </h3>
+                <button class="modal-close" onclick="closeRewriteModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div>
+                    <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px;">선택된 텍스트</label>
+                    <div id="rewriteSelectedText" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:13px;color:var(--text);max-height:120px;overflow-y:auto;white-space:pre-wrap;"></div>
+                </div>
+                <div>
+                    <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px;">수정 지시사항</label>
+                    <textarea id="rewriteInstructions" rows="3" placeholder="예: 더 간결하게 요약해줘 / 문체를 공식적으로 변경해줘 / 영어로 번역해줘" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:13px;resize:vertical;outline:none;box-sizing:border-box;background:var(--surface);" onfocus="this.style.borderColor='#6366f1'" onblur="this.style.borderColor=''"></textarea>
+                </div>
+                <div id="rewritePreview" style="display:none;">
+                    <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px;">수정 결과</label>
+                    <div id="rewriteResultText" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;font-size:13px;color:#166534;max-height:200px;overflow-y:auto;white-space:pre-wrap;"></div>
+                </div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:4px;">
+                    <button class="btn-secondary" onclick="closeRewriteModal()">취소</button>
+                    <button id="btnRewriteApply" class="btn-primary" style="display:none;background:#10b981;" onclick="applyRewrite()">적용</button>
+                    <button id="btnRewriteSubmit" class="btn-primary" onclick="submitRewrite()">AI 수정 시작</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>

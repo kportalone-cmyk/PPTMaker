@@ -3787,6 +3787,7 @@ body {
     width: 100%;
     height: 100%;
     min-height: 0;
+    position: relative;
 }
 
 .onlyoffice-container {
@@ -3796,6 +3797,31 @@ body {
     border-radius: 8px;
     overflow: hidden;
     position: relative;
+}
+
+/* AI 텍스트 수정 플로팅 버튼 */
+.btn-rewrite-float {
+    display: none;
+    position: absolute;
+    right: 18px;
+    bottom: 18px;
+    z-index: 100;
+    padding: 10px 18px;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    color: #fff;
+    border: none;
+    border-radius: 50px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(99,102,241,0.4);
+    transition: all 0.2s;
+    align-items: center;
+    gap: 6px;
+}
+.btn-rewrite-float:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(99,102,241,0.5);
 }
 
 .onlyoffice-container iframe {
@@ -4250,15 +4276,48 @@ body {
     height: 100% !important;
 }
 
+/* ============ 엑셀 리사이저 ============ */
+
+.excel-resizer {
+    height: 6px;
+    background: var(--border);
+    cursor: row-resize;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 10;
+    transition: background 0.15s;
+}
+
+.excel-resizer:hover,
+.excel-resizer.active {
+    background: var(--accent);
+}
+
+.excel-resizer-handle {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 32px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(0,0,0,0.15);
+    pointer-events: none;
+}
+
+.excel-resizer:hover .excel-resizer-handle,
+.excel-resizer.active .excel-resizer-handle {
+    background: rgba(255,255,255,0.6);
+}
+
 /* ============ 엑셀 차트 영역 ============ */
 
 .excel-charts-container {
-    border-top: 1px solid var(--border);
+    border-top: none;
     background: var(--bg);
-    min-height: 340px;
-    max-height: 60%;
     overflow-y: auto;
-    flex-shrink: 0;
+    flex: 1;
+    min-height: 0;
 }
 
 .excel-charts-header {
@@ -4479,6 +4538,7 @@ body {
     background: var(--surface);
     border-radius: 12px;
     overflow: hidden;
+    position: relative;
 }
 
 .word-toolbar {
@@ -5081,6 +5141,104 @@ body {
 
 [data-theme="dark"] .oo-docx-preview-scroll {
     background: #1e1e2e;
+}
+
+/* OnlyOffice DOCX 로딩 오버레이 */
+.oo-docx-loading-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.82);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+
+.oo-docx-loading-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    padding: 40px 56px;
+    background: #fff;
+    border-radius: 20px;
+    box-shadow: 0 8px 40px rgba(99, 102, 241, 0.12), 0 2px 12px rgba(0, 0, 0, 0.06);
+    position: relative;
+    overflow: hidden;
+}
+
+.oo-docx-loading-pulse {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, transparent 30%, rgba(99, 102, 241, 0.06) 50%, transparent 70%);
+    background-size: 300% 300%;
+    animation: ooDocxPulse 2s ease-in-out infinite;
+}
+
+@keyframes ooDocxPulse {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+}
+
+.oo-docx-loading-icon {
+    width: 56px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    border-radius: 16px;
+    color: #fff;
+    position: relative;
+    z-index: 1;
+}
+
+.oo-docx-loading-msg {
+    font-size: 15px;
+    font-weight: 600;
+    color: #1e293b;
+    text-align: center;
+    position: relative;
+    z-index: 1;
+    margin: 0;
+}
+
+.oo-docx-loading-dots {
+    display: flex;
+    gap: 6px;
+    position: relative;
+    z-index: 1;
+}
+
+.oo-docx-loading-dots span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #6366f1;
+    animation: ooDocxDot 1.4s ease-in-out infinite;
+}
+
+.oo-docx-loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+.oo-docx-loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes ooDocxDot {
+    0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+    40% { opacity: 1; transform: scale(1.2); }
+}
+
+[data-theme="dark"] .oo-docx-loading-overlay {
+    background: rgba(30, 30, 46, 0.85);
+}
+
+[data-theme="dark"] .oo-docx-loading-card {
+    background: #2a2a3e;
+    box-shadow: 0 8px 40px rgba(99, 102, 241, 0.2), 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"] .oo-docx-loading-msg {
+    color: #e2e8f0;
 }
 
 /* 워드 스트리밍 차트 로딩 */

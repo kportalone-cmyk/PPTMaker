@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from bson import ObjectId
 from datetime import datetime
-from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest, DocxModifyRequest, DocxPrepareRequest
+from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest, DocxModifyRequest, DocxPrepareRequest, RewriteRequest
 from services.mongo_service import get_db
 from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible, get_user_by_key
 from services import redis_service
@@ -11,7 +11,7 @@ from services.template_service import recommend_slide, get_template_slides
 from services.ppt_service import generate_pptx
 from services.excel_service import generate_xlsx, auto_generate_chart_definition
 from services.word_service import generate_docx, create_empty_docx
-from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content, generate_excel_content_stream, modify_excel_content_stream, generate_docx_content_stream
+from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content, generate_excel_content_stream, modify_excel_content_stream, generate_docx_content_stream, rewrite_text_stream
 from services.search_service import search_web
 from services.onlyoffice_service import create_onlyoffice_document
 from services.file_service import extract_excel_structure
@@ -1172,9 +1172,26 @@ async def modify_excel_stream(jwt_token: str, data: ExcelModifyRequest):
                 merged_sheets[data.target_sheet_index] = result_sheets[0]
                 final_sheets = merged_sheets
                 print(f"[Excel-Modify] 타겟 시트 병합: index={data.target_sheet_index}")
+            elif (data.target_sheet_index is not None
+                    and 0 <= data.target_sheet_index < len(original_sheets)
+                    and len(result_sheets) > 1
+                    and len(result_sheets) < len(original_sheets)):
+                # LLM이 타겟 시트만 받고 여러 시트를 반환했지만
+                # 원본보다 적으면 → 원본 시트 보존 + 결과에서 새 시트만 추가
+                original_names = {s.get("name", "") for s in original_sheets}
+                merged_sheets = list(original_sheets)
+                # 타겟 시트 교체
+                merged_sheets[data.target_sheet_index] = result_sheets[0]
+                # 나머지 결과 시트 중 새로운 시트만 추가
+                for rs in result_sheets[1:]:
+                    if rs.get("name", "") not in original_names:
+                        merged_sheets.append(rs)
+                final_sheets = merged_sheets
+                print(f"[Excel-Modify] 타겟 시트 병합 + 새 시트 추가: {len(merged_sheets)}개")
             else:
-                # 전체 시트 교체 (시트 추가/삭제 또는 전체 수정)
+                # 전체 시트 데이터가 전송된 경우 → LLM 결과 그대로 사용
                 final_sheets = result_sheets
+                print(f"[Excel-Modify] 전체 시트 교체: {len(final_sheets)}개")
 
             await db.generated_excel.update_one(
                 {"project_id": data.project_id},
@@ -2369,6 +2386,37 @@ async def download_docx(jwt_token: str, project_id: str):
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ============ 텍스트 리라이트 ============
+
+@router.post("/{jwt_token}/api/generate/rewrite/stream")
+async def rewrite_stream(jwt_token: str, data: RewriteRequest):
+    """선택된 텍스트를 AI로 리라이트 (스트리밍)"""
+    await get_user_key(jwt_token)
+
+    def _sse(event: str, payload: dict) -> str:
+        return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False, default=str)}\n\n"
+
+    async def event_stream():
+        try:
+            yield _sse("start", {"message": "텍스트를 수정하고 있습니다..."})
+
+            full_text = ""
+            async for event_type, event_data in rewrite_text_stream(
+                data.selected_text, data.instructions, data.lang, data.context_text
+            ):
+                if event_type == "delta":
+                    full_text += event_data
+                    yield _sse("delta", {"text": event_data})
+                elif event_type == "result":
+                    yield _sse("done", {"text": full_text})
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            yield _sse("error", {"message": str(e)})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 # ============ 프레젠테이션 공유 ============

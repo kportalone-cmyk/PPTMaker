@@ -85,3 +85,11 @@ class DocxModifyRequest(BaseModel):
 
 class DocxPrepareRequest(BaseModel):
     project_id: str
+
+
+class RewriteRequest(BaseModel):
+    project_id: str
+    selected_text: str
+    instructions: str
+    lang: str = "ko"
+    context_text: str = ""
