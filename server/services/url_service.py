@@ -45,24 +45,46 @@ async def fetch_youtube_subtitles(video_id: str) -> dict:
 
         ytt_api = YouTubeTranscriptApi()
 
-        # 선호 언어 순서로 시도
+        # 선호 언어 순서로 시도 (수동 자막 우선)
         preferred = ["ko", "en", "ja", "zh-Hans", "zh-Hant"]
         try:
             transcript = ytt_api.fetch(video_id, languages=preferred)
             text = " ".join(snippet.text for snippet in transcript)
-            return {"title": f"YouTube: {video_id}", "content": text}
+            if text.strip():
+                return {"title": f"YouTube: {video_id}", "content": text}
         except Exception:
             pass
 
-        # 아무 언어나 시도
+        # 수동 자막 못 찾으면 자막 목록에서 시도
         try:
             transcript_list = ytt_api.list(video_id)
-            available = transcript_list.transcript_entries
-            if available:
-                first_lang = available[0].language_code
-                transcript = ytt_api.fetch(video_id, languages=[first_lang])
-                text = " ".join(snippet.text for snippet in transcript)
-                return {"title": f"YouTube: {video_id}", "content": text}
+            # 수동 자막 우선
+            try:
+                t = transcript_list.find_manually_created_transcript(preferred)
+                snippets = t.fetch()
+                text = " ".join(s.text for s in snippets)
+                if text.strip():
+                    return {"title": f"YouTube: {video_id}", "content": text}
+            except Exception:
+                pass
+            # 자동 생성 자막
+            try:
+                t = transcript_list.find_generated_transcript(preferred)
+                snippets = t.fetch()
+                text = " ".join(s.text for s in snippets)
+                if text.strip():
+                    return {"title": f"YouTube: {video_id}", "content": text}
+            except Exception:
+                pass
+            # 아무 언어나 시도
+            try:
+                t = transcript_list.find_transcript(preferred + ["de", "fr", "es", "pt"])
+                snippets = t.fetch()
+                text = " ".join(s.text for s in snippets)
+                if text.strip():
+                    return {"title": f"YouTube: {video_id}", "content": text}
+            except Exception:
+                pass
         except Exception:
             pass
 

@@ -2148,6 +2148,23 @@ $(document).on('keydown', function (e) {
         }
     }
 
+    // 화살표 위/아래: 오브젝트 미선택 시 슬라이드 탐색
+    if (state.selectedObjects.length === 0 && !isEditing) {
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+            if (!state.currentSlide || !state.slides || state.slides.length === 0) return;
+            e.preventDefault();
+            var curIdx = state.slides.findIndex(function(s) { return s._id === state.currentSlide._id; });
+            if (curIdx === -1) return;
+            var newIdx = e.key === 'ArrowUp' ? curIdx - 1 : curIdx + 1;
+            if (newIdx < 0 || newIdx >= state.slides.length) return;
+            selectSlide(state.slides[newIdx]._id);
+            // 선택된 슬라이드가 보이도록 스크롤
+            var slideEl = document.querySelectorAll('#slideList .slide-item')[newIdx];
+            if (slideEl) slideEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            return;
+        }
+    }
+
     // 화살표 키: 선택된 모든 오브젝트 이동
     if (state.selectedObjects.length === 0) return;
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].indexOf(e.key) === -1) return;

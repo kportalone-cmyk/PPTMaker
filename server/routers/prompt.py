@@ -41,7 +41,7 @@ DEFAULT_PROMPTS = [
 3. **section** - 섹션 구분 간지
    필수 필드: section_title (제목은 항상 생성해야 합니다)
    선택 필드: section_subtitle (카탈로그에서 해당 간지 템플릿에 "부제목 있음"으로 표시된 경우에만 생성. 없으면 section_subtitle 필드를 생략하세요)
-   기타 필드: section_num
+   필수 필드: section_num (첫 번째 간지는 "01", 두 번째는 "02", 세 번째는 "03" 등 순서대로 자동 증가하는 두 자리 번호)
 4. **content** - 본문 콘텐츠 슬라이드
    필드: title(제목), governance(거버넌스/섹션태그), items[] (heading=부제목 + detail=설명, 순서대로 매핑), sources[]
 5. **closing** - 마무리 슬라이드
@@ -54,8 +54,8 @@ DEFAULT_PROMPTS = [
    - 본문 슬라이드는 반드시 title(제목), governance(거버넌스), items[](부제목+설명 쌍) 를 생성합니다.
    - 각 item은 heading(부제목, 키워드 1~5단어) + detail(설명, 1~3문장) 구조입니다.
    - heading은 템플릿의 "부제목" 필드에, detail은 "설명" 필드에 순서대로 매핑됩니다.
-   - **[필수] 각 content 슬라이드마다 items를 반드시 최소 3개 이상, 최대 4개 생성하세요.** items를 1~2개만 작성하면 안 됩니다.
-   - 카탈로그에 표시 가능 개수가 적더라도, 아웃라인 표시를 위해 반드시 3개 이상의 items를 생성해야 합니다.
+   - **[필수] 각 content 슬라이드의 items 개수는 반드시 선택한 템플릿의 표시 가능 개수와 정확히 일치해야 합니다.** 카탈로그에서 "N개 항목을 표시" 라고 되어 있으면 items를 정확히 N개 생성하세요.
+   - **[필수] 다양한 템플릿을 골고루 활용하세요.** 1개짜리, 2개짜리, 3개짜리, 4개짜리 템플릿이 있으면 내용의 성격에 따라 적합한 템플릿을 선택하여 다양한 레이아웃으로 구성하세요.
    - 각 item의 heading은 서로 다른 관점/주제를 다뤄야 합니다.
 4. 예시 - subtitle_count=3, description_count=3인 content 슬라이드:
    {{"type":"content","template_index":3,"title":"디지털 전환 핵심 전략","governance":"클라우드 전환, 데이터 분석, 업무 자동화를 통한 디지털 혁신 추진",

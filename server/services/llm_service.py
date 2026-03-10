@@ -221,10 +221,8 @@ def _build_slides_description(slides_meta: list[dict]) -> str:
             if toc_slots > 0:
                 lines.append(f"  ※ 목차 슬라이드: 이 템플릿은 최대 {toc_slots}개 항목을 표시할 수 있습니다. 목차 items를 반드시 {toc_slots}개 이하로 생성하세요. 섹션이 {toc_slots}개보다 많으면 관련 섹션끼리 그룹핑하여 {toc_slots}개로 맞추세요.")
         elif content_type == "body":
-            # 슬라이드에 표시되는 placeholder 수와 관계없이 아웃라인용으로 최소 3개 항목 요청
-            min_items = max(effective_items, 3)
-            max_items = max(effective_items, 4)
-            lines.append(f"  ※ 본문 슬라이드: items를 최소 {min_items}개~최대 {max_items}개 생성하세요. 슬라이드에는 {effective_items}개까지 표시되며 나머지는 아웃라인에 표시됩니다. 절대 1개만 생성하지 마세요.")
+            # 슬라이드에 표시 가능한 항목 수 안내 (다양한 items 수 허용)
+            lines.append(f"  ※ 본문 슬라이드: 이 템플릿은 {effective_items}개 항목을 표시할 수 있습니다. items를 {effective_items}개 생성하세요.")
         elif content_type == "section_divider":
             # 간지 슬라이드: 부제목 필드 유무 안내
             has_subtitle_ph = ph_sub_actual > 0
@@ -570,28 +568,12 @@ def _map_rich_schema_to_contents(schema_slides: list[dict], slides_meta: list[di
         if template_idx is not None and num_templates > 0:
             template_idx = max(0, min(template_idx, num_templates - 1))
 
-            # content 슬라이드: subtitle/description 수가 items보다 적으면 재매칭
-            if slide_type == "content" and items_count > 0:
-                chosen_meta = None
-                for sm in slides_meta:
-                    if sm["slide_index"] == template_idx:
-                        chosen_meta = sm
-                        break
-                if chosen_meta:
-                    phs = chosen_meta.get("placeholders", [])
-                    ph_desc_count = sum(1 for ph in phs if ph.get("role") == "description")
-                    ph_sub_count = sum(1 for ph in phs if ph.get("role") == "subtitle")
-                    # subtitle과 description 모두 items 수를 수용해야 함
-                    effective_slots = min(ph_sub_count, ph_desc_count) if (ph_sub_count > 0 and ph_desc_count > 0) else max(ph_sub_count, ph_desc_count)
-                    if effective_slots < items_count:
-                        better_idx = _find_best_template_for_type(
-                            slide_type, slides_meta, items_count
-                        )
-                        if better_idx != template_idx:
-                            template_idx = better_idx
-
-        # template_index가 없거나 유효하지 않으면 자동 매칭
-        if template_idx is None:
+        # content 슬라이드: items 수에 맞는 최적 템플릿 강제 매칭
+        # (LLM이 잘못된 template_index를 선택해도 items_count 기반으로 최적 템플릿 자동 선택)
+        if slide_type == "content" and items_count > 0:
+            template_idx = _find_best_template_for_type(slide_type, slides_meta, items_count)
+        elif template_idx is None:
+            # 비-content 슬라이드: template_index가 없으면 자동 매칭
             template_idx = _find_best_template_for_type(slide_type, slides_meta, items_count)
 
         # 동일 용량 본문 템플릿이 여러 개일 때 라운드로빈으로 돌아가며 사용
@@ -634,15 +616,19 @@ def _map_rich_schema_to_contents(schema_slides: list[dict], slides_meta: list[di
                 print(f"[LLM] TOC: items {len(toc_items)}개 → 템플릿 슬롯 {toc_slots}개로 잘라냄")
                 slide["items"] = toc_items[:toc_slots]
 
-        # content 슬라이드: 선택된 템플릿의 슬롯 수에 맞게 items 보충
+        # content 슬라이드: 선택된 템플릿의 슬롯 수에 맞게 items 조정
         if slide_type == "content":
             phs = target_meta.get("placeholders", [])
             ph_sub = sum(1 for ph in phs if ph.get("role") == "subtitle")
             ph_desc = sum(1 for ph in phs if ph.get("role") == "description")
             effective_slots = min(ph_sub, ph_desc) if (ph_sub > 0 and ph_desc > 0) else max(ph_sub, ph_desc)
             items = slide.get("items", [])
+            # 슬롯보다 items가 많으면 잘라내기 (초과 items 안전장치)
+            if effective_slots > 0 and len(items) > effective_slots:
+                print(f"[LLM] Content: items {len(items)}개 → 템플릿 슬롯 {effective_slots}개로 잘라냄")
+                slide["items"] = items[:effective_slots]
             # 슬롯보다 items가 적을 때만 보충 시도 (최소 슬롯 수 충족 목표)
-            if 0 < len(items) < effective_slots:
+            elif 0 < len(items) < effective_slots:
                 _ensure_minimum_items_for_slide(slide, effective_slots)
 
         # 역할별 콘텐츠 매핑
@@ -711,40 +697,40 @@ def _map_slide_content_to_placeholders(slide: dict, template_meta: dict) -> dict
         _map_if("title", role_map, contents, slide.get("title", "목차"))
         items = slide.get("items", [])
 
-        # number placeholder에 순서 번호 자동 매핑
+        # number placeholder에 순서 번호 자동 매핑 (두 자리: 01, 02, ...)
         for i, item in enumerate(items):
             if i < len(number_placeholders):
-                contents[number_placeholders[i]] = str(i + 1)
+                contents[number_placeholders[i]] = item.get("num", str(i + 1).zfill(2))
 
         if subtitle_placeholders and desc_placeholders and items:
-            # subtitle에 번호, description에 항목 텍스트 분리 배치
+            # subtitle에 번호, description에 "01. 목차명" 형식 배치
             for i, item in enumerate(items):
-                num = item.get("num", str(i + 1))
+                num = item.get("num", str(i + 1).zfill(2))
                 text = item.get("text", "")
                 if i < len(subtitle_placeholders):
                     contents[subtitle_placeholders[i]] = num
                 if i < len(desc_placeholders):
-                    contents[desc_placeholders[i]] = text
+                    contents[desc_placeholders[i]] = f"{num}. {text}" if num else text
         elif subtitle_placeholders and items:
-            # subtitle placeholder에 "num. text" 배치
+            # subtitle placeholder에 "01. 목차명" 형식 배치
             for i, item in enumerate(items):
                 if i >= len(subtitle_placeholders):
                     break
-                num = item.get("num", "")
+                num = item.get("num", str(i + 1).zfill(2))
                 text = item.get("text", "")
                 contents[subtitle_placeholders[i]] = f"{num}. {text}" if num else text
         elif desc_placeholders and items:
-            # description placeholder에 "num. text" 배치
+            # description placeholder에 "01. 목차명" 형식 배치
             for i, item in enumerate(items):
                 if i >= len(desc_placeholders):
                     break
-                num = item.get("num", "")
+                num = item.get("num", str(i + 1).zfill(2))
                 text = item.get("text", "")
                 contents[desc_placeholders[i]] = f"{num}. {text}" if num else text
         elif items:
             toc_lines = []
-            for item in items:
-                num = item.get("num", "")
+            for i, item in enumerate(items):
+                num = item.get("num", str(i + 1).zfill(2))
                 text = item.get("text", "")
                 toc_lines.append(f"{num}. {text}" if num else text)
             if "body" in role_map:
@@ -899,11 +885,11 @@ def _find_best_template_for_type(
                 effective_slots = max(ph_sub_count, ph_desc_count)
 
             if effective_slots == items_count:
-                score += 8  # 정확히 일치
+                score += 8  # 정확히 일치 (total: 18)
             elif effective_slots >= items_count:
-                score += 5  # placeholder가 더 많음 (수용 가능)
+                score += 5  # placeholder가 더 많음, 수용 가능 (total: 15)
             elif effective_slots > 0 and effective_slots < items_count:
-                score -= 5  # placeholder 부족 (강한 패널티)
+                score -= 8  # placeholder 부족, body(2) > non-body(0) 유지 (total: 2)
 
         if score > best_score:
             best_score = score
@@ -999,6 +985,8 @@ async def generate_single_slide_content(
 - "삭제해줘" → 해당 항목 제거
 - "전체를 다시 작성해줘" → 전체 새로 작성
 - 지침이 명확하지 않으면 기존 내용을 최대한 유지하면서 개선하세요.
+- **[필수] 응답 시 반드시 모든 placeholder에 대한 콘텐츠를 포함하세요. 특히 title(제목), subtitle(부제목), description(설명) 역할의 placeholder가 비어있으면 안 됩니다.**
+- **[필수] items 배열에는 반드시 heading(소제목)과 detail(설명)을 모두 포함해야 합니다. heading이나 detail이 빈 문자열이면 안 됩니다.**
 
 반드시 아래 JSON 형식으로만 응답하세요:
 {{
@@ -1025,11 +1013,17 @@ async def generate_single_slide_content(
 
 위 현재 내용을 사용자 지침에 따라 수정하여 JSON으로 응답하세요.
 items 배열의 heading은 subtitle, detail은 description에 대응합니다.
+**반드시 title(제목), items의 heading(부제목)과 detail(설명)을 모두 포함하여 응답하세요. 빈 값이 없어야 합니다.**
 """
     else:
         system_prompt = f"""당신은 프레젠테이션 콘텐츠 전문가입니다.
 주어진 리소스와 지침을 바탕으로 슬라이드 1장의 텍스트를 생성합니다.
 {lang_instruction}
+
+## 중요 규칙:
+- **[필수] 모든 placeholder에 대한 콘텐츠를 생성하세요. title(제목), subtitle(부제목), description(설명) 역할의 placeholder를 빠뜨리지 마세요.**
+- **[필수] items 배열에는 반드시 heading(소제목)과 detail(설명)을 모두 포함해야 합니다. heading이나 detail이 빈 문자열이면 안 됩니다.**
+- governance(거버넌스)가 있으면 슬라이드 내용을 요약한 문장을 작성하세요.
 
 반드시 아래 JSON 형식으로만 응답하세요:
 {{
@@ -1054,6 +1048,7 @@ items 배열의 heading은 subtitle, detail은 description에 대응합니다.
 
 items 배열에는 heading(소제목)과 detail(설명)을 {desc_count}개 생성하세요.
 subtitle 역할의 placeholder는 items의 heading에 대응하고, description 역할은 items의 detail에 대응합니다.
+**반드시 title(제목), items의 heading(부제목)과 detail(설명)을 모두 포함하여 응답하세요. 빈 값이 없어야 합니다.**
 """
 
     try:

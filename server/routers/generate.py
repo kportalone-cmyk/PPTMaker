@@ -2646,14 +2646,14 @@ async def _set_stopped(db, project_id: str):
 # ============ 유틸: 공통 헬퍼 ============
 
 async def _analyze_template_slides_cached(template_id: str, slides: list) -> list[dict]:
-    """템플릿 슬라이드 분석 결과를 Redis에 캐시 (24시간)"""
-    cache_key = f"template:{template_id}:analysis"
-    cached = await redis_service.cache_get(cache_key)
-    if cached is not None:
-        return cached
+    """템플릿 슬라이드 분석 및 오브젝트 _auto_role/_auto_placeholder 설정
 
+    중요: _analyze_template_slides는 오브젝트를 in-place 변이하여
+    _auto_role/_auto_placeholder를 설정합니다. 이 변이는 _build_gen_objects에서
+    placeholder 매칭에 필수이므로 캐시 히트와 관계없이 항상 실행합니다.
+    """
+    # 항상 실행: 오브젝트에 _auto_role/_auto_placeholder 속성 설정 (부작용 필수)
     result = _analyze_template_slides(slides)
-    await redis_service.cache_set(cache_key, result, ttl=86400)
     return result
 
 
@@ -2707,11 +2707,15 @@ def _build_gen_objects(template_slide: dict, contents: dict) -> list:
         if obj.get("obj_type") == "text":
             role = obj.get("role") or obj.get("_auto_role", "")
 
-            # number role: placeholder 매핑 대신 등장 순서대로 1, 2, 3... 직접 부여
-            # (동일 placeholder 이름으로 인한 덮어쓰기 문제 방지)
+            # number role: contents에 매핑된 값 우선 사용 (간지의 section_num 등)
+            # 매핑 없으면 등장 순서대로 1, 2, 3... 직접 부여
             if role == "number":
                 number_counter += 1
-                gen_obj["generated_text"] = str(number_counter)
+                placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
+                if placeholder_name and placeholder_name in contents:
+                    gen_obj["generated_text"] = contents[placeholder_name]
+                else:
+                    gen_obj["generated_text"] = str(number_counter)
             else:
                 placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
                 if placeholder_name:
@@ -2743,10 +2747,15 @@ def _build_skeleton_objects(template_slide: dict, contents: dict) -> list:
         if obj.get("obj_type") == "text":
             role = obj.get("role") or obj.get("_auto_role", "")
 
-            # number role: 스켈레톤에서도 순서 번호 직접 부여
+            # number role: contents에 매핑된 값 우선 사용 (간지의 section_num 등)
+            # 매핑 없으면 등장 순서대로 1, 2, 3... 직접 부여
             if role == "number":
                 number_counter += 1
-                gen_obj["generated_text"] = str(number_counter)
+                placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
+                if placeholder_name and placeholder_name in contents:
+                    gen_obj["generated_text"] = contents[placeholder_name]
+                else:
+                    gen_obj["generated_text"] = str(number_counter)
             else:
                 placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
                 if placeholder_name:
@@ -2824,9 +2833,9 @@ def _enrich_slide_meta(slide: dict, placeholders: list) -> dict:
     else:
         desc_count = admin_desc_count
 
-    # 본문 슬라이드는 최소 3개 items 보장 (풍부한 콘텐츠 생성)
-    if content_type == "body":
-        desc_count = max(desc_count, 3)
+    # 본문 슬라이드: 템플릿의 실제 placeholder 수를 반영 (다양한 항목 수 허용)
+    if content_type == "body" and desc_count == 0:
+        desc_count = 1  # 최소 1개는 보장
 
     meta["description_count"] = desc_count
 
