@@ -2454,6 +2454,7 @@ async function _animateSlideTextUpdate(index) {
             canvas.append(div);
         } else if (obj.obj_type === 'shape') {
             div.css('height', (obj.height * scaleY) + 'px');
+            div.html(_createEditShapeSVG(obj));
             canvas.append(div);
         } else if (obj.obj_type === 'text') {
             const style = obj.text_style || {};
@@ -3169,6 +3170,8 @@ function renderSlideAtIndex(index) {
         if (obj.obj_type === 'image' && obj.image_url) {
             const imgFit = obj.image_fit || 'contain';
             div.append(`<img src="${obj.image_url}" style="width:100%;height:100%;object-fit:${imgFit};">`);
+        } else if (obj.obj_type === 'shape') {
+            div.html(_createEditShapeSVG(obj));
         } else if (obj.obj_type === 'text') {
             const style = obj.text_style || {};
             const text = obj.generated_text || obj.text_content || '';
@@ -3244,7 +3247,7 @@ function renderSlideToContainer(container, slide, thumbW, thumbH) {
             const imgFit = obj.image_fit || 'contain';
             div.append(`<img src="${obj.image_url}" style="width:100%;height:100%;object-fit:${imgFit};">`);
         } else if (obj.obj_type === 'shape') {
-            // 도형은 축소 렌더링 생략 (너무 작음)
+            div.html(_createEditShapeSVG(obj));
         } else if (obj.obj_type === 'text') {
             const style = obj.text_style || {};
             const text = obj.generated_text || obj.text_content || '';
