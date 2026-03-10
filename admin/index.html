@@ -271,6 +271,7 @@
                     <div class="prop-group">
                         <label>색상</label>
                         <input type="color" id="propColor" value="#000000" onchange="updateTextStyle('color', this.value)">
+                        <div class="recent-colors" data-target="propColor"></div>
                     </div>
                 </div>
                 <div class="prop-row" style="gap:6px;">
@@ -398,6 +399,7 @@
                     <div class="prop-group">
                         <label>채우기 색상</label>
                         <input type="color" id="propFillColor" value="#4A90D9" onchange="updateShapeStyle('fill_color', this.value)">
+                        <div class="recent-colors" data-target="propFillColor"></div>
                     </div>
                     <div class="prop-group">
                         <label>투명도 <span id="opacityVal">100</span>%</label>
@@ -408,6 +410,7 @@
                     <div class="prop-group">
                         <label>테두리 색상</label>
                         <input type="color" id="propStrokeColor" value="#333333" onchange="updateShapeStyle('stroke_color', this.value)">
+                        <div class="recent-colors" data-target="propStrokeColor"></div>
                     </div>
                     <div class="prop-group">
                         <label>테두리 두께</label>

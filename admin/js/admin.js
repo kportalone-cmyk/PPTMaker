@@ -13,6 +13,7 @@ const state = {
     objects: [],
     selectedObject: null,
     selectedObjects: [],
+    clipboard: [],
     // 마퀴(영역) 선택
     isMarqueeSelecting: false,
     marqueeStart: null,
@@ -40,6 +41,8 @@ const state = {
     gridSize: 50,  // 50px 간격
     // 레이아웃 프리셋 변경 감지
     _previousLayout: '',
+    // 최근 사용 색상 (최대 5개)
+    recentColors: [],
 };
 
 // ============ 초기화 ============
@@ -1413,6 +1416,52 @@ function duplicateObject(objId) {
     return clone.obj_id;
 }
 
+// ============ 복사/붙여넣기 (Ctrl+C / Ctrl+V) ============
+
+function copySelectedObjects() {
+    if (state.selectedObjects.length === 0) return;
+    state.clipboard = state.selectedObjects.map(obj => JSON.parse(JSON.stringify(obj)));
+    const count = state.clipboard.length;
+    showToast(`${count}개 오브젝트가 복사되었습니다`, 'info');
+}
+
+function pasteObjects() {
+    if (state.clipboard.length === 0) return;
+    if (!state.currentSlide) {
+        showToast('먼저 슬라이드를 선택하세요', 'error');
+        return;
+    }
+
+    const newIds = [];
+    const offset = 20;
+
+    state.clipboard.forEach(src => {
+        const clone = JSON.parse(JSON.stringify(src));
+        clone.obj_id = generateObjId();
+        clone.z_index = getNextZIndex();
+        clone.x = Math.min((clone.x || 0) + offset, 960 - (clone.width || 100));
+        clone.y = Math.min((clone.y || 0) + offset, 540 - (clone.height || 50));
+
+        state.objects.push(clone);
+        const el = createObjectElement(clone);
+        $('#canvas').append(el);
+        newIds.push(clone.obj_id);
+    });
+
+    // 붙여넣은 오브젝트들을 선택 상태로
+    setSelection(newIds);
+
+    // 다음 붙여넣기 시 추가 오프셋이 적용되도록 clipboard 위치 업데이트
+    state.clipboard = state.clipboard.map(obj => {
+        const updated = JSON.parse(JSON.stringify(obj));
+        updated.x = Math.min((updated.x || 0) + offset, 960 - (updated.width || 100));
+        updated.y = Math.min((updated.y || 0) + offset, 540 - (updated.height || 50));
+        return updated;
+    });
+
+    showToast(`${newIds.length}개 오브젝트가 붙여넣어졌습니다`, 'success');
+}
+
 function addTextObject() {
     if (!state.currentSlide) {
         showToast('먼저 슬라이드를 선택하세요', 'error');
@@ -2081,6 +2130,24 @@ $(document).on('keydown', function (e) {
         return;
     }
 
+    // Ctrl+C: 선택된 오브젝트 복사
+    if ((e.ctrlKey || e.metaKey) && e.key === 'c' && !isEditing) {
+        if (state.selectedObjects.length > 0) {
+            e.preventDefault();
+            copySelectedObjects();
+            return;
+        }
+    }
+
+    // Ctrl+V: 복사된 오브젝트 붙여넣기
+    if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !isEditing) {
+        if (state.clipboard.length > 0) {
+            e.preventDefault();
+            pasteObjects();
+            return;
+        }
+    }
+
     // 화살표 키: 선택된 모든 오브젝트 이동
     if (state.selectedObjects.length === 0) return;
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].indexOf(e.key) === -1) return;
@@ -2256,8 +2323,8 @@ function updatePropertiesPanel() {
     });
     $('#propX').val(Math.round(minX));
     $('#propY').val(Math.round(minY));
-    $('#propW').val(Math.round(maxX - minX)).prop('disabled', true);
-    $('#propH').val(Math.round(maxY - minY)).prop('disabled', true);
+    $('#propW').val(Math.round(maxX - minX)).prop('disabled', false);
+    $('#propH').val(Math.round(maxY - minY)).prop('disabled', false);
 
     // z_index: 공통값 또는 혼합
     const zValues = [...new Set(state.selectedObjects.map(o => o.z_index !== undefined ? o.z_index : 10))];
@@ -2380,24 +2447,54 @@ function updateObjProperty(prop, value) {
 
 function updateObjPosition() {
     if (state.selectedObjects.length > 1) {
-        // 멀티셀렉트: X/Y 변경 시 그룹 전체 이동
-        let oldMinX = Infinity, oldMinY = Infinity;
+        // 멀티셀렉트: 현재 바운딩박스 계산
+        let oldMinX = Infinity, oldMinY = Infinity, oldMaxX = -Infinity, oldMaxY = -Infinity;
         state.selectedObjects.forEach(obj => {
             oldMinX = Math.min(oldMinX, obj.x);
             oldMinY = Math.min(oldMinY, obj.y);
+            oldMaxX = Math.max(oldMaxX, obj.x + obj.width);
+            oldMaxY = Math.max(oldMaxY, obj.y + obj.height);
         });
+        const oldBBoxW = oldMaxX - oldMinX;
+        const oldBBoxH = oldMaxY - oldMinY;
 
         const newX = parseInt($('#propX').val()) || 0;
         const newY = parseInt($('#propY').val()) || 0;
+        const newW = parseInt($('#propW').val()) || oldBBoxW;
+        const newH = parseInt($('#propH').val()) || oldBBoxH;
+
+        // X/Y 이동 델타
         const deltaX = newX - oldMinX;
         const deltaY = newY - oldMinY;
 
+        // W/H 비례 스케일 팩터
+        const scaleX = (oldBBoxW > 0) ? newW / oldBBoxW : 1;
+        const scaleY = (oldBBoxH > 0) ? newH / oldBBoxH : 1;
+
         state.selectedObjects.forEach(obj => {
-            obj.x = Math.max(0, Math.min(960 - obj.width, Math.round(obj.x + deltaX)));
-            obj.y = Math.max(0, Math.min(540 - obj.height, Math.round(obj.y + deltaY)));
-            $(`[data-obj-id="${obj.obj_id}"]`).css({ left: obj.x + 'px', top: obj.y + 'px' });
+            // 바운딩박스 원점(oldMinX, oldMinY) 기준으로 상대 위치 스케일링
+            const relX = obj.x - oldMinX;
+            const relY = obj.y - oldMinY;
+
+            obj.x = Math.round(newX + relX * scaleX);
+            obj.y = Math.round(newY + relY * scaleY);
+            obj.width = Math.max(1, Math.round(obj.width * scaleX));
+            obj.height = Math.max(1, Math.round(obj.height * scaleY));
+
+            // 캔버스 범위 제한
+            obj.x = Math.max(0, Math.min(960 - obj.width, obj.x));
+            obj.y = Math.max(0, Math.min(540 - obj.height, obj.y));
+
+            const el = $(`[data-obj-id="${obj.obj_id}"]`);
+            el.css({
+                left: obj.x + 'px',
+                top: obj.y + 'px',
+                width: obj.width + 'px',
+                height: obj.height + 'px',
+            });
         });
         updateGroupBoundingBox();
+        renderSlideThumbnail(state.slides.find(s => s._id === state.currentSlide));
         return;
     }
 
@@ -2426,6 +2523,51 @@ function updateImageFit(value) {
     renderSlideThumbnail(state.slides.find(s => s._id === state.currentSlide));
 }
 
+// ============ 최근 사용 색상 ============
+
+function addRecentColor(color) {
+    if (!color) return;
+    const c = color.toUpperCase();
+    // 중복 제거
+    state.recentColors = state.recentColors.filter(rc => rc.toUpperCase() !== c);
+    // 맨 앞에 추가
+    state.recentColors.unshift(color);
+    // 최대 5개 유지
+    if (state.recentColors.length > 5) {
+        state.recentColors = state.recentColors.slice(0, 5);
+    }
+    renderRecentColors();
+}
+
+function renderRecentColors() {
+    $('.recent-colors').each(function () {
+        const $container = $(this);
+        const targetId = $container.data('target');
+        $container.empty();
+        if (state.recentColors.length === 0) return;
+        state.recentColors.forEach(function (color) {
+            const $swatch = $('<span>')
+                .addClass('recent-color-swatch')
+                .css('background-color', color)
+                .attr('title', color)
+                .on('click', function () {
+                    // 색상 적용
+                    $('#' + targetId).val(color);
+                    // 해당 input의 onchange 트리거
+                    if (targetId === 'propColor') {
+                        updateTextStyle('color', color);
+                    } else if (targetId === 'propFillColor') {
+                        updateShapeStyle('fill_color', color);
+                    } else if (targetId === 'propStrokeColor') {
+                        updateShapeStyle('stroke_color', color);
+                    }
+                    addRecentColor(color);
+                });
+            $container.append($swatch);
+        });
+    });
+}
+
 function updateTextStyle(prop, value) {
     // 멀티셀렉트: 선택된 모든 텍스트 객체에 적용
     const textObjs = state.selectedObjects.filter(o => o.obj_type === 'text');
@@ -2445,6 +2587,11 @@ function updateTextStyle(prop, value) {
             case 'align': textEl.css('textAlign', value); break;
         }
     });
+
+    // 색상 변경 시 최근 색상에 추가
+    if (prop === 'color') {
+        addRecentColor(value);
+    }
 }
 
 function toggleBold() {
@@ -3277,6 +3424,11 @@ function updateShapeStyle(prop, value) {
     });
 
     updateShapePropertyVisibility();
+
+    // 색상 변경 시 최근 색상에 추가
+    if (prop === 'fill_color' || prop === 'stroke_color') {
+        addRecentColor(value);
+    }
 }
 
 function updateShapePropertyVisibility() {
