@@ -5232,7 +5232,7 @@ function collectEditedText() {
         if (objType === 'text') {
             const textEl = el.find('.edit-text-content');
             if (!textEl.length) return;
-            const newText = textEl.text();
+            const newText = textEl[0].innerText;
             if (role === 'subtitle' && !isNaN(itemIdx) && slide.items && slide.items[itemIdx]) {
                 slide.items[itemIdx].heading = newText;
             } else if (role === 'description' && !isNaN(itemIdx) && slide.items && slide.items[itemIdx]) {
