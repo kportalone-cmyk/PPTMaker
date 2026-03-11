@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Request
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from bson import ObjectId
 from datetime import datetime, timedelta
 from models.template import (
@@ -152,6 +152,47 @@ async def upload_background(jwt_token: str, template_id: str, file: UploadFile =
     )
     await invalidate_template_cache(template_id)
     return {"image_url": image_url}
+
+
+# ============ PPTX 가져오기 ============
+
+@router.post("/{jwt_token}/api/admin/templates/import-pptx")
+async def import_pptx_template(jwt_token: str, file: UploadFile = File(...), template_name: str = Form(...)):
+    """PPTX 파일을 분석하여 자동 템플릿 생성"""
+    user = await verify_admin(jwt_token)
+
+    if not file.filename.lower().endswith(".pptx"):
+        raise HTTPException(status_code=400, detail=".pptx 파일만 지원합니다")
+
+    # 임시 파일 저장
+    temp_filename = f"import_{uuid.uuid4().hex}.pptx"
+    temp_path = os.path.join(settings.UPLOAD_DIR, temp_filename)
+    os.makedirs(os.path.dirname(temp_path), exist_ok=True)
+
+    try:
+        async with aiofiles.open(temp_path, "wb") as f:
+            content = await file.read()
+            await f.write(content)
+
+        from services.pptx_import_service import import_pptx_as_template
+        result = await import_pptx_as_template(
+            file_path=temp_path,
+            template_name=template_name.strip(),
+            user_key=user.get("ky", ""),
+        )
+
+        await invalidate_template_cache()
+        return result
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PPTX 가져오기 실패: {str(e)}")
+    finally:
+        # 임시 파일 삭제
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
 
 # ============ 슬라이드 CRUD ============

@@ -1174,7 +1174,7 @@ def _fill_placeholders(slides_meta: list[dict], template_idx: int, chunk_text: s
             first_line = chunk_text.split("\n")[0] if chunk_text else "제목"
             contents[name] = first_line[:50]
         elif role == "governance":
-            contents[name] = "PPTMaker 자동 생성"
+            contents[name] = f"{settings.SOLUTION_NAME} 자동 생성"
         elif role == "subtitle":
             contents[name] = chunk_text[:80] if chunk_text else ""
         else:

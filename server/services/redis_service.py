@@ -13,7 +13,7 @@ _redis: Redis | None = None
 _available: bool = False
 
 # ─── 키 접두사 ───
-_PREFIX = "pptmaker"
+_PREFIX = "officemaker"
 
 
 def _key(*parts: str) -> str:

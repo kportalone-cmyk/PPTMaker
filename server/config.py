@@ -8,6 +8,9 @@ load_dotenv(dotenv_path=env_path)
 
 
 class Settings:
+    # Solution
+    SOLUTION_NAME: str = os.getenv("SOLUTION_NAME", "OfficeMaker")
+
     # MongoDB
     MONGO_URI: str = os.getenv("MONGO_URI", "")
     PPTMAKER_DB: str = os.getenv("PPTMAKER_DB", "PPTMaker")

@@ -1,5 +1,5 @@
 /**
- * PPTMaker 관리자 모듈
+ * OfficeMaker 관리자 모듈
  */
 
 // ============ 전역 상태 ============
@@ -46,7 +46,13 @@ const state = {
 };
 
 // ============ 초기화 ============
+const _SOLUTION = window.__SOLUTION_NAME__ || 'OfficeMaker';
+
 $(document).ready(function () {
+    // 솔루션명 동적 반영
+    document.title = _SOLUTION + ' - 관리자';
+    $('.app-title-admin').text(_SOLUTION + ' 관리자');
+
     // URL에서 JWT 추출
     const pathParts = window.location.pathname.split('/');
     // /admin 경로에서 JWT를 URL에서 가져옴
@@ -55,7 +61,7 @@ $(document).ready(function () {
 
     if (!state.jwtToken || state.jwtToken === 'admin') {
         // JWT가 없으면 로컬스토리지에서 확인 (임시 - 실제로는 URL에서 가져와야 함)
-        state.jwtToken = localStorage.getItem('pptmaker_jwt') || '';
+        state.jwtToken = localStorage.getItem('officemaker_jwt') || '';
         if (!state.jwtToken) {
             showLoginPrompt();
             return;
@@ -649,11 +655,41 @@ $(document).on('click', function(e) {
 function showNewTemplateModal() {
     $('#newTemplateName').val('');
     $('#newTemplateDesc').val('');
+    $('#importPptxFile').val('');
+    $('#importFileLabel').text('클릭하여 .pptx 파일을 선택하세요');
+    $('#importFileDropZone').css('border-color', '#ccc');
+    $('#importProgress').hide();
+    $('#importResult').hide();
+    $('#btnCreateTemplate').prop('disabled', false).text('생성');
     $('#newTemplateModal').show();
 }
 
 function closeModal(id) {
     $('#' + id).hide();
+}
+
+function onImportFileSelected(event) {
+    const file = event.target.files[0];
+    if (!file) {
+        $('#importFileLabel').text('클릭하여 .pptx 파일을 선택하세요');
+        $('#importFileDropZone').css('border-color', '#ccc');
+        return;
+    }
+
+    if (!file.name.toLowerCase().endsWith('.pptx')) {
+        showToast('.pptx 파일만 가져올 수 있습니다', 'error');
+        event.target.value = '';
+        return;
+    }
+
+    $('#importFileLabel').html('<strong>' + file.name + '</strong><br><span style="font-size:12px;color:#666;">' + (file.size / 1024 / 1024).toFixed(1) + ' MB</span>');
+    $('#importFileDropZone').css('border-color', '#2d5a8e');
+
+    // 파일명에서 템플릿 이름 자동 채우기 (비어있는 경우)
+    if (!$('#newTemplateName').val().trim()) {
+        const nameWithoutExt = file.name.replace(/\.pptx$/i, '');
+        $('#newTemplateName').val(nameWithoutExt);
+    }
 }
 
 async function createTemplate() {
@@ -662,19 +698,94 @@ async function createTemplate() {
         alert('템플릿 이름을 입력하세요');
         return;
     }
-    try {
-        const res = await apiPost('/api/admin/templates', {
-            name: name,
-            description: $('#newTemplateDesc').val().trim(),
-        });
-        closeModal('newTemplateModal');
-        showToast('템플릿이 생성되었습니다', 'success');
-        await loadTemplates();
-        selectTemplate(res.template._id);
-    } catch (e) {
-        showToast('생성 실패: ' + e.message, 'error');
+
+    const fileInput = document.getElementById('importPptxFile');
+    const file = fileInput.files && fileInput.files[0];
+
+    if (file) {
+        // PPTX 파일이 있으면 import 방식
+        $('#btnCreateTemplate').prop('disabled', true).text('처리 중...');
+        $('#importProgress').show();
+        $('#importResult').hide();
+        $('#importProgressText').text('PPTX 파일 분석 중...');
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('template_name', name);
+
+        try {
+            const res = await apiUpload('/api/admin/templates/import-pptx', formData);
+
+            $('#importProgress').hide();
+            $('#importResult').show();
+
+            const classInfo = (res.classification || []).map(c => {
+                const typeNames = {
+                    'title_slide': '타이틀',
+                    'toc': '목차',
+                    'section_divider': '간지',
+                    'body': '본문',
+                    'closing': '마무리'
+                };
+                return (typeNames[c.content_type] || c.content_type);
+            });
+
+            $('#importResultText').html(
+                '<strong>✓ 템플릿 생성 완료!</strong><br>' +
+                '슬라이드 ' + res.slides_count + '개 분석 완료<br>' +
+                '<span style="font-size:12px;color:#555;">구성: ' + classInfo.join(' → ') + '</span>'
+            );
+
+            await loadTemplates();
+
+            setTimeout(() => {
+                closeModal('newTemplateModal');
+                selectTemplate(res.template_id);
+                showToast('PPTX에서 템플릿이 생성되었습니다 (' + res.slides_count + '개 슬라이드)', 'success');
+            }, 1500);
+
+        } catch (e) {
+            $('#importProgress').hide();
+            showToast('PPTX 가져오기 실패: ' + e.message, 'error');
+        } finally {
+            $('#btnCreateTemplate').prop('disabled', false).text('생성');
+        }
+    } else {
+        // 빈 템플릿 생성
+        try {
+            const res = await apiPost('/api/admin/templates', {
+                name: name,
+                description: $('#newTemplateDesc').val().trim(),
+            });
+            closeModal('newTemplateModal');
+            showToast('템플릿이 생성되었습니다', 'success');
+            await loadTemplates();
+            selectTemplate(res.template._id);
+        } catch (e) {
+            showToast('생성 실패: ' + e.message, 'error');
+        }
     }
 }
+
+// PPTX 드래그 앤 드롭
+$(document).on('dragover', '#importFileDropZone', function(e) {
+    e.preventDefault();
+    $(this).addClass('drag-over');
+});
+$(document).on('dragleave', '#importFileDropZone', function(e) {
+    e.preventDefault();
+    $(this).removeClass('drag-over');
+});
+$(document).on('drop', '#importFileDropZone', function(e) {
+    e.preventDefault();
+    $(this).removeClass('drag-over');
+    const files = e.originalEvent.dataTransfer.files;
+    if (files.length > 0) {
+        const fileInput = document.getElementById('importPptxFile');
+        fileInput.files = files;
+        onImportFileSelected({ target: fileInput });
+    }
+});
 
 async function selectTemplate(templateId) {
     if (state.isDrawing) cancelDrawMode();

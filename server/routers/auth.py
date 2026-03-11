@@ -31,7 +31,7 @@ async def get_current_user(request: Request) -> dict:
 async def login(req: LoginRequest):
     """로그인 후 JWT 토큰 발급"""
     db = get_db()
-    # PPTMaker DB에서 계정 정보 확인
+    # 계정 정보 확인
     account = await db.accounts.find_one({"user_key": req.user_key})
 
     if not account:

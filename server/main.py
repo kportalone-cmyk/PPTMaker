@@ -87,7 +87,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="OfficeCoWork API",
+    title=f"{settings.SOLUTION_NAME} API",
     description="기업용 파워포인트 자동 생성 솔루션",
     version="1.0.0",
     lifespan=lifespan,
@@ -144,7 +144,7 @@ if front_path.exists():
 # ============ HTML 페이지 라우트 ============
 
 def inject_version(html_content: str, base_dir: str) -> str:
-    """HTML 내 CSS/JS 파일 참조에 버전 파라미터 추가"""
+    """HTML 내 CSS/JS 파일 참조에 버전 파라미터 추가 + 솔루션명 주입"""
     import re
 
     def add_version(match):
@@ -169,6 +169,11 @@ def inject_version(html_content: str, base_dir: str) -> str:
         add_version,
         html_content
     )
+
+    # 솔루션명 주입 (window.__SOLUTION_NAME__ 전역 변수)
+    solution_script = f'<script>window.__SOLUTION_NAME__="{settings.SOLUTION_NAME}";</script>'
+    html_content = html_content.replace("</head>", f"{solution_script}\n</head>", 1)
+
     return html_content
 
 
@@ -313,7 +318,7 @@ if __name__ == "__main__":
 
     # 콘솔 타이틀 설정
     _proto = "HTTPS" if (settings.SSL_CERTFILE and settings.SSL_KEYFILE) else "HTTP"
-    _title = f"OfficeCoWork Server | {_proto} :{settings.SERVER_PORT} | DB:{settings.PPTMAKER_DB} | Redis:{settings.REDIS_HOST}:{settings.REDIS_PORT} | {settings.ANTHROPIC_MODEL}"
+    _title = f"{settings.SOLUTION_NAME} Server | {_proto} :{settings.SERVER_PORT} | DB:{settings.PPTMAKER_DB} | Redis:{settings.REDIS_HOST}:{settings.REDIS_PORT} | {settings.ANTHROPIC_MODEL}"
     if platform.system() == "Windows":
         import ctypes
         ctypes.windll.kernel32.SetConsoleTitleW(_title)
@@ -341,7 +346,7 @@ if __name__ == "__main__":
     protocol = "https" if use_https else "http"
     print("")
     print("=" * 60)
-    print("  OfficeCoWork Server")
+    print(f"  {settings.SOLUTION_NAME} Server")
     print("=" * 60)
     print(f"  Protocol     : {protocol.upper()}")
     print(f"  Host         : {settings.SERVER_HOST}")
@@ -350,7 +355,7 @@ if __name__ == "__main__":
     print(f"  Auto Reload  : {'ON' if settings.AUTO_RELOAD else 'OFF'}")
     print("-" * 60)
     print(f"  MongoDB      : {settings.MONGO_URI.split('@')[-1].split('?')[0] if '@' in settings.MONGO_URI else settings.MONGO_URI}")
-    print(f"  OfficeCoWork DB : {settings.PPTMAKER_DB}")
+    print(f"  {settings.SOLUTION_NAME} DB : {settings.PPTMAKER_DB}")
     print(f"  Org DB       : {settings.ORG_DB} / {settings.ORG_COLLECTION}")
     _redis_pw = "(비밀번호 설정)" if settings.REDIS_PASSWORD else "(비밀번호 없음)"
     print(f"  Redis        : {settings.REDIS_HOST}:{settings.REDIS_PORT} DB={settings.REDIS_DB} {_redis_pw}")

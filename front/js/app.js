@@ -1,6 +1,9 @@
 /**
- * PPTMaker - Kimi K2 Slides Style Frontend
+ * OfficeMaker - Kimi K2 Slides Style Frontend
  */
+
+// ============ 솔루션명 ============
+const _SOLUTION = window.__SOLUTION_NAME__ || 'OfficeMaker';
 
 // ============ 전역 상태 ============
 const state = {
@@ -71,7 +74,7 @@ document.addEventListener('visibilitychange', () => {
 // ============ 다국어 사전 ============
 const I18N = {
     ko: {
-        appTitle: 'OfficeCoWork',
+        appTitle: (window.__SOLUTION_NAME__ || 'OfficeMaker'),
         appSubtitle: '기업용 파워포인트 자동 생성 솔루션',
         login: '로그인',
         logout: '로그아웃',
@@ -236,7 +239,7 @@ const I18N = {
         authErrorDesc: '접속 링크가 만료되었거나 잘못된 인증정보입니다.\n관리자에게 문의하거나 다시 시도해주세요.',
     },
     en: {
-        appTitle: 'OfficeCoWork',
+        appTitle: (window.__SOLUTION_NAME__ || 'OfficeMaker'),
         appSubtitle: 'Enterprise PowerPoint Auto-Generation',
         login: 'Login',
         logout: 'Logout',
@@ -401,7 +404,7 @@ const I18N = {
         authErrorDesc: 'The access link has expired or is invalid.\nPlease contact your administrator or try again.',
     },
     ja: {
-        appTitle: 'OfficeCoWork',
+        appTitle: (window.__SOLUTION_NAME__ || 'OfficeMaker'),
         appSubtitle: '企業向けPPT自動生成',
         login: 'ログイン',
         logout: 'ログアウト',
@@ -557,7 +560,7 @@ const I18N = {
         authErrorDesc: 'アクセスリンクの有効期限が切れているか、無効です。\n管理者にお問い合わせください。',
     },
     zh: {
-        appTitle: 'OfficeCoWork',
+        appTitle: (window.__SOLUTION_NAME__ || 'OfficeMaker'),
         appSubtitle: '企业级PPT自动生成',
         login: '登录',
         logout: '退出',
@@ -1017,6 +1020,11 @@ function logout() {
 }
 
 async function initApp() {
+    // 솔루션명 동적 반영
+    document.title = _SOLUTION;
+    $('.app-title').text(_SOLUTION);
+    $('.app-title-sidebar').text(_SOLUTION);
+
     // 사용자 정보 표시
     const nm = state.userInfo.nm || '';
     $('#sidebarUserName').text(nm);
@@ -5612,7 +5620,7 @@ async function loadSharedPresentation(shareToken) {
             state.generatedSlides = data.slides || [];
             state.currentSlideIndex = 0;
 
-            document.title = data.project_name + ' - OfficeCoWork';
+            document.title = data.project_name + ' - ' + (window.__SOLUTION_NAME__ || 'OfficeMaker');
             showApp();
             $('#sidebar').hide();
             $('#sidebarUserName').text(t('sharedPresentation'));
@@ -5631,7 +5639,7 @@ async function loadSharedExcel(shareToken, projectName) {
     if (!res.ok) throw new Error('Not found');
     const data = await res.json();
 
-    document.title = (projectName || data.project_name) + ' - OfficeCoWork';
+    document.title = (projectName || data.project_name) + ' - ' + (window.__SOLUTION_NAME__ || 'OfficeMaker');
     showApp();
     $('#sidebar').hide();
     $('#sidebarUserName').text(t('sharedPresentation'));
@@ -5670,7 +5678,7 @@ async function loadSharedWord(shareToken, projectName) {
     if (!res.ok) throw new Error('Not found');
     const data = await res.json();
 
-    document.title = (projectName || data.project_name) + ' - OfficeCoWork';
+    document.title = (projectName || data.project_name) + ' - ' + (window.__SOLUTION_NAME__ || 'OfficeMaker');
     showApp();
     $('#sidebar').hide();
     $('#sidebarUserName').text(t('sharedPresentation'));

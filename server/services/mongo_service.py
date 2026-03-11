@@ -12,7 +12,7 @@ def get_client() -> AsyncIOMotorClient:
 
 
 def get_db():
-    """PPTMaker DB 반환"""
+    """앱 DB 반환"""
     return get_client()[settings.PPTMAKER_DB]
 
 
