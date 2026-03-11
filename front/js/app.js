@@ -190,6 +190,7 @@ const I18N = {
         msgNoWordData: '생성된 문서가 없습니다',
         downloadDocx: 'DOCX 다운로드',
         resourceHint: '리소스를 추가하면 참고하여 생성하고, 없으면 웹 검색으로 자료를 수집합니다.',
+        msgNeedInstructions: '어떤 내용을 어떻게 작성할지 지침을 입력해주세요',
         msgEnterInstructions: '지침을 입력하세요 (리소스가 없으면 인터넷 검색으로 자료를 수집합니다)',
         typeFile: '파일',
         typeText: '텍스트',
@@ -354,6 +355,7 @@ const I18N = {
         msgNoWordData: 'No generated document data',
         downloadDocx: 'Download DOCX',
         resourceHint: 'Add resources to use as reference, or leave empty to generate from web search.',
+        msgNeedInstructions: 'Please enter instructions on what content to create and how',
         msgEnterInstructions: 'Enter instructions (internet search will be used if no resources)',
         typeFile: 'File',
         typeText: 'Text',
@@ -509,6 +511,7 @@ const I18N = {
         generateWord: 'ドキュメント生成',
         downloadDocx: 'DOCXダウンロード',
         resourceHint: 'リソースを追加すると参考にして生成し、なければウェブ検索で資料を収集します。',
+        msgNeedInstructions: 'どのような内容をどのように作成するか指示を入力してください',
         msgEnterInstructions: '指示を入力してください（リソースがない場合はインターネット検索を使用）',
         typeFile: 'ファイル',
         typeText: 'テキスト',
@@ -664,6 +667,7 @@ const I18N = {
         generateWord: '生成文档',
         downloadDocx: '下载DOCX',
         resourceHint: '添加资源将作为参考生成，未添加则通过网络搜索收集资料。',
+        msgNeedInstructions: '请输入要创建什么内容以及如何创建的指示',
         msgEnterInstructions: '请输入指令（如无资源将通过网络搜索收集资料）',
         typeFile: '文件',
         typeText: '文本',
@@ -2151,8 +2155,8 @@ async function openAddSlideModal() {
 }
 
 function updateManualModeUI() {
-    // 슬라이드가 있으면 AI 지침 바 표시
-    if (state.generatedSlides.length > 0) {
+    // 슬라이드가 있으면 AI 지침 바 표시 (viewer 제외)
+    if (state.generatedSlides.length > 0 && state.collabRole !== 'viewer') {
         $('#slideInstructionBar').show();
     } else {
         $('#slideInstructionBar').hide();
@@ -2641,6 +2645,7 @@ async function generatePPT() {
     const slideCount = $('#slideCountSelect').val();
 
     if (!templateId) { showToast(t('msgSelectTemplate'), 'error'); return; }
+    if (!instructions) { showToast(t('msgNeedInstructions'), 'error'); return; }
     if (state.resources.length === 0 && !instructions) { showToast(t('msgEnterInstructions', '지침을 입력하세요'), 'error'); return; }
 
     _isGenerating = true;
@@ -3118,7 +3123,9 @@ function renderSlideArea() {
     $('#slideEmpty').hide();
     $('#slidePreview').css('display', 'flex');
     $('#wsSlideTools').css('display', 'flex');
-    $('#slideInstructionBar').show();
+    if (state.collabRole !== 'viewer') {
+        $('#slideInstructionBar').show();
+    }
     renderSlideThumbList();
     renderSlideTextPanel();
     renderSlideAtIndex(state.currentSlideIndex);
@@ -3937,8 +3944,10 @@ async function enterEditMode() {
     // 하단 썸네일 숨기고 편집 도구 모음 표시
     $('.slide-nav').hide();
     $('#editBottomToolbar').show();
-    // AI 지침 입력 바 유지
-    $('#slideInstructionBar').show();
+    // AI 지침 입력 바 유지 (viewer 제외)
+    if (state.collabRole !== 'viewer') {
+        $('#slideInstructionBar').show();
+    }
     _updateEditSlideCounter();
     _populateEditFontSelector();
     renderSlideAtIndexEditable(state.currentSlideIndex);
@@ -6127,6 +6136,7 @@ function updateCollabUI() {
         $('#inputBar').hide();
         $('#btnResetProject').hide();
         $('#btnDeleteProject').hide();
+        $('#slideInstructionBar').hide();
     } else if (isEditor) {
         $('#btnEditToggle').show();
         // editor는 슬라이드 AI 텍스트 생성 가능
@@ -6334,6 +6344,7 @@ function selectCollabUser(index) {
     $('#collabUserKey').val(user.ky);
     $('#collabSearchDropdown').hide();
     _collabSearchIndex = -1;
+    addCollaborator();
 }
 
 async function addCollaborator() {
