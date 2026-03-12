@@ -2655,13 +2655,34 @@ body {
     background: white;
     overflow: hidden;
     opacity: 0;
-    transition: opacity 0.35s ease;
+    transform: scale(1);
+    transition: opacity 2.7s cubic-bezier(.22,1,.36,1), transform 2.7s cubic-bezier(.22,1,.36,1);
     pointer-events: none;
 }
 
 .presentation-slide.active {
     opacity: 1;
+    transform: scale(1) translateX(0);
     pointer-events: auto;
+}
+
+/* 방향성 전환 — 나가는 슬라이드 (opacity를 빠르게 처리하여 잔영 방지) */
+.presentation-slide.pres-exit-forward {
+    opacity: 0;
+    transform: translateX(-4%) scale(0.97);
+    transition: opacity 0.6s cubic-bezier(.4,0,1,1), transform 2.7s cubic-bezier(.22,1,.36,1);
+}
+.presentation-slide.pres-exit-backward {
+    opacity: 0;
+    transform: translateX(4%) scale(0.97);
+    transition: opacity 0.6s cubic-bezier(.4,0,1,1), transform 2.7s cubic-bezier(.22,1,.36,1);
+}
+/* 방향성 전환 — 들어오는 슬라이드 */
+.presentation-slide.pres-enter-forward {
+    transform: translateX(4%) scale(0.97);
+}
+.presentation-slide.pres-enter-backward {
+    transform: translateX(-4%) scale(0.97);
 }
 
 .presentation-slide .canvas-bg {
@@ -2670,6 +2691,71 @@ body {
     width: 100%; height: 100%;
     background-size: cover;
     background-position: center;
+}
+
+/* ── 프레젠테이션 진행 바 ── */
+.pres-progress {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%;
+    height: 3px;
+    background: rgba(255,255,255,0.08);
+    z-index: 5003;
+    pointer-events: none;
+}
+.pres-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, rgba(99,102,241,0.9), rgba(168,85,247,0.9));
+    border-radius: 0 2px 2px 0;
+    transition: width 2.4s cubic-bezier(.22,1,.36,1);
+    box-shadow: 0 0 8px rgba(99,102,241,0.4);
+}
+
+/* ── 오브젝트 입장 애니메이션 ── */
+@keyframes presObjFadeInUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+@keyframes presObjFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+@keyframes presObjScaleIn {
+    from { opacity: 0; transform: scale(0.92); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+.presentation-slide.active .pres-obj-animate {
+    animation: presObjFadeInUp 3s cubic-bezier(.22,1,.36,1) both;
+}
+.presentation-slide.active .pres-obj-animate.pres-anim-image {
+    animation-name: presObjScaleIn;
+    animation-duration: 3.6s;
+}
+.presentation-slide.active .pres-obj-animate.pres-anim-title {
+    animation-name: presObjFadeIn;
+    animation-duration: 2.4s;
+}
+
+/* 역할별 지연 시간 — title 먼저, subtitle, description, image 순 */
+.pres-obj-animate.pres-delay-0 { animation-delay: 0.3s; }
+.pres-obj-animate.pres-delay-1 { animation-delay: 0.72s; }
+.pres-obj-animate.pres-delay-2 { animation-delay: 1.2s; }
+.pres-obj-animate.pres-delay-3 { animation-delay: 1.68s; }
+.pres-obj-animate.pres-delay-4 { animation-delay: 2.16s; }
+.pres-obj-animate.pres-delay-5 { animation-delay: 2.64s; }
+.pres-obj-animate.pres-delay-6 { animation-delay: 3.12s; }
+.pres-obj-animate.pres-delay-7 { animation-delay: 3.6s; }
+.pres-obj-animate.pres-delay-8 { animation-delay: 4.08s; }
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    .presentation-slide { transition: opacity 0.15s ease !important; transform: none !important; }
+    .presentation-slide.pres-exit-forward,
+    .presentation-slide.pres-exit-backward,
+    .presentation-slide.pres-enter-forward,
+    .presentation-slide.pres-enter-backward { transform: none !important; }
+    .pres-obj-animate { animation: none !important; }
 }
 
 .presentation-close {
@@ -2689,6 +2775,139 @@ body {
 }
 
 .presentation-close:hover { background: rgba(255,255,255,0.2); }
+
+/* 프레젠테이션 하단 네비게이션 */
+.pres-nav {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(60px);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(18, 18, 22, 0.88);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    padding: 7px 10px;
+    z-index: 5002;
+    opacity: 0;
+    transition: opacity 0.35s, transform 0.35s cubic-bezier(.22,1,.36,1);
+    pointer-events: none;
+    max-width: 90vw;
+}
+.presentation-overlay:hover .pres-nav,
+.pres-nav:hover,
+.pres-nav.pres-nav-visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+    pointer-events: auto;
+}
+.pres-nav-btn {
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: rgba(255,255,255,0.6);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.pres-nav-btn:hover {
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+}
+.pres-nav-btn:disabled {
+    opacity: 0.25;
+    cursor: default;
+}
+.pres-nav-btn:disabled:hover {
+    background: transparent;
+    color: rgba(255,255,255,0.6);
+}
+
+/* 캐러셀 영역 */
+.pres-nav-carousel-wrap {
+    overflow: hidden;
+    max-width: min(480px, 55vw);
+    border-radius: 6px;
+}
+.pres-nav-carousel {
+    display: flex;
+    gap: 6px;
+    padding: 2px 0;
+    transition: transform 0.3s cubic-bezier(.22,1,.36,1);
+    will-change: transform;
+}
+
+/* 슬라이드 썸네일 */
+.pres-thumb {
+    flex-shrink: 0;
+    width: 64px;
+    height: 36px;
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background: #333;
+    background-size: cover;
+    background-position: center;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s;
+    opacity: 0.55;
+}
+.pres-thumb:hover {
+    opacity: 0.85;
+    transform: scale(1.06);
+}
+.pres-thumb.active {
+    border-color: rgba(129, 140, 248, 0.9);
+    box-shadow: 0 0 0 1px rgba(129,140,248,0.3), 0 2px 8px rgba(99,102,241,0.25);
+    opacity: 1;
+    transform: scale(1.06);
+}
+.pres-thumb-num {
+    position: absolute;
+    bottom: 1px;
+    right: 3px;
+    font-size: 9px;
+    font-weight: 700;
+    color: rgba(255,255,255,0.85);
+    text-shadow: 0 1px 3px rgba(0,0,0,0.7);
+    line-height: 1;
+    pointer-events: none;
+}
+
+/* 페이지 표시 */
+.pres-nav-pages {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.85);
+    min-width: 36px;
+    justify-content: center;
+    user-select: none;
+}
+.pres-nav-sep {
+    color: rgba(255,255,255,0.3);
+    font-weight: 400;
+    margin: 0 1px;
+}
+.pres-nav-divider {
+    flex-shrink: 0;
+    width: 1px;
+    height: 20px;
+    background: rgba(255,255,255,0.12);
+    margin: 0 2px;
+}
 
 /* 타이핑 커서 */
 .typing-cursor {

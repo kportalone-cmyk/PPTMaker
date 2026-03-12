@@ -34,15 +34,24 @@ async def init_indexes():
     await db.slides.create_index("template_id")
     await db.slides.create_index([("template_id", 1), ("order", 1)])
 
+    # accounts 컬렉션
+    await db.accounts.create_index("user_key", unique=True)
+
     # projects 컬렉션
     await db.projects.create_index("user_key")
     await db.projects.create_index("created_at")
     await db.projects.create_index("status")
     await db.projects.create_index("project_type")
+    await db.projects.create_index("share_token", sparse=True)
+    await db.projects.create_index("name")
+    await db.projects.create_index([("user_key", 1), ("created_at", -1)])
+    await db.projects.create_index([("user_key", 1), ("updated_at", -1)])
+    await db.projects.create_index([("status", 1), ("updated_at", -1)])
 
     # resources 컬렉션
     await db.resources.create_index("project_id")
     await db.resources.create_index("resource_type")
+    await db.resources.create_index([("project_id", 1), ("created_at", -1)])
 
     # generated_slides 컬렉션
     await db.generated_slides.create_index("project_id")
@@ -89,6 +98,7 @@ async def init_indexes():
     # slide_history 컬렉션
     await db.slide_history.create_index([("project_id", 1), ("created_at", -1)])
     await db.slide_history.create_index([("project_id", 1), ("slide_id", 1)])
+    await db.slide_history.create_index([("slide_id", 1), ("created_at", -1)])
 
     # online_presence 컬렉션
     await db.online_presence.create_index(
@@ -106,6 +116,7 @@ async def init_indexes():
     await org_col.create_index("nm")
     await org_col.create_index("ky", unique=True)
     await org_col.create_index("em")
+    await org_col.create_index("dp")
 
 
 async def close_connection():

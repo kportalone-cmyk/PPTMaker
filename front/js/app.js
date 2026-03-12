@@ -36,6 +36,7 @@ const state = {
     // 협업 상태
     collaborators: [],
     sharedProjects: [],
+    isSharedView: false,
     activeLocks: {},
     onlineUsers: [],
     isCollabProject: false,
@@ -5322,8 +5323,9 @@ function _exitEditModeClean() {
 }
 
 // ============ 프레젠테이션 모드 ============
-let presentationIndex = 0;
-let _presActivePanel = 'A'; // 'A' 또는 'B' - 현재 활성 패널
+var presentationIndex = 0;
+var _presActivePanel = 'A'; // 'A' 또는 'B' - 현재 활성 패널
+var _presDirection = 'forward'; // 전환 방향: 'forward' 또는 'backward'
 
 async function startPresentation() {
     if (state.generatedSlides.length === 0) {
@@ -5349,23 +5351,31 @@ async function startPresentation() {
     $('#presentationSlideA').addClass('active');
     $('#presentationSlideB').removeClass('active');
     $('#presentationMode').show();
+
+    // 공유 URL 접속 시 닫기 버튼 숨김
+    if (state.isSharedView) {
+        $('#presentationMode .presentation-close').hide();
+    } else {
+        $('#presentationMode .presentation-close').show();
+    }
+
+    _presDirection = 'forward';
     renderPresentationSlide(0, 'A');
+    _buildPresCarousel();
+    _updatePresNav();
+    _updatePresProgress();
 
     $(document).on('keydown.presentation', function (e) {
         if (e.key === 'ArrowRight' || e.key === ' ') {
             e.preventDefault();
-            if (presentationIndex < state.generatedSlides.length - 1) {
-                presentationIndex++;
-                transitionPresentationSlide(presentationIndex);
-            }
+            presNavNext();
         } else if (e.key === 'ArrowLeft') {
             e.preventDefault();
-            if (presentationIndex > 0) {
-                presentationIndex--;
-                transitionPresentationSlide(presentationIndex);
-            }
-        } else if (e.key === 'Escape') {
+            presNavPrev();
+        } else if (e.key === 'Escape' && !state.isSharedView) {
             exitPresentation();
+        } else if (e.key === 'f' || e.key === 'F') {
+            togglePresFullscreen();
         }
     });
 }
@@ -5411,22 +5421,42 @@ function _preloadSlideImages(slides) {
     if (urls.size > 0) _preloadImages([...urls]);
 }
 
-let _presTransitioning = false;
+var _presTransitioning = false;
 
 function transitionPresentationSlide(index) {
     if (_presTransitioning) return;
     _presTransitioning = true;
 
-    // 다음 패널에 새 슬라이드를 미리 렌더링한 뒤 크로스페이드
-    const nextPanel = _presActivePanel === 'A' ? 'B' : 'A';
+    var nextPanel = _presActivePanel === 'A' ? 'B' : 'A';
+    var $current = $('#presentationSlide' + _presActivePanel);
+    var $next = $('#presentationSlide' + nextPanel);
+    var dir = _presDirection;
+    var exitClass = dir === 'forward' ? 'pres-exit-forward' : 'pres-exit-backward';
+    var enterClass = dir === 'forward' ? 'pres-enter-forward' : 'pres-enter-backward';
+
+    // 1) 새 패널에 슬라이드 렌더링 (아직 보이지 않음)
     renderPresentationSlide(index, nextPanel);
 
-    // 크로스페이드: 새 패널 활성화, 기존 패널 비활성화
-    $(`#presentationSlide${nextPanel}`).addClass('active');
-    $(`#presentationSlide${_presActivePanel}`).removeClass('active');
-    _presActivePanel = nextPanel;
+    // 2) 새 패널 시작 위치 설정 (transition 없이)
+    $next.css('transition', 'none').addClass(enterClass).removeClass('active');
+    // 강제 reflow로 시작 위치 적용
+    $next[0].offsetHeight;
 
-    setTimeout(() => { _presTransitioning = false; }, 350);
+    // 3) transition 복원 후 동시 전환
+    $next.css('transition', '');
+    requestAnimationFrame(function() {
+        $next.removeClass(enterClass).addClass('active');
+        $current.addClass(exitClass).removeClass('active');
+    });
+
+    _presActivePanel = nextPanel;
+    _updatePresProgress();
+
+    setTimeout(function() {
+        // 전환 완료: exit 클래스 제거
+        $current.removeClass(exitClass);
+        _presTransitioning = false;
+    }, 2800);
 }
 
 function renderPresentationSlide(index, panel) {
@@ -5451,8 +5481,10 @@ function renderPresentationSlide(index, panel) {
     let presSubIdx = 0;
     const presItems = slide.items || [];
 
-    (slide.objects || []).forEach(obj => {
-        const div = $('<div>').addClass('preview-obj').css({
+    var animIdx = 0; // 애니메이션 stagger 인덱스
+
+    (slide.objects || []).forEach(function(obj) {
+        var div = $('<div>').addClass('preview-obj').css({
             position: 'absolute',
             left: (obj.x * scaleX) + 'px',
             top: (obj.y * scaleY) + 'px',
@@ -5461,14 +5493,17 @@ function renderPresentationSlide(index, panel) {
             zIndex: 10,
         });
 
+        var role = (obj.role || obj._auto_role || '');
+
         if (obj.obj_type === 'image' && obj.image_url) {
-            const imgFit = obj.image_fit || 'contain';
-            div.append(`<img src="${obj.image_url}" style="width:100%;height:100%;object-fit:${imgFit};">`);
+            var imgFit = obj.image_fit || 'contain';
+            div.append('<img src="' + obj.image_url + '" style="width:100%;height:100%;object-fit:' + imgFit + ';">');
+            div.addClass('pres-obj-animate pres-anim-image pres-delay-' + Math.min(animIdx, 8));
+            animIdx++;
         } else if (obj.obj_type === 'text') {
-            const style = obj.text_style || {};
-            const text = obj.generated_text || obj.text_content || '';
-            const scaledFontSize = (style.font_size || 16) * Math.min(scaleX, scaleY);
-            const role = obj.role || obj._auto_role || '';
+            var style = obj.text_style || {};
+            var text = obj.generated_text || obj.text_content || '';
+            var scaledFontSize = (style.font_size || 16) * Math.min(scaleX, scaleY);
             div.css({
                 fontFamily: style.font_family || 'Inter, Arial, sans-serif',
                 fontSize: scaledFontSize + 'px',
@@ -5488,7 +5523,7 @@ function renderPresentationSlide(index, panel) {
                 presSubIdx++;
             // description 역할: item.detail만 표시
             } else if (role === 'description' && presItems.length > 0 && presDescIdx < presItems.length) {
-                const item = presItems[presDescIdx];
+                var item = presItems[presDescIdx];
                 div.text(item.detail || '');
                 presDescIdx++;
                 // 텍스트 넘침 시 높이 자동 확장
@@ -5496,16 +5531,130 @@ function renderPresentationSlide(index, panel) {
             } else {
                 div.text(text);
             }
+
+            // 역할별 애니메이션 클래스 부여
+            var animClass = role === 'title' ? 'pres-anim-title' : '';
+            div.addClass('pres-obj-animate ' + animClass + ' pres-delay-' + Math.min(animIdx, 8));
+            animIdx++;
         }
 
         container.append(div);
     });
 }
 
+function _buildPresCarousel() {
+    const $carousel = $('#presNavCarousel');
+    $carousel.empty();
+    state.generatedSlides.forEach((slide, i) => {
+        const bgStyle = slide.background_image
+            ? `background-image:url(${slide.background_image})`
+            : 'background:#e5e7eb';
+        $carousel.append(
+            `<div class="pres-thumb${i === presentationIndex ? ' active' : ''}" data-idx="${i}" style="${bgStyle}" onclick="presNavGoTo(${i})"><span class="pres-thumb-num">${i + 1}</span></div>`
+        );
+    });
+}
+
+function _updatePresNav() {
+    const total = state.generatedSlides.length;
+    const current = presentationIndex + 1;
+    $('#presNavCurrent').text(current);
+    $('#presNavTotal').text(total);
+    $('#presNavPrev').prop('disabled', presentationIndex <= 0);
+    $('#presNavNext').prop('disabled', presentationIndex >= total - 1);
+
+    // 썸네일 active 표시
+    $('#presNavCarousel .pres-thumb').removeClass('active');
+    $('#presNavCarousel .pres-thumb[data-idx="' + presentationIndex + '"]').addClass('active');
+
+    // 캐러셀 스크롤 — active 썸네일이 보이도록
+    _scrollCarouselToActive();
+}
+
+function _scrollCarouselToActive() {
+    const $wrap = $('.pres-nav-carousel-wrap');
+    const $carousel = $('#presNavCarousel');
+    const $active = $carousel.find('.pres-thumb.active');
+    if (!$active.length) return;
+
+    const wrapW = $wrap.width();
+    const thumbL = $active[0].offsetLeft;
+    const thumbW = $active.outerWidth();
+    // 활성 썸네일을 중앙에 위치
+    let offset = thumbL - (wrapW / 2) + (thumbW / 2);
+    const maxOffset = $carousel[0].scrollWidth - wrapW;
+    offset = Math.max(0, Math.min(offset, maxOffset));
+    $carousel.css('transform', 'translateX(' + (-offset) + 'px)');
+}
+
+function presNavGoTo(idx) {
+    if (idx === presentationIndex || idx < 0 || idx >= state.generatedSlides.length) return;
+    _presDirection = idx > presentationIndex ? 'forward' : 'backward';
+    presentationIndex = idx;
+    transitionPresentationSlide(presentationIndex);
+    _updatePresNav();
+}
+
+function _updatePresProgress() {
+    var total = state.generatedSlides.length;
+    var pct = total <= 1 ? 100 : ((presentationIndex / (total - 1)) * 100);
+    $('#presProgressBar').css('width', pct + '%');
+}
+
+function presNavPrev() {
+    if (presentationIndex > 0) {
+        presNavGoTo(presentationIndex - 1);
+    }
+}
+
+function presNavNext() {
+    if (presentationIndex < state.generatedSlides.length - 1) {
+        presNavGoTo(presentationIndex + 1);
+    }
+}
+
+function togglePresFullscreen() {
+    const presEl = document.getElementById('presentationMode');
+    if (document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement) {
+        if (document.exitFullscreen) document.exitFullscreen();
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        else if (document.msExitFullscreen) document.msExitFullscreen();
+    } else {
+        if (presEl.requestFullscreen) presEl.requestFullscreen().catch(() => {});
+        else if (presEl.webkitRequestFullscreen) presEl.webkitRequestFullscreen();
+        else if (presEl.msRequestFullscreen) presEl.msRequestFullscreen();
+    }
+}
+
 function exitPresentation() {
     $('#presentationMode').hide();
     $(document).off('keydown.presentation');
+    // 전체화면 해제
+    if (document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement) {
+        if (document.exitFullscreen) document.exitFullscreen();
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        else if (document.msExitFullscreen) document.msExitFullscreen();
+    }
 }
+
+// 전체화면 변경 시 아이콘 업데이트 + 비공유 뷰 종료 처리
+function _onFullscreenChange() {
+    const isFS = !!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement);
+    const $icon = $('#presFullscreenIcon');
+    if (isFS) {
+        // 축소 아이콘
+        $icon.html('<path d="M5 2v3H2M11 2v3h3M5 14v-3H2M11 14v-3h3"/>');
+    } else {
+        // 확대 아이콘
+        $icon.html('<path d="M2 5V2h3M14 5V2h-3M2 11v3h3M14 11v3h-3"/>');
+        // 비공유 뷰에서 전체화면 해제 시 프레젠테이션 종료
+        if ($('#presentationMode').is(':visible') && !state.isSharedView) {
+            exitPresentation();
+        }
+    }
+}
+document.addEventListener('fullscreenchange', _onFullscreenChange);
+document.addEventListener('webkitfullscreenchange', _onFullscreenChange);
 
 // ============ 다운로드 & 공유 ============
 
@@ -5592,6 +5741,7 @@ async function copyShareLink() {
 
 // ============ 공유 프레젠테이션 ============
 async function loadSharedPresentation(shareToken) {
+    state.isSharedView = true;
     try {
         // 공유 페이지용 폰트 로딩 (인증 불필요)
         try {

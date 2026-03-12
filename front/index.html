@@ -894,6 +894,8 @@
 
     <!-- 프레젠테이션 모드 -->
     <div id="presentationMode" class="presentation-overlay" style="display:none;">
+        <!-- 진행 바 -->
+        <div class="pres-progress"><div class="pres-progress-bar" id="presProgressBar" style="width:0%"></div></div>
         <button class="presentation-close" onclick="exitPresentation()">
             <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l12 12M16 4L4 16"/></svg>
         </button>
@@ -904,6 +906,30 @@
             <div class="presentation-slide" id="presentationSlideB">
                 <div class="canvas-bg" id="presentationBgB"></div>
             </div>
+        </div>
+        <!-- 하단 네비게이션 바 -->
+        <div class="pres-nav" id="presNav">
+            <button class="pres-nav-btn" id="presNavPrev" onclick="presNavPrev()">
+                <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2L4 8l6 6"/></svg>
+            </button>
+            <div class="pres-nav-carousel-wrap">
+                <div class="pres-nav-carousel" id="presNavCarousel"></div>
+            </div>
+            <button class="pres-nav-btn" id="presNavNext" onclick="presNavNext()">
+                <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2l6 6-6 6"/></svg>
+            </button>
+            <div class="pres-nav-divider"></div>
+            <span class="pres-nav-pages">
+                <span id="presNavCurrent">1</span>
+                <span class="pres-nav-sep">/</span>
+                <span id="presNavTotal">1</span>
+            </span>
+            <div class="pres-nav-divider"></div>
+            <button class="pres-nav-btn" id="presNavFullscreen" onclick="togglePresFullscreen()">
+                <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="presFullscreenIcon">
+                    <path d="M2 5V2h3M14 5V2h-3M2 11v3h3M14 11v3h-3"/>
+                </svg>
+            </button>
         </div>
     </div>
 
