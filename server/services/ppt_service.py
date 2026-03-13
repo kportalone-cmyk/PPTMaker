@@ -118,16 +118,40 @@ async def generate_pptx(project_id: str) -> str:
         items = gen_slide.get("items", [])
         sub_idx = 0
         desc_idx = 0
+
+        # 초과 subtitle/description의 Y 좌표 수집 → 같은 행의 number/shape도 제거
+        removed_y = set()
+        if items:
+            _sub_i, _desc_i = 0, 0
+            for o in objects_sorted:
+                r = o.get("role", "") or o.get("_auto_role", "")
+                ar = o.get("role_auto", False)
+                if r == "subtitle" and not ar:
+                    if _sub_i >= len(items):
+                        removed_y.add(round(o.get("y", 0)))
+                    _sub_i += 1
+                elif r == "description" and not ar:
+                    if _desc_i >= len(items):
+                        removed_y.add(round(o.get("y", 0)))
+                    _desc_i += 1
+
         for obj in objects_sorted:
             role = obj.get("role", "") or obj.get("_auto_role", "")
-            if items and role == "subtitle":
+            is_auto_role = obj.get("role_auto", False)
+            if items and role == "subtitle" and not is_auto_role:
                 if sub_idx >= len(items):
                     continue
                 sub_idx += 1
-            elif items and role == "description":
+            elif items and role == "description" and not is_auto_role:
                 if desc_idx >= len(items):
                     continue
                 desc_idx += 1
+
+            # 제거된 행의 number/shape도 함께 제거
+            if removed_y and (obj.get("obj_type") == "shape" or role == "number"):
+                obj_y = round(obj.get("y", 0))
+                if any(abs(obj_y - ry) <= 15 for ry in removed_y):
+                    continue
 
             xe, ye, we, he = _px_to_emu(obj["x"], obj["y"], obj["width"], obj["height"])
 

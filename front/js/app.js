@@ -2457,7 +2457,7 @@ async function _animateSlideTextUpdate(index) {
             left: (obj.x * scaleX) + 'px',
             top: (obj.y * scaleY) + 'px',
             width: (obj.width * scaleX) + 'px',
-            zIndex: 10,
+            zIndex: obj.z_index !== undefined ? obj.z_index : 10,
         });
 
         if (obj.obj_type === 'image' && obj.image_url) {
@@ -3180,7 +3180,7 @@ function renderSlideAtIndex(index) {
             top: (obj.y * scaleY) + 'px',
             width: (obj.width * scaleX) + 'px',
             height: (obj.height * scaleY) + 'px',
-            zIndex: 10,
+            zIndex: obj.z_index !== undefined ? obj.z_index : 10,
         });
 
         if (obj.obj_type === 'image' && obj.image_url) {
@@ -4077,7 +4077,7 @@ function renderSlideAtIndexEditable(index) {
             top: (obj.y * scaleY) + 'px',
             width: (obj.width * scaleX) + 'px',
             height: (obj.height * scaleY) + 'px',
-            zIndex: 10,
+            zIndex: obj.z_index !== undefined ? obj.z_index : 10,
         });
         div.attr('data-obj-idx', objIdx);
         div.attr('data-obj-type', obj.obj_type);
@@ -5456,7 +5456,7 @@ function transitionPresentationSlide(index) {
         // 전환 완료: exit 클래스 제거
         $current.removeClass(exitClass);
         _presTransitioning = false;
-    }, 2800);
+    }, 1400);
 }
 
 function renderPresentationSlide(index, panel) {
@@ -5490,7 +5490,7 @@ function renderPresentationSlide(index, panel) {
             top: (obj.y * scaleY) + 'px',
             width: (obj.width * scaleX) + 'px',
             height: (obj.height * scaleY) + 'px',
-            zIndex: 10,
+            zIndex: obj.z_index !== undefined ? obj.z_index : 10,
         });
 
         var role = (obj.role || obj._auto_role || '');

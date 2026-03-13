@@ -696,6 +696,7 @@ def _map_slide_content_to_placeholders(slide: dict, template_meta: dict) -> dict
     elif slide_type == "toc":
         _map_if("title", role_map, contents, slide.get("title", "목차"))
         items = slide.get("items", [])
+        has_number_obj = len(number_placeholders) > 0
 
         # number placeholder에 순서 번호 자동 매핑 (두 자리: 01, 02, ...)
         for i, item in enumerate(items):
@@ -703,36 +704,50 @@ def _map_slide_content_to_placeholders(slide: dict, template_meta: dict) -> dict
                 contents[number_placeholders[i]] = item.get("num", str(i + 1).zfill(2))
 
         if subtitle_placeholders and desc_placeholders and items:
-            # subtitle에 번호, description에 "01. 목차명" 형식 배치
             for i, item in enumerate(items):
                 num = item.get("num", str(i + 1).zfill(2))
                 text = item.get("text", "")
-                if i < len(subtitle_placeholders):
-                    contents[subtitle_placeholders[i]] = num
-                if i < len(desc_placeholders):
-                    contents[desc_placeholders[i]] = f"{num}. {text}" if num else text
+                if has_number_obj:
+                    # 숫자 오브젝트가 있으면 subtitle/desc에 텍스트만 배치
+                    if i < len(subtitle_placeholders):
+                        contents[subtitle_placeholders[i]] = text
+                    if i < len(desc_placeholders):
+                        contents[desc_placeholders[i]] = text
+                else:
+                    # 숫자 오브젝트가 없으면 "01. 목차명" 형식으로 번호 자동 추가
+                    if i < len(subtitle_placeholders):
+                        contents[subtitle_placeholders[i]] = num
+                    if i < len(desc_placeholders):
+                        contents[desc_placeholders[i]] = f"{num}. {text}" if num else text
         elif subtitle_placeholders and items:
-            # subtitle placeholder에 "01. 목차명" 형식 배치
             for i, item in enumerate(items):
                 if i >= len(subtitle_placeholders):
                     break
                 num = item.get("num", str(i + 1).zfill(2))
                 text = item.get("text", "")
-                contents[subtitle_placeholders[i]] = f"{num}. {text}" if num else text
+                if has_number_obj:
+                    contents[subtitle_placeholders[i]] = text
+                else:
+                    contents[subtitle_placeholders[i]] = f"{num}. {text}" if num else text
         elif desc_placeholders and items:
-            # description placeholder에 "01. 목차명" 형식 배치
             for i, item in enumerate(items):
                 if i >= len(desc_placeholders):
                     break
                 num = item.get("num", str(i + 1).zfill(2))
                 text = item.get("text", "")
-                contents[desc_placeholders[i]] = f"{num}. {text}" if num else text
+                if has_number_obj:
+                    contents[desc_placeholders[i]] = text
+                else:
+                    contents[desc_placeholders[i]] = f"{num}. {text}" if num else text
         elif items:
             toc_lines = []
             for i, item in enumerate(items):
                 num = item.get("num", str(i + 1).zfill(2))
                 text = item.get("text", "")
-                toc_lines.append(f"{num}. {text}" if num else text)
+                if has_number_obj:
+                    toc_lines.append(text)
+                else:
+                    toc_lines.append(f"{num}. {text}" if num else text)
             if "body" in role_map:
                 contents[role_map["body"]] = "\n".join(toc_lines)
 
@@ -768,10 +783,10 @@ def _map_slide_content_to_placeholders(slide: dict, template_meta: dict) -> dict
 
         items = slide.get("items", [])
 
-        # number placeholder에 순서 번호 자동 매핑 (1, 2, 3, ...)
+        # number placeholder에 순서 번호 자동 매핑 (01, 02, 03, ...)
         for i in range(len(items)):
             if i < len(number_placeholders):
-                contents[number_placeholders[i]] = str(i + 1)
+                contents[number_placeholders[i]] = str(i + 1).zfill(2)
 
         # 부제목/설명을 순서대로 1:1 매핑
         # items[i].heading → subtitle_placeholders[i]

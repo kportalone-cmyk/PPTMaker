@@ -2701,28 +2701,66 @@ def _analyze_template_slides(slides: list) -> list[dict]:
 def _build_gen_objects(template_slide: dict, contents: dict) -> list:
     """템플릿 슬라이드에서 generated objects 생성"""
     gen_objects = []
-    number_counter = 0  # number role 오브젝트에 순서 번호 직접 부여용
-    for obj in template_slide.get("objects", []):
+    all_objects = template_slide.get("objects", [])
+
+    # number role 오브젝트를 위치 순서(위→아래, 좌→우)로 정렬하여 번호 사전 매핑
+    number_objs = [
+        o for o in all_objects
+        if o.get("obj_type") == "text" and (o.get("role") or o.get("_auto_role", "")) == "number"
+    ]
+    number_objs_sorted = sorted(number_objs, key=lambda o: (o.get("y", 0), o.get("x", 0)))
+    number_order_map = {id(o): i + 1 for i, o in enumerate(number_objs_sorted)}
+
+    # 1단계: 매핑되지 않은 subtitle/description의 Y 좌표 수집 (고아 객체 제거용)
+    removed_y_positions = set()
+    for obj in all_objects:
+        if obj.get("obj_type") != "text":
+            continue
+        role = obj.get("role") or obj.get("_auto_role", "")
+        if role not in ("subtitle", "description"):
+            continue
+        placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
+        if placeholder_name:
+            generated_text = contents.get(placeholder_name)
+            has_explicit_role = bool(obj.get("role"))
+            if generated_text is None and role in ("subtitle", "description") and has_explicit_role:
+                removed_y_positions.add(round(obj.get("y", 0)))
+
+    # 2단계: 오브젝트 생성 (제거된 행의 number/shape도 함께 제거)
+    for obj in all_objects:
+        role_for_check = ""
+        if obj.get("obj_type") == "text":
+            role_for_check = obj.get("role") or obj.get("_auto_role", "")
+        obj_y = round(obj.get("y", 0))
+
+        # 제거된 subtitle/description과 같은 행(Y 근접)의 number/shape 제거
+        if removed_y_positions and obj.get("obj_type") in ("shape", "text"):
+            if obj.get("obj_type") == "shape" or role_for_check == "number":
+                y_match = any(abs(obj_y - ry) <= 15 for ry in removed_y_positions)
+                if y_match:
+                    continue
+
         gen_obj = obj.copy()
         if obj.get("obj_type") == "text":
-            role = obj.get("role") or obj.get("_auto_role", "")
+            role = role_for_check
 
             # number role: contents에 매핑된 값 우선 사용 (간지의 section_num 등)
-            # 매핑 없으면 등장 순서대로 1, 2, 3... 직접 부여
+            # 매핑 없으면 위치 순서(위→아래, 좌→우)로 01, 02, 03... 부여
             if role == "number":
-                number_counter += 1
                 placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
                 if placeholder_name and placeholder_name in contents:
                     gen_obj["generated_text"] = contents[placeholder_name]
                 else:
-                    gen_obj["generated_text"] = str(number_counter)
+                    pos_num = number_order_map.get(id(obj), 1)
+                    gen_obj["generated_text"] = str(pos_num).zfill(2)
             else:
                 placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
                 if placeholder_name:
                     generated_text = contents.get(placeholder_name)
                     if generated_text is None:
                         # 내용이 매핑되지 않은 subtitle/description 오브젝트 제거
-                        if role in ("subtitle", "description"):
+                        has_explicit_role = bool(obj.get("role"))
+                        if role in ("subtitle", "description") and has_explicit_role:
                             continue
                         generated_text = obj.get("text_content", "")
                     elif not generated_text:
@@ -2732,46 +2770,121 @@ def _build_gen_objects(template_slide: dict, contents: dict) -> list:
             # _auto_role을 role에 보존 (관리자가 명시적 role 미설정 시)
             if not gen_obj.get("role") and gen_obj.get("_auto_role"):
                 gen_obj["role"] = gen_obj["_auto_role"]
+                gen_obj["role_auto"] = True  # 자동 추론 역할 표시 (PPTX 렌더링 시 필터링 방지)
             gen_obj.pop("_auto_placeholder", None)
             gen_obj.pop("_auto_role", None)
         gen_objects.append(gen_obj)
+    _ensure_number_above_shapes(gen_objects)
     return gen_objects
 
 
 def _build_skeleton_objects(template_slide: dict, contents: dict) -> list:
     """스켈레톤 오브젝트 생성 - 텍스트는 빈값, 이미지/위치/스타일은 유지"""
     gen_objects = []
-    number_counter = 0
-    for obj in template_slide.get("objects", []):
+    all_objects = template_slide.get("objects", [])
+
+    # number role 오브젝트를 위치 순서(위→아래, 좌→우)로 정렬하여 번호 사전 매핑
+    number_objs = [
+        o for o in all_objects
+        if o.get("obj_type") == "text" and (o.get("role") or o.get("_auto_role", "")) == "number"
+    ]
+    number_objs_sorted = sorted(number_objs, key=lambda o: (o.get("y", 0), o.get("x", 0)))
+    number_order_map = {id(o): i + 1 for i, o in enumerate(number_objs_sorted)}
+
+    # 매핑되지 않은 subtitle/description의 Y 좌표 수집 (고아 객체 제거용)
+    removed_y_positions = set()
+    for obj in all_objects:
+        if obj.get("obj_type") != "text":
+            continue
+        role = obj.get("role") or obj.get("_auto_role", "")
+        if role not in ("subtitle", "description"):
+            continue
+        placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
+        if placeholder_name:
+            generated_text = contents.get(placeholder_name)
+            has_explicit_role = bool(obj.get("role"))
+            if generated_text is None and role in ("subtitle", "description") and has_explicit_role:
+                removed_y_positions.add(round(obj.get("y", 0)))
+
+    for obj in all_objects:
+        role_for_check = ""
+        if obj.get("obj_type") == "text":
+            role_for_check = obj.get("role") or obj.get("_auto_role", "")
+        obj_y = round(obj.get("y", 0))
+
+        # 제거된 subtitle/description과 같은 행의 number/shape 제거
+        if removed_y_positions and obj.get("obj_type") in ("shape", "text"):
+            if obj.get("obj_type") == "shape" or role_for_check == "number":
+                y_match = any(abs(obj_y - ry) <= 15 for ry in removed_y_positions)
+                if y_match:
+                    continue
+
         gen_obj = obj.copy()
         if obj.get("obj_type") == "text":
-            role = obj.get("role") or obj.get("_auto_role", "")
+            role = role_for_check
 
             # number role: contents에 매핑된 값 우선 사용 (간지의 section_num 등)
-            # 매핑 없으면 등장 순서대로 1, 2, 3... 직접 부여
+            # 매핑 없으면 위치 순서(위→아래, 좌→우)로 01, 02, 03... 부여
             if role == "number":
-                number_counter += 1
                 placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
                 if placeholder_name and placeholder_name in contents:
                     gen_obj["generated_text"] = contents[placeholder_name]
                 else:
-                    gen_obj["generated_text"] = str(number_counter)
+                    pos_num = number_order_map.get(id(obj), 1)
+                    gen_obj["generated_text"] = str(pos_num).zfill(2)
             else:
                 placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
                 if placeholder_name:
                     generated_text = contents.get(placeholder_name)
                     if generated_text is None:
-                        if role in ("subtitle", "description"):
+                        has_explicit_role = bool(obj.get("role"))
+                        if role in ("subtitle", "description") and has_explicit_role:
                             continue
                     # 스켈레톤: 텍스트를 빈 문자열로 설정
                     gen_obj["generated_text"] = ""
 
             if not gen_obj.get("role") and gen_obj.get("_auto_role"):
                 gen_obj["role"] = gen_obj["_auto_role"]
+                gen_obj["role_auto"] = True
             gen_obj.pop("_auto_placeholder", None)
             gen_obj.pop("_auto_role", None)
         gen_objects.append(gen_obj)
+    _ensure_number_above_shapes(gen_objects)
     return gen_objects
+
+
+def _ensure_number_above_shapes(gen_objects: list):
+    """number 역할 텍스트 오브젝트가 겹치는 도형(shape) 위에 표시되도록 z_index 보정
+
+    목차 등에서 도형 배경 위에 숫자가 표시되어야 하는데,
+    z_index가 같거나 낮으면 숫자가 도형 아래로 가려지는 문제를 방지합니다.
+    """
+    shapes = [o for o in gen_objects if o.get("obj_type") == "shape"]
+    if not shapes:
+        return
+
+    for obj in gen_objects:
+        if obj.get("obj_type") != "text":
+            continue
+        role = obj.get("role", "") or obj.get("_auto_role", "")
+        if role != "number":
+            continue
+
+        # 이 number 오브젝트와 겹치는 shape 찾기
+        nx, ny = obj.get("x", 0), obj.get("y", 0)
+        nw, nh = obj.get("width", 0), obj.get("height", 0)
+        max_shape_z = None
+        for s in shapes:
+            sx, sy = s.get("x", 0), s.get("y", 0)
+            sw, sh = s.get("width", 0), s.get("height", 0)
+            # 바운딩 박스 겹침 판정
+            if nx < sx + sw and nx + nw > sx and ny < sy + sh and ny + nh > sy:
+                sz = s.get("z_index", 10)
+                if max_shape_z is None or sz > max_shape_z:
+                    max_shape_z = sz
+
+        if max_shape_z is not None and obj.get("z_index", 10) <= max_shape_z:
+            obj["z_index"] = max_shape_z + 1
 
 
 # ============ 유틸: 텍스트 역할 자동 추론 ============
@@ -2780,6 +2893,7 @@ def _infer_text_role(obj: dict, all_objects: list) -> str:
     """텍스트 오브젝트의 위치/크기/폰트에서 역할을 자동 추론
 
     추론 기준:
+    - 도형과 겹치고, 짧은 숫자 텍스트, 작은 영역 → number
     - 큰 폰트(24pt+) → title
     - 상단(y<80)의 작은 텍스트(14pt 이하) → governance
     - 중간 폰트(18pt+)이고 상단(y<200) → subtitle
@@ -2789,6 +2903,24 @@ def _infer_text_role(obj: dict, all_objects: list) -> str:
     font_size = style.get("font_size", 16)
     y = obj.get("y", 0)
     width = obj.get("width", 200)
+
+    # number 역할 자동 추론: 짧은 텍스트 + 작은 영역 + 도형과 겹침
+    text_content = (obj.get("text_content") or "").strip()
+    obj_width = obj.get("width", 200)
+    obj_height = obj.get("height", 100)
+    is_short_text = len(text_content) <= 3
+    is_small_area = obj_width <= 120 and obj_height <= 80
+    if is_short_text and is_small_area:
+        # 겹치는 도형(shape)이 있는지 확인
+        ox, oy = obj.get("x", 0), obj.get("y", 0)
+        ow, oh = obj.get("width", 0), obj.get("height", 0)
+        for other in all_objects:
+            if other.get("obj_type") != "shape":
+                continue
+            sx, sy = other.get("x", 0), other.get("y", 0)
+            sw, sh = other.get("width", 0), other.get("height", 0)
+            if ox < sx + sw and ox + ow > sx and oy < sy + sh and oy + oh > sy:
+                return "number"
 
     if font_size >= 24:
         return "title"
