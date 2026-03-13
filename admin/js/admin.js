@@ -2620,6 +2620,11 @@ function updateObjPosition() {
                 width: obj.width + 'px',
                 height: obj.height + 'px',
             });
+            // 도형 SVG 재렌더
+            if (obj.obj_type === 'shape') {
+                el.find('svg').remove();
+                el.prepend(createShapeSVG(obj));
+            }
         });
         updateGroupBoundingBox();
         renderSlideThumbnail(state.slides.find(s => s._id === state.currentSlide));
@@ -2639,6 +2644,11 @@ function updateObjPosition() {
         width: state.selectedObject.width + 'px',
         height: state.selectedObject.height + 'px',
     });
+    // 도형 SVG 재렌더
+    if (state.selectedObject.obj_type === 'shape') {
+        el.find('svg').remove();
+        el.prepend(createShapeSVG(state.selectedObject));
+    }
 }
 
 function updateImageFit(value) {

@@ -1324,7 +1324,7 @@ async function loadProjects() {
     }
 }
 
-function renderProjectList() {
+function renderProjectList(skipAutoNav) {
     const list = $('#projectList');
     list.empty();
 
@@ -1349,8 +1349,8 @@ function renderProjectList() {
     const start = state.projectPage * pageSize;
     const pageItems = allProjects.slice(start, start + pageSize);
 
-    // 현재 프로젝트가 포함된 페이지로 이동 (새 프로젝트 열 때)
-    if (state.currentProject) {
+    // 현재 프로젝트가 포함된 페이지로 이동 (새 프로젝트 열 때, 수동 페이지 이동 시 제외)
+    if (!skipAutoNav && state.currentProject) {
         const globalIdx = allProjects.findIndex(p => p._id === state.currentProject._id);
         if (globalIdx >= 0) {
             const targetPage = Math.floor(globalIdx / pageSize);
@@ -1436,7 +1436,7 @@ function renderProjectList() {
 
 function goProjectPage(page) {
     state.projectPage = page;
-    renderProjectList();
+    renderProjectList(true);
 }
 
 function showNewProjectModal() {
