@@ -65,6 +65,40 @@ let _isGenerating = false;
 let _abortController = null;
 let _streamReader = null;
 
+// ============ 슬라이드 사이즈 헬퍼 ============
+function getSlideCanvasSize(slideSize) {
+    const sizes = {
+        '16:9': { w: 960, h: 540 },
+        '4:3':  { w: 960, h: 720 },
+        'A4':   { w: 960, h: 679 },
+    };
+    return sizes[slideSize] || sizes['16:9'];
+}
+
+function getCurrentSlideSize() {
+    // Try to get from selected template or current project's template
+    if (state._templateSlideSize) return getSlideCanvasSize(state._templateSlideSize);
+    return { w: 960, h: 540 };
+}
+
+function getThumbDimensions(baseWidth, slideSize) {
+    const sz = slideSize ? getSlideCanvasSize(slideSize) : getCurrentSlideSize();
+    const ratio = sz.h / sz.w;
+    return { w: baseWidth, h: Math.round(baseWidth * ratio) };
+}
+
+function updateSlideCanvasAspect() {
+    const sz = getCurrentSlideSize();
+    const ratio = sz.w + ' / ' + sz.h;
+    $('#previewCanvas').css({ 'aspect-ratio': ratio, 'max-width': sz.w + 'px' });
+    // 좌측 썸네일 aspect-ratio 업데이트
+    $('.slide-thumb-v-inner').css('aspect-ratio', ratio);
+    $('.grid-thumb-inner').css('aspect-ratio', ratio);
+    // 템플릿 피커 썸네일
+    $('.template-picker-thumb').css('aspect-ratio', ratio);
+    $('.template-slide-thumb').css('aspect-ratio', ratio);
+}
+
 // 탭 전환 시 애니메이션 즉시 완료 처리
 document.addEventListener('visibilitychange', () => {
     if (!document.hidden && _isAnimating && !_animationCancelled) {
@@ -238,6 +272,20 @@ const I18N = {
         authCheckingSub: '잠시만 기다려주세요...',
         authErrorTitle: '인증정보가 올바르지 않습니다',
         authErrorDesc: '접속 링크가 만료되었거나 잘못된 인증정보입니다.\n관리자에게 문의하거나 다시 시도해주세요.',
+        translateBtn: '언어 전환',
+        translateTitle: '언어 전환',
+        translateDesc: '현재 슬라이드를 선택한 언어로 번역합니다.<br>원본 프로젝트는 그대로 보존됩니다.',
+        translateNoSlides: '생성된 슬라이드가 없습니다',
+        translateInProgress: '다른 작업이 진행 중입니다',
+        translatingTo: '{lang}로 번역 중입니다...',
+        translatingProgress: '{lang}로 번역 중... ({current}/{total})',
+        translatingCanvas: '{lang}로 번역 중',
+        translatingCanvasSub: '슬라이드 텍스트를 변환하는 중',
+        translateSlideComplete: '슬라이드 {n} 번역 완료',
+        translateComplete: '{lang} 번역 완료 ({total}개 슬라이드)',
+        translateDone: '{lang}로 번역 완료! 새 프로젝트: {name}',
+        translateError: '번역 중 오류가 발생했습니다.',
+        translateFailed: '번역 실패',
     },
     en: {
         appTitle: (window.__SOLUTION_NAME__ || 'OfficeMaker'),
@@ -403,6 +451,20 @@ const I18N = {
         authCheckingSub: 'Please wait a moment...',
         authErrorTitle: 'Invalid authentication',
         authErrorDesc: 'The access link has expired or is invalid.\nPlease contact your administrator or try again.',
+        translateBtn: 'Translate',
+        translateTitle: 'Translate Slides',
+        translateDesc: 'Translate current slides to a selected language.<br>The original project will be preserved.',
+        translateNoSlides: 'No generated slides',
+        translateInProgress: 'Another operation is in progress',
+        translatingTo: 'Translating to {lang}...',
+        translatingProgress: 'Translating to {lang}... ({current}/{total})',
+        translatingCanvas: 'Translating to {lang}',
+        translatingCanvasSub: 'Converting slide text',
+        translateSlideComplete: 'Slide {n} translated',
+        translateComplete: '{lang} translation complete ({total} slides)',
+        translateDone: 'Translated to {lang}! New project: {name}',
+        translateError: 'An error occurred during translation.',
+        translateFailed: 'Translation failed',
     },
     ja: {
         appTitle: (window.__SOLUTION_NAME__ || 'OfficeMaker'),
@@ -559,6 +621,20 @@ const I18N = {
         authCheckingSub: 'しばらくお待ちください...',
         authErrorTitle: '認証情報が正しくありません',
         authErrorDesc: 'アクセスリンクの有効期限が切れているか、無効です。\n管理者にお問い合わせください。',
+        translateBtn: '言語変換',
+        translateTitle: '言語変換',
+        translateDesc: '現在のスライドを選択した言語に翻訳します。<br>元のプロジェクトはそのまま保存されます。',
+        translateNoSlides: '生成されたスライドがありません',
+        translateInProgress: '他の作業が進行中です',
+        translatingTo: '{lang}に翻訳中...',
+        translatingProgress: '{lang}に翻訳中... ({current}/{total})',
+        translatingCanvas: '{lang}に翻訳中',
+        translatingCanvasSub: 'スライドテキストを変換中',
+        translateSlideComplete: 'スライド {n} 翻訳完了',
+        translateComplete: '{lang} 翻訳完了 ({total}スライド)',
+        translateDone: '{lang}に翻訳完了！新規プロジェクト: {name}',
+        translateError: '翻訳中にエラーが発生しました。',
+        translateFailed: '翻訳失敗',
     },
     zh: {
         appTitle: (window.__SOLUTION_NAME__ || 'OfficeMaker'),
@@ -715,6 +791,20 @@ const I18N = {
         authCheckingSub: '请稍候...',
         authErrorTitle: '认证信息无效',
         authErrorDesc: '访问链接已过期或无效。\n请联系管理员或重试。',
+        translateBtn: '语言转换',
+        translateTitle: '语言转换',
+        translateDesc: '将当前幻灯片翻译为所选语言。<br>原项目将保留不变。',
+        translateNoSlides: '没有已生成的幻灯片',
+        translateInProgress: '其他操作正在进行中',
+        translatingTo: '正在翻译为{lang}...',
+        translatingProgress: '正在翻译为{lang}... ({current}/{total})',
+        translatingCanvas: '正在翻译为{lang}',
+        translatingCanvasSub: '正在转换幻灯片文本',
+        translateSlideComplete: '幻灯片 {n} 翻译完成',
+        translateComplete: '{lang} 翻译完成 ({total}个幻灯片)',
+        translateDone: '已翻译为{lang}！新项目: {name}',
+        translateError: '翻译过程中出现错误。',
+        translateFailed: '翻译失败',
     },
 };
 
@@ -770,6 +860,7 @@ function applyI18n() {
     $('.i18n-noSlides').text(t('noSlides'));
     $('.i18n-presentationView').text(t('presentationView'));
     $('.i18n-copyShareLink').text(t('copyShareLink'));
+    $('.i18n-translateBtn').text(t('translateBtn'));
     // 버튼 상태에 따라 텍스트 변경
     if (_isGenerating) {
         // 생성 중이면 중단 버튼 유지
@@ -1053,6 +1144,12 @@ async function initApp() {
     // 슬라이드 드래그 & 드롭 초기화
     initSlideDragDrop('#slideThumbList', '.slide-thumb-v');
     initSlideDragDrop('#gridContainer', '.grid-thumb');
+}
+
+function goToMain() {
+    state.currentProject = null;
+    showEmptyState();
+    loadProjects();
 }
 
 function goToAdmin() {
@@ -1697,6 +1794,10 @@ function renderProjectWorkspace() {
     if (!isExcel && !isOnlyOffice && !isWord) {
         // 템플릿 선택 복원
         state.selectedTemplateId = state.currentProject.template_id || null;
+        // 템플릿 slide_size 복원
+        const _tmpl = state.templates.find(t => t._id === state.selectedTemplateId);
+        state._templateSlideSize = (_tmpl && _tmpl.slide_size) || '16:9';
+        updateSlideCanvasAspect();
         updateTemplateButtonLabel();
 
         // 수동 모드 상태 복원
@@ -1704,6 +1805,9 @@ function renderProjectWorkspace() {
         updateManualModeUI();
     } else if (projectType === 'onlyoffice_pptx') {
         state.selectedTemplateId = state.currentProject.template_id || null;
+        const _tmplOo = state.templates.find(t => t._id === state.selectedTemplateId);
+        state._templateSlideSize = (_tmplOo && _tmplOo.slide_size) || '16:9';
+        updateSlideCanvasAspect();
         updateTemplateButtonLabel();
     }
 
@@ -1791,6 +1895,8 @@ async function executeProjectReset() {
         state.currentProject.status = 'draft';
         state.currentProject.template_id = null;
         state.selectedTemplateId = null;
+        state._templateSlideSize = '16:9';
+        updateSlideCanvasAspect();
         updateTemplateButtonLabel();
         hideLoading();
         renderProjectWorkspace();
@@ -1820,8 +1926,8 @@ function renderResourceChips() {
 
     // 드롭다운 리스트 렌더링
     list.empty();
-    const icons = { file: '📎', text: '📝', web: '🔍', url: '🔗', youtube: '▶️' };
-    const typeLabels = { file: 'File', text: 'Text', web: 'Web', url: 'URL', youtube: 'YouTube' };
+    const icons = { file: '📎', text: '📝', web: '🔍', url: '🔗', youtube: '▶️', image: '🖼️' };
+    const typeLabels = { file: 'File', text: 'Text', web: 'Web', url: 'URL', youtube: 'YouTube', image: 'Image' };
 
     state.resources.forEach(r => {
         const icon = icons[r.resource_type] || '📄';
@@ -1925,6 +2031,78 @@ async function handleFileUpload(event) {
     event.target.value = '';
 }
 
+function triggerImageResourceUpload() {
+    $('#imageResourceUploadInput').click();
+}
+
+async function handleImageResourceUpload(event) {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    // 이미지 파일만 필터링
+    const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
+    if (imageFiles.length === 0) return;
+
+    // 분석 옵션 모달 표시
+    _pendingImageFiles = imageFiles;
+    const fileNames = imageFiles.map(f => f.name).join(', ');
+    $('#imageAnalyzeFileNames').text(imageFiles.length > 1 ? imageFiles.length + '개 이미지' : imageFiles[0].name);
+    $('#imageAnalyzeCheckbox').prop('checked', true);
+    $('#imageAnalyzeModal').show();
+
+    event.target.value = '';
+}
+
+let _pendingImageFiles = [];
+
+async function confirmImageUpload() {
+    const analyze = $('#imageAnalyzeCheckbox').is(':checked');
+    $('#imageAnalyzeModal').hide();
+
+    const files = _pendingImageFiles;
+    _pendingImageFiles = [];
+    if (!files.length) return;
+
+    const projectId = state.currentProject._id;
+    let successCount = 0;
+
+    showLoading(analyze ? '이미지 내용 분석 중...' : '이미지 업로드 중...');
+
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('project_id', projectId);
+        formData.append('title', file.name);
+        formData.append('analyze', analyze ? '1' : '0');
+
+        try {
+            const res = await apiUpload('/api/resources/image', formData);
+            if (res.resource) {
+                state.resources.push(res.resource);
+                successCount++;
+            }
+        } catch (e) {
+            console.error('Image upload failed:', file.name, e);
+        }
+    }
+
+    hideLoading();
+    renderResourceChips();
+
+    if (successCount > 0) {
+        showToast(successCount + '개 이미지가 추가되었습니다', 'success');
+    } else {
+        showToast('이미지 업로드 실패', 'error');
+    }
+}
+
+function cancelImageUpload() {
+    _pendingImageFiles = [];
+    $('#imageAnalyzeModal').hide();
+}
+
 function showWebSearchModal() {
     $('#webSearchQuery').val('');
     $('#webSearchResult').hide();
@@ -2013,8 +2191,8 @@ async function showResourceContent(resourceId) {
     const resource = state.resources.find(r => r._id === resourceId);
     if (!resource) return;
 
-    const icons = { file: '📎', text: '📝', web: '🔍' };
-    const iconClasses = { file: 'file', text: 'text', web: 'web', url: 'url', youtube: 'youtube' };
+    const icons = { file: '📎', text: '📝', web: '🔍', image: '🖼️' };
+    const iconClasses = { file: 'file', text: 'text', web: 'web', url: 'url', youtube: 'youtube', image: 'image' };
     const icon = icons[resource.resource_type] || '📄';
     const iconClass = iconClasses[resource.resource_type] || 'file';
 
@@ -2035,7 +2213,20 @@ async function showResourceContent(resourceId) {
     }
 
     const viewer = $('#resourceContentBody');
-    if (content && content.trim()) {
+    if (resource.resource_type === 'image' && resource.file_path) {
+        let html = '';
+        if (content && content.trim()) {
+            html = '<div class="image-preview-layout">'
+                + '<div class="image-preview-thumb"><img src="' + resource.file_path + '"></div>'
+                + '<div class="image-desc-section">'
+                + '<div class="image-desc-header"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> AI 이미지 분석</div>'
+                + '<div class="image-desc-body">' + simpleMarkdownToHtml(content) + '</div>'
+                + '</div></div>';
+        } else {
+            html = '<div style="text-align:center;"><img src="' + resource.file_path + '" style="max-width:100%;max-height:400px;border-radius:8px;"></div>';
+        }
+        viewer.html(html);
+    } else if (content && content.trim()) {
         if (resource.resource_type === 'text') {
             // 사용자 직접 입력 텍스트는 그대로 표시
             viewer.html('<pre style="white-space:pre-wrap;font-family:inherit;margin:0;">' + escapeHtml(content) + '</pre>');
@@ -2047,6 +2238,14 @@ async function showResourceContent(resourceId) {
         viewer.html('<div class="empty-content">내용이 없습니다</div>');
     }
 
+    const modalCard = $('#resourceContentModal .modal-card');
+    if (resource.resource_type === 'image' && content && content.trim()) {
+        modalCard.css('max-width', '960px');
+        viewer.css({'max-height': 'none', 'overflow-y': 'visible'});
+    } else {
+        modalCard.css('max-width', '720px');
+        viewer.css({'max-height': '60vh', 'overflow-y': 'auto'});
+    }
     $('#resourceContentModal').show();
 }
 
@@ -2198,7 +2397,8 @@ async function showTemplateSlidePickerModal() {
         slides.forEach(slide => {
             const item = $('<div>').addClass('template-slide-item').attr('data-slide-id', slide._id);
             const thumbContainer = $('<div>').addClass('template-slide-thumb');
-            renderSlideToContainer(thumbContainer, slide, 240, 135);
+            const _td240 = getThumbDimensions(240);
+            renderSlideToContainer(thumbContainer, slide, _td240.w, _td240.h);
             item.append(thumbContainer);
 
             const meta = slide.slide_meta || {};
@@ -2442,8 +2642,9 @@ async function _animateSlideTextUpdate(index) {
 
     const canvasW = canvas.width();
     const canvasH = canvas.height();
-    const scaleX = canvasW / 960;
-    const scaleY = canvasH / 540;
+    const _sz = getCurrentSlideSize();
+    const scaleX = canvasW / _sz.w;
+    const scaleY = canvasH / _sz.h;
 
     let descIndex = 0;
     let subIndex = 0;
@@ -2609,7 +2810,12 @@ function openTemplatePickerModal() {
             if (!slideData.background_image && tmpl.background_image) {
                 slideData.background_image = tmpl.background_image;
             }
-            renderSlideToContainer(thumbContainer, slideData, 240, 135);
+            const _tmplSz = tmpl.slide_size || '16:9';
+            const _tdPicker = getThumbDimensions(240, _tmplSz);
+            // 썸네일 aspect-ratio를 개별 템플릿의 slide_size에 맞춤
+            const _szPicker = getSlideCanvasSize(_tmplSz);
+            thumbContainer.css('aspect-ratio', _szPicker.w + ' / ' + _szPicker.h);
+            renderSlideToContainer(thumbContainer, slideData, _tdPicker.w, _tdPicker.h, _tmplSz);
         }
 
         grid.append(card);
@@ -2620,6 +2826,10 @@ function openTemplatePickerModal() {
 
 function selectTemplateFromPicker(templateId) {
     state.selectedTemplateId = templateId;
+    // 선택한 템플릿의 slide_size 저장
+    const tmpl = state.templates.find(t => t._id === templateId);
+    state._templateSlideSize = (tmpl && tmpl.slide_size) || '16:9';
+    updateSlideCanvasAspect();
     updateTemplateButtonLabel();
     closeModal('templatePickerModal');
 
@@ -2646,6 +2856,83 @@ async function loadSupportedLangs() {
     }
 }
 
+// ============ 이미지 슬라이드 생성 ============
+async function generateImageSlides(templateId) {
+    _isGenerating = true;
+    _animationCancelled = true;
+    state.generatedSlides = [];
+    state.currentSlideIndex = 0;
+
+    _showStopButton();
+
+    $('#slideEmpty').hide();
+    $('#slidePreview').css('display', 'flex');
+    $('#wsSlideTools').css('display', 'flex');
+    _setSlideToolsDisabled(true);
+
+    // 로딩 UI
+    $('#slideThumbnails').empty();
+    $('#slideThumbList').empty();
+    $('#slideCounter').text('0 / 0');
+    $('#slideCounterInline').text('0 / 0');
+    $('#previewCanvas .preview-obj').remove();
+    $('#previewBg').css('background-image', 'none');
+    $('#canvasLoadingOverlay').remove();
+    $('#previewCanvas').append(`
+        <div class="canvas-loading-overlay" id="canvasLoadingOverlay">
+            <div class="canvas-loading-animation">
+                <div class="canvas-loading-ring"></div>
+                <div class="loading-slide"></div>
+                <div class="loading-slide"></div>
+                <div class="loading-slide"></div>
+            </div>
+            <div class="canvas-loading-text">
+                <div class="canvas-loading-title">이미지 슬라이드를 만들고 있습니다</div>
+                <div class="canvas-loading-sub">이미지를 배치하는 중<span class="canvas-loading-dots"><span>.</span><span>.</span><span>.</span></span></div>
+            </div>
+        </div>
+    `);
+
+    try {
+        const res = await apiPost('/api/generate/image-slides', {
+            project_id: state.currentProject._id,
+            template_id: templateId,
+            instructions: '',
+            lang: $('#langSelect').val(),
+            slide_count: 'auto',
+        });
+
+        const slides = res.slides || [];
+        state.generatedSlides = slides;
+
+        if (slides.length > 0) {
+            state.currentSlideIndex = 0;
+            renderSlideThumbnails();
+            renderSlideThumbList();
+            renderSlideTextPanel();
+            navigateSlide(0);
+            showToast(slides.length + '개 이미지 슬라이드가 생성되었습니다', 'success');
+        } else {
+            showToast('이미지 슬라이드를 생성할 수 없습니다', 'error');
+            $('#slideEmpty').show();
+            $('#slidePreview').hide();
+            $('#wsSlideTools').hide();
+        }
+    } catch (e) {
+        showToast(e.message || '이미지 슬라이드 생성 실패', 'error');
+        if (state.generatedSlides.length === 0) {
+            $('#slideEmpty').show();
+            $('#slidePreview').hide();
+            $('#wsSlideTools').hide();
+        }
+    } finally {
+        _isGenerating = false;
+        $('#canvasLoadingOverlay').remove();
+        _showGenerateOrRestartButton();
+        _setSlideToolsDisabled(false);
+    }
+}
+
 // ============ PPT 생성 ============
 async function generatePPT() {
     const templateId = state.selectedTemplateId;
@@ -2654,8 +2941,15 @@ async function generatePPT() {
     const slideCount = $('#slideCountSelect').val();
 
     if (!templateId) { showToast(t('msgSelectTemplate'), 'error'); return; }
-    if (!instructions) { showToast(t('msgNeedInstructions'), 'error'); return; }
+    const hasImageResources = state.resources.some(r => r.resource_type === 'image');
+    const hasNonImageResources = state.resources.some(r => r.resource_type !== 'image');
+    if (!instructions && !hasImageResources) { showToast(t('msgNeedInstructions'), 'error'); return; }
     if (state.resources.length === 0 && !instructions) { showToast(t('msgEnterInstructions', '지침을 입력하세요'), 'error'); return; }
+
+    // 이미지 리소스만 있고 지침 없음 → 이미지 슬라이드 전용 생성
+    if (hasImageResources && !instructions && !hasNonImageResources) {
+        return generateImageSlides(templateId);
+    }
 
     _isGenerating = true;
     _animationCancelled = true;
@@ -3166,8 +3460,9 @@ function renderSlideAtIndex(index) {
 
     const canvasW = canvas.width();
     const canvasH = canvas.height();
-    const scaleX = canvasW / 960;
-    const scaleY = canvasH / 540;
+    const _sz = getCurrentSlideSize();
+    const scaleX = canvasW / _sz.w;
+    const scaleY = canvasH / _sz.h;
 
     let descIndex = 0; // description 오브젝트 인덱스 카운터
     let subIndex = 0;  // subtitle 오브젝트 인덱스 카운터
@@ -3238,12 +3533,13 @@ function renderSlideAtIndex(index) {
     });
 }
 
-function renderSlideToContainer(container, slide, thumbW, thumbH) {
+function renderSlideToContainer(container, slide, thumbW, thumbH, slideSize) {
     const bgStyle = slide.background_image ? `background-image:url(${slide.background_image});background-size:cover;background-position:center;` : '';
     container.attr('style', (container.attr('style') || '') + bgStyle);
 
-    const scaleX = thumbW / 960;
-    const scaleY = thumbH / 540;
+    const _sz = slideSize ? getSlideCanvasSize(slideSize) : getCurrentSlideSize();
+    const scaleX = thumbW / _sz.w;
+    const scaleY = thumbH / _sz.h;
     let thumbDescIdx = 0;
     let thumbSubIdx = 0;
     const thumbItems = slide.items || [];
@@ -3314,7 +3610,7 @@ function renderSlideThumbnails() {
                 <div class="slide-thumb-inner"></div>
             </div>
         `);
-        renderSlideToContainer(thumbEl.find('.slide-thumb-inner'), slide, 64, 36);
+        { const _td64 = getThumbDimensions(64); renderSlideToContainer(thumbEl.find('.slide-thumb-inner'), slide, _td64.w, _td64.h); }
         container.append(thumbEl);
     });
 }
@@ -3331,7 +3627,7 @@ function renderSlideThumbList() {
                 <div class="slide-thumb-v-inner"></div>
             </div>
         `);
-        renderSlideToContainer(thumbEl.find('.slide-thumb-v-inner'), slide, 256, 144);
+        { const _td256 = getThumbDimensions(256); renderSlideToContainer(thumbEl.find('.slide-thumb-v-inner'), slide, _td256.w, _td256.h); }
 
         // 협업: Lock 배지 표시
         if (state.isCollabProject && slide._id && state.activeLocks[slide._id]) {
@@ -3382,7 +3678,7 @@ function _appendSingleThumbnail(i) {
             <div class="slide-thumb-inner"></div>
         </div>
     `);
-    renderSlideToContainer(thumbEl.find('.slide-thumb-inner'), slide, 64, 36);
+    { const _td64 = getThumbDimensions(64); renderSlideToContainer(thumbEl.find('.slide-thumb-inner'), slide, _td64.w, _td64.h); }
     container.append(thumbEl);
     // 새 썸네일이 보이도록 스크롤
     thumbEl[0].scrollIntoView({ inline: 'nearest', behavior: 'smooth' });
@@ -3400,7 +3696,7 @@ function _appendSingleThumbV(i) {
             <div class="slide-thumb-v-inner"></div>
         </div>
     `);
-    renderSlideToContainer(thumbEl.find('.slide-thumb-v-inner'), slide, 256, 144);
+    { const _td256 = getThumbDimensions(256); renderSlideToContainer(thumbEl.find('.slide-thumb-v-inner'), slide, _td256.w, _td256.h); }
     list.append(thumbEl);
     thumbEl[0].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
@@ -3574,7 +3870,7 @@ function renderGridView() {
                 <div class="grid-thumb-title">${escapeHtml(titleText)}</div>
             </div>
         `);
-        renderSlideToContainer(gridEl.find('.grid-thumb-inner'), slide, 320, 180);
+        { const _td320 = getThumbDimensions(320); renderSlideToContainer(gridEl.find('.grid-thumb-inner'), slide, _td320.w, _td320.h); }
         container.append(gridEl);
     });
 }
@@ -3767,7 +4063,7 @@ function _updateThumbnailAtIndex(idx) {
     if (thumbs.length > idx) {
         const $inner = $(thumbs[idx]).find('.slide-thumb-inner');
         $inner.empty().removeAttr('style');
-        renderSlideToContainer($inner, slide, 64, 36);
+        { const _td64u = getThumbDimensions(64); renderSlideToContainer($inner, slide, _td64u.w, _td64u.h); }
     }
 
     // 좌측 세로 썸네일 업데이트
@@ -3775,7 +4071,7 @@ function _updateThumbnailAtIndex(idx) {
     if ($thumbV.length) {
         const $innerV = $thumbV.find('.slide-thumb-v-inner');
         $innerV.empty().removeAttr('style');
-        renderSlideToContainer($innerV, slide, 256, 144);
+        { const _td256u = getThumbDimensions(256); renderSlideToContainer($innerV, slide, _td256u.w, _td256u.h); }
     }
 }
 
@@ -4014,7 +4310,8 @@ function exitEditMode() {
 function editGetScale() {
     const canvas = document.getElementById('previewCanvas');
     const rect = canvas.getBoundingClientRect();
-    return { x: rect.width / 960, y: rect.height / 540 };
+    const _sz = getCurrentSlideSize();
+    return { x: rect.width / _sz.w, y: rect.height / _sz.h };
 }
 
 function renderSlideAtIndexEditable(index) {
@@ -4032,8 +4329,9 @@ function renderSlideAtIndexEditable(index) {
 
     const canvasW = canvas.width();
     const canvasH = canvas.height();
-    const scaleX = canvasW / 960;
-    const scaleY = canvasH / 540;
+    const _sz = getCurrentSlideSize();
+    const scaleX = canvasW / _sz.w;
+    const scaleY = canvasH / _sz.h;
 
     let descIndex = 0;
     let subIndex = 0;
@@ -4171,12 +4469,36 @@ function editSelectObject(objIdx) {
     } else {
         $('#editTextToolbar').hide();
     }
+
+    // 이동 단축키 힌트 표시
+    _showMoveHint(objIdx);
 }
 
 function editDeselectAll() {
     state.editSelectedObj = null;
     $('#previewCanvas .preview-obj').removeClass('edit-selected');
     $('#editTextToolbar').hide();
+    _removeMoveHint();
+}
+
+function _showMoveHint(objIdx) {
+    _removeMoveHint();
+    const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+    const modKey = isMac ? '⌘' : 'Ctrl';
+    const el = $(`#previewCanvas .preview-obj[data-obj-idx="${objIdx}"]`);
+    if (el.length === 0) return;
+    el.append(`
+        <div class="edit-move-hint">
+            <span class="edit-move-hint-key">${modKey}</span>
+            <span class="edit-move-hint-plus">+</span>
+            <span class="edit-move-hint-key">↑↓←→</span>
+            <span class="edit-move-hint-label">${t('moveHint', '이동')}</span>
+        </div>
+    `);
+}
+
+function _removeMoveHint() {
+    $('.edit-move-hint').remove();
 }
 
 // ---- Drag ----
@@ -4228,9 +4550,10 @@ function handleEditResize(e) {
         case 'nw': newW = Math.max(minW, s.w - dx); newH = Math.max(minH, s.h - dy); newX = s.ox + (s.w - newW); newY = s.oy + (s.h - newH); break;
     }
     // Boundary constraint
+    const _szR = getCurrentSlideSize();
     newX = Math.max(0, newX); newY = Math.max(0, newY);
-    if (newX + newW > 960) newW = 960 - newX;
-    if (newY + newH > 540) newH = 540 - newY;
+    if (newX + newW > _szR.w) newW = _szR.w - newX;
+    if (newY + newH > _szR.h) newH = _szR.h - newY;
 
     obj.x = Math.round(newX); obj.y = Math.round(newY);
     obj.width = Math.round(newW); obj.height = Math.round(newH);
@@ -4257,8 +4580,9 @@ $(document).on('mousemove', function (e) {
         const obj = state.editSelectedObj.obj;
         let x = ((e.clientX - canvasRect.left) / scale.x) - state.editDragOffset.x;
         let y = ((e.clientY - canvasRect.top) / scale.y) - state.editDragOffset.y;
-        x = Math.max(0, Math.min(x, 960 - obj.width));
-        y = Math.max(0, Math.min(y, 540 - obj.height));
+        const _szD = getCurrentSlideSize();
+        x = Math.max(0, Math.min(x, _szD.w - obj.width));
+        y = Math.max(0, Math.min(y, _szD.h - obj.height));
         obj.x = Math.round(x); obj.y = Math.round(y);
         const el = $(`#previewCanvas .preview-obj[data-obj-idx="${state.editSelectedObj.objIdx}"]`);
         el.css({ left: (x * scale.x) + 'px', top: (y * scale.y) + 'px' });
@@ -4321,6 +4645,28 @@ $(document).on('keydown', function (e) {
         if (active && active.getAttribute('contenteditable') === 'true') return;
         deleteEditSelectedObject();
         e.preventDefault();
+    } else if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && state.editSelectedObj) {
+        // Ctrl(Win/Linux) / Cmd(Mac) + 방향키: 텍스트 편집 중이라도 오브젝트 이동
+        // 방향키만: 텍스트 편집 중이면 커서 이동으로 동작
+        const active = document.activeElement;
+        const isEditing = active && active.getAttribute('contenteditable') === 'true';
+        const isMoveKey = /Mac|iPhone|iPad/.test(navigator.platform) ? e.metaKey : e.ctrlKey;
+        if (isEditing && !isMoveKey) return;
+        e.preventDefault();
+
+        const obj = state.editSelectedObj.obj;
+        const step = e.shiftKey ? 10 : 1;
+        const _sz = getCurrentSlideSize();
+
+        if (e.key === 'ArrowLeft')  obj.x = Math.max(0, obj.x - step);
+        if (e.key === 'ArrowRight') obj.x = Math.min(_sz.w - obj.width, obj.x + step);
+        if (e.key === 'ArrowUp')    obj.y = Math.max(0, obj.y - step);
+        if (e.key === 'ArrowDown')  obj.y = Math.min(_sz.h - obj.height, obj.y + step);
+
+        const scale = editGetScale();
+        const el = $(`#previewCanvas .preview-obj[data-obj-idx="${state.editSelectedObj.objIdx}"]`);
+        el.css({ left: (obj.x * scale.x) + 'px', top: (obj.y * scale.y) + 'px' });
+        markSlideDirty(state.currentSlideIndex);
     }
 });
 
@@ -4698,6 +5044,31 @@ function _buildShapePickerHTML() {
         html += '</div>';
     });
     return html;
+}
+
+// ============ 편집 모드 격자 ============
+const EDIT_GRID_LEVELS = [
+    { size: 0,  cls: '',        label: 'OFF' },
+    { size: 50, cls: 'grid-50', label: '50' },
+    { size: 25, cls: 'grid-25', label: '25' },
+    { size: 12, cls: 'grid-12', label: '12' },
+];
+var _editGridLevel = 0;
+
+function toggleEditGrid() {
+    _editGridLevel = (_editGridLevel + 1) % EDIT_GRID_LEVELS.length;
+    const level = EDIT_GRID_LEVELS[_editGridLevel];
+    const grid = $('#editCanvasGrid');
+    const btn = $('#btnEditGrid');
+
+    grid.removeClass('visible grid-50 grid-25 grid-12');
+    if (level.size > 0) {
+        grid.addClass('visible ' + level.cls);
+        btn.addClass('grid-on');
+    } else {
+        btn.removeClass('grid-on');
+    }
+    btn.find('.edit-grid-label').text(level.label);
 }
 
 var _shapePickerInitialized = false;
@@ -5474,8 +5845,9 @@ function renderPresentationSlide(index, panel) {
 
     const containerW = container.width();
     const containerH = container.height();
-    const scaleX = containerW / 960;
-    const scaleY = containerH / 540;
+    const _sz = getCurrentSlideSize();
+    const scaleX = containerW / _sz.w;
+    const scaleY = containerH / _sz.h;
 
     let presDescIdx = 0;
     let presSubIdx = 0;
@@ -5739,6 +6111,368 @@ async function copyShareLink() {
     }
 }
 
+// ============ 언어 전환 (번역) ============
+function showTranslateModal() {
+    if (!state.currentProject || state.generatedSlides.length === 0) {
+        showToast(t('translateNoSlides', '생성된 슬라이드가 없습니다'), 'error');
+        return;
+    }
+
+    const langInfo = {
+        ko: { name: '한국어', flag: '\uD83C\uDDF0\uD83C\uDDF7' },
+        en: { name: 'English', flag: '\uD83C\uDDFA\uD83C\uDDF8' },
+        ja: { name: '日本語', flag: '\uD83C\uDDEF\uD83C\uDDF5' },
+        zh: { name: '中文', flag: '\uD83C\uDDE8\uD83C\uDDF3' },
+    };
+
+    const list = $('#translateLangList');
+    list.empty();
+
+    // Get available languages from the lang selector
+    const availableLangs = [];
+    $('#langSelect option').each(function() {
+        const code = $(this).val();
+        if (code && langInfo[code]) {
+            availableLangs.push(code);
+        }
+    });
+
+    // If no langs from selector, use defaults
+    if (availableLangs.length === 0) {
+        ['ko', 'en', 'ja', 'zh'].forEach(c => availableLangs.push(c));
+    }
+
+    availableLangs.forEach(code => {
+        const info = langInfo[code] || { name: code, flag: '\uD83C\uDF10' };
+        list.append(`
+            <div class="translate-lang-item" onclick="startTranslation('${code}')">
+                <span class="lang-flag">${info.flag}</span>
+                <div class="lang-info">
+                    <div class="lang-name">${info.name}</div>
+                    <div class="lang-code">${code.toUpperCase()}</div>
+                </div>
+                <span class="lang-arrow">\u2192</span>
+            </div>
+        `);
+    });
+
+    // Update modal text with i18n
+    $('#translateModal .i18n-translateTitle').text(t('translateTitle', '언어 전환'));
+    $('#translateModal .i18n-translateDesc').html(t('translateDesc', '현재 슬라이드를 선택한 언어로 번역합니다.<br>원본 프로젝트는 그대로 보존됩니다.'));
+
+    $('#translateModal').show();
+}
+
+async function startTranslation(targetLang) {
+    closeModal('translateModal');
+
+    if (_isGenerating) {
+        showToast(t('translateInProgress', '다른 작업이 진행 중입니다'), 'error');
+        return;
+    }
+
+    const langNames = { ko: '한국어', en: 'English', ja: '日本語', zh: '中文' };
+    const langName = langNames[targetLang] || targetLang;
+
+    _isGenerating = true;
+    _showStopButton();
+    _setSlideToolsDisabled(true);
+
+    // --- Phase 1 Setup: 기존 아웃라인 유지, 번역 중 상태 표시 ---
+    switchPanelTab('outline');
+
+    // 기존 아웃라인 항목에 translating 클래스 추가 (스피너 표시)
+    $('#slideTextList .slide-text-item').each(function() {
+        $(this).addClass('translating');
+    });
+
+    // 상단 상태 배너 추가
+    const translatingMsg = t('translatingTo', '{lang}로 번역 중입니다...').replace('{lang}', langName);
+    $('#slideTextList').prepend(`
+        <div id="translateStatusBanner" style="padding:10px 14px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);">
+            <div class="streaming-spinner-sm"></div>
+            <span id="translateStatusText" style="font-size:13px;font-weight:600;color:var(--accent);">${translatingMsg}</span>
+        </div>
+    `);
+
+    // 캔버스: 진행률 바 표시
+    $('#canvasLoadingOverlay').remove();
+    $('#translateProgressBar').remove();
+    $('#previewCanvas').append(`<div class="translate-progress-bar" id="translateProgressBar" style="width:0%"></div>`);
+
+    _abortController = new AbortController();
+    let newProjectId = null;
+    let newProjectName = null;
+    let totalSlides = state.generatedSlides.length;
+    const translatedSlides = new Array(totalSlides).fill(null);
+    let completedCount = 0;
+
+    try {
+        const response = await fetch(`/${state.jwtToken}/api/generate/translate/stream`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                project_id: state.currentProject._id,
+                target_lang: targetLang,
+            }),
+            signal: _abortController.signal,
+        });
+
+        if (!response.ok) {
+            let errMsg = t('translateFailed', '번역 실패');
+            try { const err = await response.json(); errMsg = err.detail || errMsg; } catch (_) {}
+            throw new Error(errMsg);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split('\n\n');
+            buffer = parts.pop() || '';
+
+            for (const part of parts) {
+                for (const line of part.split('\n')) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                        const data = JSON.parse(line.slice(6));
+
+                        if (data.event === 'start') {
+                            newProjectId = data.new_project_id;
+                            newProjectName = data.new_project_name;
+                            totalSlides = data.total_slides || totalSlides;
+
+                        } else if (data.event === 'slide_progress') {
+                            // 텍스트 없는 슬라이드 - 원본 그대로 복사
+                            const idx = data.index;
+                            if (idx != null && idx < state.generatedSlides.length) {
+                                translatedSlides[idx] = state.generatedSlides[idx];
+                                completedCount++;
+                                _updateTranslateOutlineItem(idx, state.generatedSlides[idx]);
+                                _updateTranslateProgress(completedCount, totalSlides, langName);
+                            }
+
+                        } else if (data.event === 'slide_complete') {
+                            const idx = data.index;
+                            if (idx != null) {
+                                translatedSlides[idx] = data.slide;
+                                completedCount++;
+                                // Phase 1: 아웃라인 항목을 번역된 내용으로 교체
+                                _updateTranslateOutlineItem(idx, data.slide);
+                                _updateTranslateProgress(completedCount, totalSlides, langName);
+                            }
+
+                        } else if (data.event === 'complete') {
+                            newProjectId = data.new_project_id;
+                            newProjectName = data.new_project_name;
+
+                        } else if (data.event === 'error') {
+                            showToast(data.message || t('translateError', '번역 중 오류가 발생했습니다.'), 'error');
+                        }
+                    } catch (e) {
+                        console.warn('Translate SSE parse error:', e);
+                    }
+                }
+            }
+        }
+
+        // --- Phase 2: 슬라이드 프리뷰 순차 애니메이션 ---
+        if (newProjectId && translatedSlides.filter(Boolean).length > 0) {
+            $('#translateProgressBar').css('width', '100%');
+            const animatingMsg = t('translateAnimating', '번역 완료! 슬라이드 미리보기 업데이트 중...');
+            $('#translateStatusText').text(animatingMsg);
+
+            // 번역된 데이터를 임시로 적용하여 프리뷰 표시
+            const originalSlides = [...state.generatedSlides];
+            const validTranslated = translatedSlides.map((s, i) => s || originalSlides[i]);
+            state.generatedSlides = validTranslated;
+
+            // 각 슬라이드를 순차적으로 캔버스에 표시
+            await _animateTranslatedSlides(validTranslated);
+
+            // 원본 복원 후 새 프로젝트로 전환
+            state.generatedSlides = originalSlides;
+
+            const doneMsg = t('translateDone', '{lang}로 번역 완료! 새 프로젝트: {name}')
+                .replace('{lang}', langName)
+                .replace('{name}', newProjectName);
+            showToast(doneMsg, 'success');
+
+            await loadProjects();
+            await openProject(newProjectId);
+        }
+
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            console.log('Translation aborted by user');
+        } else {
+            showToast(e.message || t('translateError', '번역 중 오류가 발생했습니다.'), 'error');
+            console.error('Translate stream error:', e);
+        }
+    } finally {
+        _isGenerating = false;
+        _streamReader = null;
+        _abortController = null;
+        $('#translateProgressBar').remove();
+        $('#translateStatusBanner').remove();
+        $('#slideTextList .slide-text-item').removeClass('translating translate-done');
+        _showGenerateOrRestartButton();
+        _setSlideToolsDisabled(false);
+    }
+}
+
+// 번역 진행률 업데이트
+function _updateTranslateProgress(completedCount, totalSlides, langName) {
+    const pct = Math.round((completedCount / totalSlides) * 100);
+    $('#translateProgressBar').css('width', pct + '%');
+    const progressMsg = t('translatingProgress', '{lang}로 번역 중... ({current}/{total})')
+        .replace('{lang}', langName)
+        .replace('{current}', completedCount)
+        .replace('{total}', totalSlides);
+    $('#translateStatusText').text(progressMsg);
+}
+
+// Phase 1: 아웃라인 항목을 번역된 내용으로 in-place 교체
+function _updateTranslateOutlineItem(index, slide) {
+    const item = $(`.slide-text-item[data-slide-idx="${index}"]`);
+    if (item.length === 0) return;
+
+    item.removeClass('translating');
+
+    const typeLabels = {
+        title_slide: 'Cover', toc: 'Contents',
+        section_divider: 'Chapter', body: '', closing: 'Closing',
+    };
+
+    const textObjs = (slide.objects || []).filter(o => o.obj_type === 'text');
+    let titleText = '';
+    const sections = [];
+
+    // 제목 추출
+    textObjs.forEach(obj => {
+        let text = (obj.generated_text || '').trim();
+        if (!text) {
+            const fb = (obj.text_content || '').trim();
+            if (fb && fb !== '텍스트를 입력하세요' && fb !== 'Enter text') text = fb;
+        }
+        if (!text) return;
+        const role = obj.role || obj._auto_role || '';
+        if (role === 'number' || role === 'governance') return;
+        const fontSize = (obj.text_style || {}).font_size || 16;
+        if (!titleText && (role === 'title' || role === 'subtitle' || fontSize >= 24)) {
+            titleText = text;
+        }
+    });
+
+    // 섹션 추출
+    const slideItems = slide.items || [];
+    if (slideItems.length > 0) {
+        slideItems.forEach(si => {
+            sections.push({ header: si.heading || '', body: si.detail || '' });
+        });
+    } else {
+        textObjs.forEach(obj => {
+            let text = (obj.generated_text || '').trim();
+            if (!text) {
+                const fb = (obj.text_content || '').trim();
+                if (fb && fb !== '텍스트를 입력하세요' && fb !== 'Enter text') text = fb;
+            }
+            if (!text) return;
+            const role = obj.role || obj._auto_role || '';
+            const fontSize = (obj.text_style || {}).font_size || 16;
+            if (role === 'governance' || role === 'number') return;
+            if (role === 'title' || (!role && fontSize >= 24)) return;
+            if (role === 'subtitle' || (fontSize >= 16 && fontSize < 24 && (obj.text_style || {}).bold)) {
+                sections.push({ header: text, body: '' });
+            } else {
+                const blocks = text.split('\n\n');
+                if (blocks.length > 1) {
+                    blocks.forEach(block => {
+                        const lines = block.split('\n');
+                        if (lines.length >= 2) {
+                            sections.push({ header: lines[0], body: lines.slice(1).join('\n') });
+                        } else if (lines[0]) {
+                            sections.push({ header: '', body: lines[0] });
+                        }
+                    });
+                } else if (sections.length > 0 && !sections[sections.length - 1].body) {
+                    sections[sections.length - 1].body = text;
+                } else {
+                    sections.push({ header: '', body: text });
+                }
+            }
+        });
+    }
+
+    const meta = slide.slide_meta || {};
+    const typeLabel = typeLabels[meta.content_type || ''] || '';
+    const badgeHtml = typeLabel ? `<span class="slide-type-badge">${typeLabel}</span>` : '';
+
+    let sectionsHtml = '';
+    sections.forEach(sec => {
+        if (sec.header || sec.body) {
+            sectionsHtml += '<div class="outline-section">';
+            if (sec.header) sectionsHtml += `<div class="outline-section-title">${escapeHtml(sec.header)}</div>`;
+            if (sec.body) sectionsHtml += `<div class="outline-section-body">${escapeHtml(sec.body)}</div>`;
+            sectionsHtml += '</div>';
+        }
+    });
+
+    item.html(`
+        <div class="slide-text-item-header">
+            <div class="slide-text-item-num">${index + 1}</div>
+            <div class="slide-text-item-title">${escapeHtml(titleText || t('slideN', '슬라이드 {n}').replace('{n}', index + 1))}</div>
+            ${badgeHtml}
+        </div>
+        ${sectionsHtml}
+    `);
+
+    // 완료 하이라이트 애니메이션
+    item.addClass('translate-done');
+    setTimeout(() => item.removeClass('translate-done'), 700);
+
+    // 해당 항목으로 스크롤
+    item[0].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+// Phase 2: 번역된 슬라이드를 순차적으로 캔버스에 표시
+async function _animateTranslatedSlides(slides) {
+    const delay = slides.length > 10 ? 300 : (slides.length > 5 ? 500 : 700);
+
+    for (let i = 0; i < slides.length; i++) {
+        if (!_isGenerating) break;
+
+        state.currentSlideIndex = i;
+        renderSlideAtIndex(i);
+        updateSlideNav();
+        renderSlideThumbnails();
+
+        // 썸네일 목록에서도 활성 상태 업데이트
+        $('.slide-thumb-item').removeClass('active');
+        $(`.slide-thumb-item[data-idx="${i}"]`).addClass('active');
+
+        // 아웃라인에서도 활성 상태 업데이트
+        $('.slide-text-item').removeClass('active');
+        $(`.slide-text-item[data-slide-idx="${i}"]`).addClass('active');
+
+        // 캔버스 flash 애니메이션
+        const canvas = $('#previewCanvas');
+        canvas.addClass('translate-slide-flash');
+
+        await sleep(delay);
+        canvas.removeClass('translate-slide-flash');
+
+        if (i < slides.length - 1) {
+            await sleep(80);
+        }
+    }
+}
+
 // ============ 공유 프레젠테이션 ============
 async function loadSharedPresentation(shareToken) {
     state.isSharedView = true;
@@ -5769,6 +6503,14 @@ async function loadSharedPresentation(shareToken) {
             const data = await res.json();
             state.generatedSlides = data.slides || [];
             state.currentSlideIndex = 0;
+
+            // 공유 프레젠테이션 템플릿 slide_size 설정
+            if (data.template && data.template.slide_size) {
+                state._templateSlideSize = data.template.slide_size;
+            } else {
+                state._templateSlideSize = '16:9';
+            }
+            updateSlideCanvasAspect();
 
             document.title = data.project_name + ' - ' + (window.__SOLUTION_NAME__ || 'OfficeMaker');
             showApp();

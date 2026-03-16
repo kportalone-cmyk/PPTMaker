@@ -65,6 +65,7 @@ class TemplateCreate(BaseModel):
     description: str = ""
     background_image: Optional[str] = None
     is_published: bool = False
+    slide_size: str = "16:9"  # "16:9", "4:3", "A4"
 
 
 class TemplateUpdate(BaseModel):
@@ -72,6 +73,7 @@ class TemplateUpdate(BaseModel):
     description: Optional[str] = None
     background_image: Optional[str] = None
     is_published: Optional[bool] = None
+    slide_size: Optional[str] = None
 
 
 class BulkFontUpdate(BaseModel):

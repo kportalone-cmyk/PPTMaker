@@ -6,6 +6,7 @@ from services.mongo_service import get_db
 from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible
 from services.search_service import search_web
 from services.file_service import extract_text_from_file
+from services.llm_service import analyze_image_content
 from config import settings
 import aiofiles
 import os
@@ -111,6 +112,52 @@ async def upload_file_resource(
         "title": title or file.filename,
         "content": extracted_content,
         "file_path": f"/uploads/resources/{filename}",
+        "original_filename": file.filename,
+        "source_url": None,
+        "created_at": datetime.utcnow(),
+    }
+    result = await db.resources.insert_one(doc)
+    doc["_id"] = str(result.inserted_id)
+    return {"resource": doc}
+
+
+@router.post("/{jwt_token}/api/resources/image")
+async def upload_image_resource(
+    jwt_token: str,
+    project_id: str = Form(...),
+    title: str = Form(""),
+    analyze: str = Form("1"),
+    file: UploadFile = File(...)
+):
+    """이미지 리소스 업로드 - 이미지 파일 저장 + 선택적 AI 분석"""
+    await get_user_key(jwt_token)
+
+    # 이미지 파일 확인
+    allowed_ext = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg"}
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in allowed_ext:
+        raise HTTPException(status_code=400, detail=f"허용되지 않은 이미지 형식입니다: {ext}")
+
+    filename = f"{uuid.uuid4().hex}{ext}"
+    save_path = os.path.join(settings.UPLOAD_DIR, "images", filename)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+    async with aiofiles.open(save_path, "wb") as f:
+        content = await file.read()
+        await f.write(content)
+
+    # 이미지 내용 분석 (사용자가 분석 요청한 경우만)
+    image_description = ""
+    if analyze == "1":
+        image_description = await analyze_image_content(save_path, file.filename)
+
+    db = get_db()
+    doc = {
+        "project_id": project_id,
+        "resource_type": "image",
+        "title": title or file.filename,
+        "content": image_description,
+        "file_path": f"/uploads/images/{filename}",
         "original_filename": file.filename,
         "source_url": None,
         "created_at": datetime.utcnow(),

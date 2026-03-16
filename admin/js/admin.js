@@ -36,14 +36,29 @@ const state = {
     isDrawing: false,
     drawShapeType: null,
     drawStart: null,
-    // 격자/눈금자
-    showGrid: true,
-    gridSize: 50,  // 50px 간격
+    // 격자/눈금자 (순환: 50 → 25 → 12 → 0(OFF))
+    gridLevel: 0,  // 0=50px, 1=25px, 2=12px, 3=OFF
+    gridSize: 50,
     // 레이아웃 프리셋 변경 감지
     _previousLayout: '',
     // 최근 사용 색상 (최대 5개)
     recentColors: [],
 };
+
+// ============ 슬라이드 크기 관리 ============
+function getCanvasSize(slideSize) {
+    const sizes = {
+        '16:9': { w: 960, h: 540 },
+        '4:3':  { w: 960, h: 720 },
+        'A4':   { w: 960, h: 679 },
+    };
+    return sizes[slideSize] || sizes['16:9'];
+}
+
+function getTemplateCanvasSize() {
+    if (!state.currentTemplate) return { w: 960, h: 540 };
+    return getCanvasSize(state.currentTemplate.slide_size || '16:9');
+}
 
 // ============ 초기화 ============
 const _SOLUTION = window.__SOLUTION_NAME__ || 'OfficeMaker';
@@ -661,8 +676,17 @@ function showNewTemplateModal() {
     $('#importProgress').hide();
     $('#importResult').hide();
     $('#btnCreateTemplate').prop('disabled', false).text('생성');
+    // 슬라이드 크기 선택 초기화 (16:9 기본)
+    $('.size-option').removeClass('selected');
+    $('.size-option[data-size="16:9"]').addClass('selected');
     $('#newTemplateModal').show();
 }
+
+// 슬라이드 크기 선택 클릭 핸들러
+$(document).on('click', '.size-option', function() {
+    $('.size-option').removeClass('selected');
+    $(this).addClass('selected');
+});
 
 function closeModal(id) {
     $('#' + id).hide();
@@ -753,9 +777,11 @@ async function createTemplate() {
     } else {
         // 빈 템플릿 생성
         try {
+            const selectedSize = $('.size-option.selected').data('size') || '16:9';
             const res = await apiPost('/api/admin/templates', {
                 name: name,
                 description: $('#newTemplateDesc').val().trim(),
+                slide_size: selectedSize,
             });
             closeModal('newTemplateModal');
             showToast('템플릿이 생성되었습니다', 'success');
@@ -814,6 +840,7 @@ async function selectTemplate(templateId) {
         // 캔버스 초기화
         clearCanvas();
         updateBgUI();
+        scaleCanvas();
 
         if (state.slides.length > 0) {
             selectSlide(state.slides[0]._id);
@@ -907,6 +934,10 @@ function updateTemplateNameBar() {
     }
     $('#templateNameBar').show();
     $('#templateNameLabel').text(state.currentTemplate.name);
+    // 슬라이드 크기 배지 표시
+    const slideSize = state.currentTemplate.slide_size || '16:9';
+    const sz = getCanvasSize(slideSize);
+    $('#templateSizeBadge').text(slideSize + ' (' + sz.w + 'x' + sz.h + ')');
     $('#templateNameDisplay').show();
     $('#templateNameEdit').hide();
 }
@@ -1012,6 +1043,9 @@ function renderSlideList() {
     const list = $('#slideList');
     list.empty();
 
+    const sz = getTemplateCanvasSize();
+    const aspectRatio = sz.w + '/' + sz.h;
+
     state.slides.forEach((s, idx) => {
         const active = state.currentSlide && state.currentSlide._id === s._id ? 'active' : '';
         const meta = s.slide_meta || {};
@@ -1023,7 +1057,7 @@ function renderSlideList() {
                  data-slide-id="${s._id}"
                  data-slide-idx="${idx}"
                  onclick="selectSlide('${s._id}')">
-                <div class="slide-mini-preview" id="miniPreview_${s._id}"></div>
+                <div class="slide-mini-preview" id="miniPreview_${s._id}" style="aspect-ratio:${aspectRatio};"></div>
                 <div class="item-title">슬라이드 ${idx + 1}</div>
                 <div class="item-meta">${typeLabel} | 오브젝트 ${(s.objects || []).length}개</div>
             </div>
@@ -1126,11 +1160,12 @@ function renderSlideThumbnail(slide) {
     const objects = slide.objects || [];
     if (objects.length === 0) return;
 
-    // 썸네일 크기 기준 스케일 계산 (캔버스 960x540 → 썸네일 크기)
+    // 썸네일 크기 기준 스케일 계산 (캔버스 크기 → 썸네일 크기)
+    const sz = getTemplateCanvasSize();
     const thumbW = container.clientWidth || 160;
     const thumbH = container.clientHeight || 90;
-    const scaleX = thumbW / 960;
-    const scaleY = thumbH / 540;
+    const scaleX = thumbW / sz.w;
+    const scaleY = thumbH / sz.h;
 
     objects.forEach(obj => {
         const el = document.createElement('div');
@@ -1341,10 +1376,14 @@ function scaleCanvas() {
     const canvas = document.getElementById('canvas');
     if (!wrapper || !canvas || canvas.style.display === 'none') return;
 
+    const sz = getTemplateCanvasSize();
+    canvas.style.width = sz.w + 'px';
+    canvas.style.height = sz.h + 'px';
+
     const wrapperW = wrapper.clientWidth - 40;
     const wrapperH = wrapper.clientHeight - 40;
-    const scaleX = wrapperW / 960;
-    const scaleY = wrapperH / 540;
+    const scaleX = wrapperW / sz.w;
+    const scaleY = wrapperH / sz.h;
     const scale = Math.min(scaleX, scaleY, 1.2);
 
     canvas.style.transform = `scale(${scale})`;
@@ -1355,22 +1394,34 @@ $(window).on('resize', function () {
 });
 
 // ============ 격자 ============
+const GRID_LEVELS = [
+    { size: 50, cls: 'grid-50', label: '격자 50' },
+    { size: 25, cls: 'grid-25', label: '격자 25' },
+    { size: 12, cls: 'grid-12', label: '격자 12' },
+    { size: 0,  cls: '',        label: '격자 OFF' },
+];
+
 function toggleGrid() {
-    state.showGrid = !state.showGrid;
+    state.gridLevel = (state.gridLevel + 1) % GRID_LEVELS.length;
+    const level = GRID_LEVELS[state.gridLevel];
+    state.gridSize = level.size;
     updateGridVisibility();
 }
 
 function updateGridVisibility() {
     const grid = $('#canvasGrid');
     const btn = $('#btnGridToggle');
+    const level = GRID_LEVELS[state.gridLevel];
 
-    if (state.showGrid) {
-        grid.addClass('visible');
+    grid.removeClass('visible grid-50 grid-25 grid-12');
+    if (level.size > 0) {
+        grid.addClass('visible ' + level.cls);
         btn.addClass('grid-active');
     } else {
-        grid.removeClass('visible');
         btn.removeClass('grid-active');
     }
+    // 버튼 라벨 업데이트
+    btn.find('.grid-label').text(level.label);
 }
 
 function showPropertiesPanel() {
@@ -1380,11 +1431,12 @@ function showPropertiesPanel() {
 function clientToCanvasCoords(clientX, clientY) {
     const canvas = document.getElementById('canvas');
     const rect = canvas.getBoundingClientRect();
-    const scaleX = rect.width / 960;
-    const scaleY = rect.height / 540;
+    const sz = getTemplateCanvasSize();
+    const scaleX = rect.width / sz.w;
+    const scaleY = rect.height / sz.h;
     return {
-        x: Math.round(Math.max(0, Math.min((clientX - rect.left) / scaleX, 960))),
-        y: Math.round(Math.max(0, Math.min((clientY - rect.top) / scaleY, 540))),
+        x: Math.round(Math.max(0, Math.min((clientX - rect.left) / scaleX, sz.w))),
+        y: Math.round(Math.max(0, Math.min((clientY - rect.top) / scaleY, sz.h))),
     };
 }
 
@@ -1407,6 +1459,7 @@ function renderCanvas() {
 
 function createObjectElement(obj) {
     const typeClass = obj.obj_type === 'image' ? 'obj-image' :
+                      obj.obj_type === 'image_area' ? 'obj-image-area' :
                       obj.obj_type === 'shape' ? 'obj-shape' : 'obj-text';
     const zIndex = obj.z_index !== undefined ? obj.z_index : 10;
     const div = $('<div>')
@@ -1424,6 +1477,15 @@ function createObjectElement(obj) {
     if (obj.obj_type === 'image' && obj.image_url) {
         const fit = obj.image_fit || 'contain';
         div.append(`<img src="${obj.image_url}" alt="image" style="object-fit:${fit};">`);
+    } else if (obj.obj_type === 'image_area') {
+        div.append(`<div class="image-area-placeholder">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
+                <rect x="2" y="2" width="28" height="28" rx="2" stroke-dasharray="4 3"/>
+                <path d="M6 24l7-9 5 6 4-5 4 8" stroke-linecap="round" stroke-linejoin="round"/>
+                <circle cx="11" cy="11" r="3"/>
+            </svg>
+            <span>이미지 영역</span>
+        </div>`);
     } else if (obj.obj_type === 'shape') {
         div.append(createShapeSVG(obj));
     } else if (obj.obj_type === 'text') {
@@ -1546,12 +1608,13 @@ function pasteObjects() {
     const newIds = [];
     const offset = 20;
 
+    const sz = getTemplateCanvasSize();
     state.clipboard.forEach(src => {
         const clone = JSON.parse(JSON.stringify(src));
         clone.obj_id = generateObjId();
         clone.z_index = getNextZIndex();
-        clone.x = Math.min((clone.x || 0) + offset, 960 - (clone.width || 100));
-        clone.y = Math.min((clone.y || 0) + offset, 540 - (clone.height || 50));
+        clone.x = Math.min((clone.x || 0) + offset, sz.w - (clone.width || 100));
+        clone.y = Math.min((clone.y || 0) + offset, sz.h - (clone.height || 50));
 
         state.objects.push(clone);
         const el = createObjectElement(clone);
@@ -1565,8 +1628,8 @@ function pasteObjects() {
     // 다음 붙여넣기 시 추가 오프셋이 적용되도록 clipboard 위치 업데이트
     state.clipboard = state.clipboard.map(obj => {
         const updated = JSON.parse(JSON.stringify(obj));
-        updated.x = Math.min((updated.x || 0) + offset, 960 - (updated.width || 100));
-        updated.y = Math.min((updated.y || 0) + offset, 540 - (updated.height || 50));
+        updated.x = Math.min((updated.x || 0) + offset, sz.w - (updated.width || 100));
+        updated.y = Math.min((updated.y || 0) + offset, sz.h - (updated.height || 50));
         return updated;
     });
 
@@ -1650,6 +1713,32 @@ async function handleImageUpload(event) {
     event.target.value = '';
 }
 
+function addImageAreaObject() {
+    if (!state.currentSlide) {
+        showToast('먼저 슬라이드를 선택하세요', 'error');
+        return;
+    }
+
+    const obj = {
+        obj_id: generateObjId(),
+        obj_type: 'image_area',
+        x: 100,
+        y: 100,
+        width: 400,
+        height: 300,
+        z_index: getNextZIndex(),
+        image_fit: 'cover',
+        role: null,
+        placeholder: null,
+    };
+
+    state.objects.push(obj);
+    const el = createObjectElement(obj);
+    $('#canvas').append(el);
+    selectObject(obj.obj_id);
+    showToast('이미지 영역이 추가되었습니다', 'success');
+}
+
 function uploadBackground() {
     if (!state.currentTemplate) return;
     $('#bgUploadInput').click();
@@ -1720,6 +1809,7 @@ async function setImageAsBackground() {
         removeGroupBoundingBox();
         $('#objProperties').hide();
         $('#imageProperties').hide();
+        $('#imageAreaProperties').hide();
         $('#textProperties').hide();
         $('#shapeProperties').hide();
 
@@ -1784,6 +1874,7 @@ function clearSelection() {
     removeGroupBoundingBox();
     $('#objProperties').hide();
     $('#imageProperties').hide();
+    $('#imageAreaProperties').hide();
     $('#textProperties').hide();
     $('#shapeProperties').hide();
 }
@@ -1921,7 +2012,8 @@ function deleteSelectedObjects() {
 function startGroupDrag(e) {
     state.isDragging = true;
     const canvasRect = document.getElementById('canvas').getBoundingClientRect();
-    const scale = 960 / canvasRect.width;
+    const sz = getTemplateCanvasSize();
+    const scale = sz.w / canvasRect.width;
 
     state.multiDragOffsets = state.selectedObjects.map(obj => ({
         obj_id: obj.obj_id,
@@ -2036,7 +2128,8 @@ $(document).on('mousemove', function (e) {
 
     if (state.isDragging && state.selectedObjects.length > 0) {
         const canvasRect = document.getElementById('canvas').getBoundingClientRect();
-        const scale = 960 / canvasRect.width;
+        const sz = getTemplateCanvasSize();
+        const scale = sz.w / canvasRect.width;
 
         if (state.multiDragOffsets.length > 0) {
             // 그룹 드래그: 모든 선택 객체 이동
@@ -2047,8 +2140,8 @@ $(document).on('mousemove', function (e) {
                 let x = (e.clientX - canvasRect.left) * scale - info.offsetX;
                 let y = (e.clientY - canvasRect.top) * scale - info.offsetY;
 
-                x = Math.max(0, Math.min(x, 960 - obj.width));
-                y = Math.max(0, Math.min(y, 540 - obj.height));
+                x = Math.max(0, Math.min(x, sz.w - obj.width));
+                y = Math.max(0, Math.min(y, sz.h - obj.height));
 
                 obj.x = Math.round(x);
                 obj.y = Math.round(y);
@@ -2061,8 +2154,8 @@ $(document).on('mousemove', function (e) {
             let x = e.clientX - canvasRect.left - state.dragOffset.x;
             let y = e.clientY - canvasRect.top - state.dragOffset.y;
 
-            x = Math.max(0, Math.min(x, 960 - state.selectedObject.width));
-            y = Math.max(0, Math.min(y, 540 - state.selectedObject.height));
+            x = Math.max(0, Math.min(x, sz.w - state.selectedObject.width));
+            y = Math.max(0, Math.min(y, sz.h - state.selectedObject.height));
 
             state.selectedObject.x = Math.round(x);
             state.selectedObject.y = Math.round(y);
@@ -2150,15 +2243,17 @@ $(document).on('mouseup', function (e) {
             width = 200;
             const isLine = (state.drawShapeType === 'line' || state.drawShapeType === 'arrow');
             height = isLine ? 4 : 150;
-            left = Math.max(0, Math.min(left - width / 2, 960 - width));
-            top = Math.max(0, Math.min(top - height / 2, 540 - height));
+            const sz2 = getTemplateCanvasSize();
+            left = Math.max(0, Math.min(left - width / 2, sz2.w - width));
+            top = Math.max(0, Math.min(top - height / 2, sz2.h - height));
         }
 
         // 캔버스 경계 제한
+        const szBound = getTemplateCanvasSize();
         left = Math.max(0, left);
         top = Math.max(0, top);
-        width = Math.min(width, 960 - left);
-        height = Math.min(height, 540 - top);
+        width = Math.min(width, szBound.w - left);
+        height = Math.min(height, szBound.h - top);
 
         createShapeAtRect(state.drawShapeType, left, top, width, height);
         cancelDrawMode();
@@ -2284,12 +2379,13 @@ $(document).on('keydown', function (e) {
     e.preventDefault();
     const step = e.shiftKey ? 10 : 1;
 
+    const sz = getTemplateCanvasSize();
     state.selectedObjects.forEach(obj => {
         switch (e.key) {
             case 'ArrowLeft':  obj.x = Math.max(0, obj.x - step); break;
-            case 'ArrowRight': obj.x = Math.min(960 - obj.width, obj.x + step); break;
+            case 'ArrowRight': obj.x = Math.min(sz.w - obj.width, obj.x + step); break;
             case 'ArrowUp':    obj.y = Math.max(0, obj.y - step); break;
-            case 'ArrowDown':  obj.y = Math.min(540 - obj.height, obj.y + step); break;
+            case 'ArrowDown':  obj.y = Math.min(sz.h - obj.height, obj.y + step); break;
         }
         obj.x = Math.round(obj.x);
         obj.y = Math.round(obj.y);
@@ -2361,6 +2457,7 @@ function updatePropertiesPanel() {
     if (count === 0) {
         $('#objProperties').hide();
         $('#imageProperties').hide();
+        $('#imageAreaProperties').hide();
         $('#textProperties').hide();
         $('#shapeProperties').hide();
         $('.multi-select-info').remove();
@@ -2387,11 +2484,19 @@ function updatePropertiesPanel() {
 
         if (obj.obj_type === 'image') {
             $('#imageProperties').show();
+            $('#imageAreaProperties').hide();
             $('#textProperties').hide();
             $('#shapeProperties').hide();
             $('#propImageFit').val(obj.image_fit || 'contain');
+        } else if (obj.obj_type === 'image_area') {
+            $('#imageProperties').hide();
+            $('#imageAreaProperties').show();
+            $('#textProperties').hide();
+            $('#shapeProperties').hide();
+            $('#propImageAreaFit').val(obj.image_fit || 'cover');
         } else if (obj.obj_type === 'text') {
             $('#imageProperties').hide();
+            $('#imageAreaProperties').hide();
             $('#textProperties').show();
             $('#shapeProperties').hide();
             const style = obj.text_style || {};
@@ -2404,6 +2509,7 @@ function updatePropertiesPanel() {
             $('#propTextContent').val(obj.text_content || '').prop('disabled', false);
         } else if (obj.obj_type === 'shape') {
             $('#imageProperties').hide();
+            $('#imageAreaProperties').hide();
             $('#textProperties').hide();
             $('#shapeProperties').show();
             const s = obj.shape_style || {};
@@ -2420,6 +2526,7 @@ function updatePropertiesPanel() {
             updateShapePropertyVisibility();
         } else {
             $('#imageProperties').hide();
+            $('#imageAreaProperties').hide();
             $('#textProperties').hide();
             $('#shapeProperties').hide();
         }
@@ -2468,23 +2575,34 @@ function updatePropertiesPanel() {
 
     if (types.length === 1 && types[0] === 'text') {
         $('#imageProperties').hide();
+        $('#imageAreaProperties').hide();
         $('#textProperties').show();
         $('#shapeProperties').hide();
         updateMultiTextPanel();
     } else if (types.length === 1 && types[0] === 'shape') {
         $('#imageProperties').hide();
+        $('#imageAreaProperties').hide();
         $('#textProperties').hide();
         $('#shapeProperties').show();
         updateMultiShapePanel();
     } else if (types.length === 1 && types[0] === 'image') {
         $('#imageProperties').show();
+        $('#imageAreaProperties').hide();
         $('#textProperties').hide();
         $('#shapeProperties').hide();
         const fits = [...new Set(state.selectedObjects.map(o => o.image_fit || 'contain'))];
         $('#propImageFit').val(fits.length === 1 ? fits[0] : 'contain');
+    } else if (types.length === 1 && types[0] === 'image_area') {
+        $('#imageProperties').hide();
+        $('#imageAreaProperties').show();
+        $('#textProperties').hide();
+        $('#shapeProperties').hide();
+        const fits = [...new Set(state.selectedObjects.map(o => o.image_fit || 'cover'))];
+        $('#propImageAreaFit').val(fits.length === 1 ? fits[0] : 'cover');
     } else {
         // 혼합 타입: 타입별 패널 숨김
         $('#imageProperties').hide();
+        $('#imageAreaProperties').hide();
         $('#textProperties').hide();
         $('#shapeProperties').hide();
     }
@@ -2570,7 +2688,26 @@ function updateObjProperty(prop, value) {
     state.selectedObjects.forEach(obj => {
         obj[prop] = value;
     });
-    if (prop === 'role') updateSlideMetaUI();
+    if (prop === 'role') {
+        updateSlideMetaUI();
+        // 날짜 역할 선택 시 오늘 날짜 자동 입력
+        if (value === 'date') {
+            const today = new Date();
+            const y = today.getFullYear();
+            const m = String(today.getMonth() + 1).padStart(2, '0');
+            const d = String(today.getDate()).padStart(2, '0');
+            const dateStr = `${y}.${m}.${d}`;
+            state.selectedObjects.forEach(o => {
+                if (o.obj_type === 'text') {
+                    o.text_content = dateStr;
+                    $(`.canvas-object[data-obj-id="${o.obj_id}"] .text-content`).text(dateStr);
+                }
+            });
+            if (state.selectedObjects.length === 1) {
+                $('#propTextContent').val(dateStr);
+            }
+        }
+    }
 }
 
 function updateObjPosition() {
@@ -2610,8 +2747,9 @@ function updateObjPosition() {
             obj.height = Math.max(1, Math.round(obj.height * scaleY));
 
             // 캔버스 범위 제한
-            obj.x = Math.max(0, Math.min(960 - obj.width, obj.x));
-            obj.y = Math.max(0, Math.min(540 - obj.height, obj.y));
+            const szClamp = getTemplateCanvasSize();
+            obj.x = Math.max(0, Math.min(szClamp.w - obj.width, obj.x));
+            obj.y = Math.max(0, Math.min(szClamp.h - obj.height, obj.y));
 
             const el = $(`[data-obj-id="${obj.obj_id}"]`);
             el.css({
@@ -2659,6 +2797,12 @@ function updateImageFit(value) {
         $(`[data-obj-id="${obj.obj_id}"] img`).css('object-fit', value);
     });
     renderSlideThumbnail(state.slides.find(s => s._id === state.currentSlide));
+}
+
+function updateImageAreaFit(value) {
+    if (!state.selectedObject || state.selectedObject.obj_type !== 'image_area') return;
+    state.selectedObject.image_fit = value;
+    // No visual change needed for placeholder
 }
 
 // ============ 최근 사용 색상 ============
@@ -3904,6 +4048,7 @@ function _showMetaTypeGuide(contentType) {
         section_divider: '<strong>섹션 간지</strong><br>• "섹션 제목" → 필드 유형: <strong>제목</strong><br>• "섹션 번호" (01, 02...) → 필드 유형: <strong>거버넌스</strong><br>• "섹션 부제목" → 필드 유형: <strong>부제목</strong>',
         body: '<strong>본문 슬라이드</strong><br>• "슬라이드 제목" → 필드 유형: <strong>제목</strong><br>• "거버넌스/요약문" → 필드 유형: <strong>거버넌스</strong><br>• 각 핵심 키워드 → 필드 유형: <strong>부제목</strong><br>• 각 상세 설명 → 필드 유형: <strong>설명</strong><br>• 부제목과 설명은 순서대로 1:1 매핑됩니다',
         closing: '<strong>마무리 슬라이드</strong><br>• "감사합니다" 등 → 필드 유형: <strong>제목</strong><br>• "연락처/메시지" → 필드 유형: <strong>부제목</strong> 또는 <strong>설명</strong>',
+        image_slide: '<strong>이미지 슬라이드</strong><br>• 사용자가 업로드한 이미지가 <strong>이미지 영역</strong> 오브젝트에 자동 배치됩니다<br>• 툴바의 "이미지 영역" 버튼으로 영역을 추가하세요',
     };
     const guide = guides[contentType];
     if (guide) {

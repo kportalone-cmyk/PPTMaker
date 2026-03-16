@@ -8,7 +8,11 @@ Claude Opus LLM 서비스 - 리치 스키마 기반 슬라이드 콘텐츠 생�
 import json
 import re
 import random
+import base64
+import os
+import io
 import httpx
+from PIL import Image
 from config import settings
 from routers.prompt import get_prompt_content, get_prompt_model
 
@@ -113,6 +117,104 @@ async def _call_claude_api(system_prompt: str, user_prompt: str, model: str = ""
                 text_parts.append(block["text"])
 
         return "\n".join(text_parts)
+
+
+async def analyze_image_content(file_path: str, original_filename: str = "") -> str:
+    """Claude Vision API로 이미지 내용 분석
+
+    지원 형식: jpg, jpeg, png, gif, webp
+    비지원 형식(svg, bmp)은 빈 문자열 반환
+    """
+    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+        return ""
+
+    ext = os.path.splitext(file_path)[1].lower()
+    SUPPORTED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+    if ext not in SUPPORTED_EXT:
+        return ""
+
+    MEDIA_TYPE_MAP = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+    }
+
+    try:
+        # 이미지 읽기 + 리사이즈 (1568px 이하)
+        img = Image.open(file_path)
+        w, h = img.size
+        MAX_DIM = 1568
+        if max(w, h) > MAX_DIM:
+            ratio = MAX_DIM / max(w, h)
+            img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+
+        # RGBA → RGB 변환 (JPEG 저장 시 필요)
+        if img.mode in ("RGBA", "LA", "P"):
+            img = img.convert("RGB")
+
+        # 바이트 변환 + base64 인코딩
+        buf = io.BytesIO()
+        out_fmt = "JPEG" if ext in (".jpg", ".jpeg") else "PNG" if ext == ".png" else "WEBP" if ext == ".webp" else "PNG"
+        img.save(buf, format=out_fmt)
+        image_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
+        media_type = MEDIA_TYPE_MAP.get(ext, "image/png")
+
+        prompt = (
+            f"이 이미지(파일명: {original_filename})의 내용을 자세히 분석하여 설명해주세요.\n"
+            "다음 항목을 포함하세요:\n"
+            "1. 이미지에 보이는 주요 내용과 요소\n"
+            "2. 텍스트가 있다면 텍스트 내용 전문\n"
+            "3. 차트/그래프/도표가 있다면 데이터 해석\n"
+            "4. 이미지의 전체적인 주제와 맥락\n\n"
+            "프레젠테이션 자료 작성에 활용할 수 있도록 구체적이고 정확하게 설명하세요."
+        )
+
+        headers = {
+            "x-api-key": settings.ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        payload = {
+            "model": settings.ANTHROPIC_OUTLINE_MODEL,
+            "max_tokens": 1024,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": image_data,
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+        }
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                json=payload,
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        content_blocks = data.get("content", [])
+        text_parts = [block["text"] for block in content_blocks if block.get("type") == "text"]
+        result = "\n".join(text_parts)
+        print(f"[Vision] 이미지 분석 완료: {original_filename} ({len(result)} chars)")
+        return result
+
+    except Exception as e:
+        print(f"[Vision] 이미지 분석 실패 ({original_filename}): {e}")
+        return ""
 
 
 # ============ 템플릿 카탈로그 빌드 ============

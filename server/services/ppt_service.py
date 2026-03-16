@@ -13,11 +13,23 @@ import os
 import uuid
 from config import settings
 
-# 캔버스 / PPTX 상수
+# 캔버스 / PPTX 상수 (기본 16:9)
 SLIDE_W_PX = 960
 SLIDE_H_PX = 540
 SLIDE_W_EMU = 12192000
 SLIDE_H_EMU = 6858000
+
+# 슬라이드 사이즈별 상수
+SLIDE_SIZES = {
+    "16:9": {"px_w": 960, "px_h": 540, "emu_w": 12192000, "emu_h": 6858000},
+    "4:3":  {"px_w": 960, "px_h": 720, "emu_w": 9144000,  "emu_h": 6858000},
+    "A4":   {"px_w": 960, "px_h": 679, "emu_w": 10691136, "emu_h": 7562088},
+}
+
+
+def _get_slide_size(slide_size: str = "16:9") -> dict:
+    """슬라이드 사이즈 상수 반환"""
+    return SLIDE_SIZES.get(slide_size, SLIDE_SIZES["16:9"])
 
 
 def _hex_to_rgb(hex_color: str) -> RGBColor:
@@ -36,13 +48,14 @@ def _get_alignment(align: str):
     )
 
 
-def _px_to_emu(x, y, w, h):
+def _px_to_emu(x, y, w, h, slide_size="16:9"):
     """캔버스 좌표(px) → PPTX EMU 변환"""
+    sz = _get_slide_size(slide_size)
     return (
-        int(x / SLIDE_W_PX * SLIDE_W_EMU),
-        int(y / SLIDE_H_PX * SLIDE_H_EMU),
-        int(w / SLIDE_W_PX * SLIDE_W_EMU),
-        int(h / SLIDE_H_PX * SLIDE_H_EMU),
+        int(x / sz["px_w"] * sz["emu_w"]),
+        int(y / sz["px_h"] * sz["emu_h"]),
+        int(w / sz["px_w"] * sz["emu_w"]),
+        int(h / sz["px_h"] * sz["emu_h"]),
     )
 
 
@@ -92,8 +105,10 @@ async def generate_pptx(project_id: str) -> str:
         template = await db.templates.find_one({"_id": ObjectId(project["template_id"])})
 
     prs = Presentation()
-    prs.slide_width = Emu(SLIDE_W_EMU)
-    prs.slide_height = Emu(SLIDE_H_EMU)
+    _slide_size = template.get("slide_size", "16:9") if template else "16:9"
+    slide_sz = _get_slide_size(_slide_size)
+    prs.slide_width = Emu(slide_sz["emu_w"])
+    prs.slide_height = Emu(slide_sz["emu_h"])
 
     for gen_slide in gen_slides:
         slide_layout = prs.slide_layouts[6]  # Blank layout
@@ -153,7 +168,7 @@ async def generate_pptx(project_id: str) -> str:
                 if any(abs(obj_y - ry) <= 15 for ry in removed_y):
                     continue
 
-            xe, ye, we, he = _px_to_emu(obj["x"], obj["y"], obj["width"], obj["height"])
+            xe, ye, we, he = _px_to_emu(obj["x"], obj["y"], obj["width"], obj["height"], _slide_size)
 
             if obj["obj_type"] == "image" and obj.get("image_url"):
                 img_path = os.path.join(".", obj["image_url"].lstrip("/"))

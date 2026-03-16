@@ -359,7 +359,7 @@ body {
     background: white;
     box-shadow: 0 4px 20px rgba(0,0,0,0.15);
     border-radius: 2px;
-    /* 가용 공간에 맞게 확대 (최대 960x540 유지) */
+    /* JS에서 템플릿 slide_size에 따라 동적으로 width/height 설정 */
     transform-origin: center center;
     overflow: visible;
 }
@@ -387,13 +387,22 @@ body {
     background-size: 50px 50px;
 }
 
-.canvas-grid.grid-10 {
+.canvas-grid.grid-25 {
     background-image:
-        linear-gradient(to right, rgba(0,0,0,0.03) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(0,0,0,0.03) 1px, transparent 1px),
+        linear-gradient(to right, rgba(45,90,142,0.05) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(45,90,142,0.05) 1px, transparent 1px),
+        linear-gradient(to right, rgba(45,90,142,0.12) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(45,90,142,0.12) 1px, transparent 1px);
+    background-size: 25px 25px, 25px 25px, 50px 50px, 50px 50px;
+}
+
+.canvas-grid.grid-12 {
+    background-image:
+        linear-gradient(to right, rgba(45,90,142,0.04) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(45,90,142,0.04) 1px, transparent 1px),
         linear-gradient(to right, rgba(45,90,142,0.1) 1px, transparent 1px),
         linear-gradient(to bottom, rgba(45,90,142,0.1) 1px, transparent 1px);
-    background-size: 10px 10px, 10px 10px, 50px 50px, 50px 50px;
+    background-size: 12px 12px, 12px 12px, 48px 48px, 48px 48px;
 }
 
 /* 격자 토글 버튼 활성 상태 */
@@ -401,6 +410,11 @@ body {
     background: #e8f0fe;
     border-color: #2d5a8e;
     color: #2d5a8e;
+}
+.header-btn.grid-active {
+    background: rgba(255, 255, 255, 0.25);
+    color: white;
+    border-color: rgba(255, 255, 255, 0.5);
 }
 
 .canvas-container .canvas-bg {
@@ -484,6 +498,27 @@ body {
     height: 100%;
     object-fit: contain; /* default, overridden by inline style */
     pointer-events: none;
+}
+
+/* 이미지 영역 오브젝트 */
+.obj-image-area {
+    border: 2px dashed #4A90D9;
+    background: rgba(74, 144, 217, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.image-area-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    color: #4A90D9;
+    font-size: 12px;
+    opacity: 0.7;
+    pointer-events: none;
+    user-select: none;
 }
 
 /* 텍스트 오브젝트 */
@@ -1612,4 +1647,69 @@ button.mixed {
     .stat-cards {
         grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
     }
+}
+
+/* ============ 슬라이드 크기 선택 ============ */
+.slide-size-selector {
+    display: flex;
+    gap: 12px;
+}
+
+.size-option {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 16px;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 13px;
+    color: #666;
+}
+
+.size-option:hover {
+    border-color: #aaa;
+}
+
+.size-option.selected {
+    border-color: #2d5a8e;
+    background: #f0f4ff;
+    color: #2d5a8e;
+    font-weight: 600;
+}
+
+.size-preview {
+    background: #e8ecf1;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+}
+
+.size-preview.size-16-9 {
+    width: 48px;
+    height: 27px;
+}
+
+.size-preview.size-4-3 {
+    width: 40px;
+    height: 30px;
+}
+
+.size-preview.size-a4 {
+    width: 28px;
+    height: 40px;
+}
+
+/* 템플릿 크기 배지 */
+.template-size-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    background: #e8f0fe;
+    color: #2d5a8e;
+    border: 1px solid #c5d8f0;
+    white-space: nowrap;
 }

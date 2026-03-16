@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from bson import ObjectId
 from datetime import datetime
-from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest, DocxModifyRequest, DocxPrepareRequest, RewriteRequest
+from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest, DocxModifyRequest, DocxPrepareRequest, RewriteRequest, TranslateProjectRequest
 from services.mongo_service import get_db
 from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible, get_user_by_key
 from services import redis_service
@@ -120,10 +120,16 @@ async def generate_slides(jwt_token: str, data: GenerateRequest):
     await db.slide_history.delete_many({"project_id": data.project_id})
     await redis_service.delete_project_locks(data.project_id)
 
-    # 리소스 텍스트 수집
+    # 리소스 텍스트 수집 (이미지 리소스 제외)
     cursor = db.resources.find({"project_id": data.project_id})
     all_content = []
     async for r in cursor:
+        if r.get("resource_type") == "image":
+            img_desc = r.get("content", "")
+            if img_desc:
+                img_title = r.get("title") or r.get("original_filename") or "이미지"
+                all_content.append(f"[이미지: {img_title}]\n{img_desc}")
+            continue
         if r.get("content"):
             all_content.append(r["content"])
         elif r.get("title"):
@@ -230,6 +236,96 @@ async def generate_slides(jwt_token: str, data: GenerateRequest):
     return {"slides": generated, "total": len(generated)}
 
 
+@router.post("/{jwt_token}/api/generate/image-slides")
+async def generate_image_slides(jwt_token: str, data: GenerateRequest):
+    """이미지 리소스를 기반으로 이미지 슬라이드 자동 생성"""
+    user_key = await get_user_key(jwt_token)
+    db = get_db()
+
+    # 이미지 리소스 조회 (등록 순서대로)
+    cursor = db.resources.find({
+        "project_id": data.project_id,
+        "resource_type": "image"
+    }).sort("created_at", 1)
+    image_resources = await cursor.to_list(length=100)
+
+    if not image_resources:
+        raise HTTPException(status_code=400, detail="이미지 리소스가 없습니다.")
+
+    # 템플릿 슬라이드 조회
+    slides = await get_template_slides(data.template_id)
+    if not slides:
+        raise HTTPException(status_code=400, detail="템플릿에 슬라이드가 없습니다.")
+
+    template = await db.templates.find_one({"_id": ObjectId(data.template_id)})
+    bg_image = template.get("background_image") if template else None
+
+    # content_type이 "image_slide"인 템플릿 슬라이드 찾기
+    image_slide_templates = [
+        s for s in slides
+        if (s.get("slide_meta") or {}).get("content_type") == "image_slide"
+    ]
+
+    if not image_slide_templates:
+        raise HTTPException(status_code=400, detail="템플릿에 이미지 슬라이드가 없습니다. 관리자에게 문의하세요.")
+
+    # 기존 생성 슬라이드 삭제
+    await db.generated_slides.delete_many({"project_id": data.project_id})
+    await db.slide_locks.delete_many({"project_id": data.project_id})
+    await db.slide_history.delete_many({"project_id": data.project_id})
+
+    now = datetime.utcnow()
+    generated = []
+
+    # 각 이미지에 대해 슬라이드 생성
+    for img_idx, img_resource in enumerate(image_resources):
+        # 템플릿 슬라이드 순환 사용 (이미지가 템플릿보다 많을 경우)
+        template_slide = image_slide_templates[img_idx % len(image_slide_templates)]
+        slide_bg = template_slide.get("background_image") or bg_image
+
+        # 오브젝트 생성: image_area에 이미지 삽입
+        gen_objects = []
+        for obj in template_slide.get("objects", []):
+            gen_obj = obj.copy()
+            gen_obj.pop("_id", None)
+
+            if obj.get("obj_type") == "image_area":
+                # image_area를 실제 이미지로 변환
+                gen_obj["obj_type"] = "image"
+                gen_obj["image_url"] = img_resource.get("file_path", "")
+                gen_obj["image_fit"] = obj.get("image_fit", "cover")
+            elif obj.get("obj_type") == "text":
+                gen_obj["generated_text"] = obj.get("text_content", "")
+
+            gen_objects.append(gen_obj)
+
+        gen_slide = {
+            "project_id": data.project_id,
+            "template_slide_id": str(template_slide["_id"]),
+            "order": img_idx + 1,
+            "objects": gen_objects,
+            "items": [],
+            "background_image": slide_bg,
+            "created_at": now,
+        }
+        result = await db.generated_slides.insert_one(gen_slide)
+        gen_slide["_id"] = str(result.inserted_id)
+        generated.append(gen_slide)
+
+    # 프로젝트 상태 업데이트
+    await db.projects.update_one(
+        {"_id": ObjectId(data.project_id)},
+        {"$set": {
+            "template_id": data.template_id,
+            "instructions": data.instructions,
+            "status": "generated",
+            "updated_at": now,
+        }}
+    )
+
+    return {"slides": generated, "total": len(generated)}
+
+
 @router.post("/{jwt_token}/api/generate/stream")
 async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
     """SSE 스트리밍으로 슬라이드 생성 - 실시간 진행 표시"""
@@ -243,10 +339,16 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
     await db.slide_history.delete_many({"project_id": data.project_id})
     await redis_service.delete_project_locks(data.project_id)
 
-    # 리소스 텍스트 수집
+    # 리소스 텍스트 수집 (이미지 리소스 제외)
     cursor = db.resources.find({"project_id": data.project_id})
     all_content = []
     async for r in cursor:
+        if r.get("resource_type") == "image":
+            img_desc = r.get("content", "")
+            if img_desc:
+                img_title = r.get("title") or r.get("original_filename") or "이미지"
+                all_content.append(f"[이미지: {img_title}]\n{img_desc}")
+            continue
         if r.get("content"):
             all_content.append(r["content"])
         elif r.get("title"):
@@ -580,10 +682,16 @@ async def generate_slide_text(jwt_token: str, data: SlideTextRequest):
         # 템플릿 없으면 gen_slide의 objects를 기반으로 분석
         template_slide = gen_slide
 
-    # 리소스 텍스트 수집
+    # 리소스 텍스트 수집 (이미지 리소스 제외)
     cursor = db.resources.find({"project_id": data.project_id})
     resources_text = ""
     async for r in cursor:
+        if r.get("resource_type") == "image":
+            img_desc = r.get("content", "")
+            if img_desc:
+                img_title = r.get("title") or r.get("original_filename") or "이미지"
+                resources_text += f"[이미지: {img_title}]\n{img_desc}\n\n"
+            continue
         resources_text += (r.get("content") or "") + "\n\n"
 
     # 템플릿 분석
@@ -645,6 +753,22 @@ async def generate_slide_text(jwt_token: str, data: SlideTextRequest):
 
     # _build_gen_objects로 텍스트 매핑
     gen_objects = _build_gen_objects(dict(template_slide), contents)
+
+    # 현재 슬라이드의 이미지 오브젝트 보존 (AI 수정 시 이미지 삭제 방지)
+    _IMG_TYPES = ("image", "image_area")
+    current_images = {
+        obj.get("obj_id"): dict(obj)
+        for obj in gen_slide.get("objects", [])
+        if obj.get("obj_type") in _IMG_TYPES
+    }
+    # 템플릿 이미지를 현재 버전으로 교체 (사용자가 편집했을 수 있음)
+    for i, obj in enumerate(gen_objects):
+        if obj.get("obj_type") in _IMG_TYPES and obj.get("obj_id") in current_images:
+            gen_objects[i] = current_images.pop(obj["obj_id"])
+    # 사용자가 추가한 이미지 오브젝트 보존
+    for img_obj in current_images.values():
+        gen_objects.append(img_obj)
+
     print(f"[slide-text] gen_objects count: {len(gen_objects)}, text objs: {[(o.get('role',''), o.get('generated_text','')[:30]) for o in gen_objects if o.get('obj_type')=='text']}")
 
     # DB 업데이트
@@ -953,6 +1077,19 @@ async def switch_template_slide(jwt_token: str, data: dict):
 
     gen_objects = _build_gen_objects(dict(new_tmpl), contents)
 
+    # 현재 슬라이드의 이미지 오브젝트 보존 (템플릿 전환 시 이미지 삭제 방지)
+    _IMG_TYPES = ("image", "image_area")
+    current_images = {
+        obj.get("obj_id"): dict(obj)
+        for obj in gen_slide.get("objects", [])
+        if obj.get("obj_type") in _IMG_TYPES
+    }
+    for i, obj in enumerate(gen_objects):
+        if obj.get("obj_type") in _IMG_TYPES and obj.get("obj_id") in current_images:
+            gen_objects[i] = current_images.pop(obj["obj_id"])
+    for img_obj in current_images.values():
+        gen_objects.append(img_obj)
+
     # DB 업데이트
     now = datetime.utcnow()
     await db.generated_slides.update_one(
@@ -984,10 +1121,16 @@ async def generate_excel_stream(jwt_token: str, data: ExcelGenerateRequest):
     # 기존 생성 데이터 삭제
     await db.generated_excel.delete_many({"project_id": data.project_id})
 
-    # 리소스 텍스트 수집
+    # 리소스 텍스트 수집 (이미지 리소스 제외)
     cursor = db.resources.find({"project_id": data.project_id})
     all_content = []
     async for r in cursor:
+        if r.get("resource_type") == "image":
+            img_desc = r.get("content", "")
+            if img_desc:
+                img_title = r.get("title") or r.get("original_filename") or "이미지"
+                all_content.append(f"[이미지: {img_title}]\n{img_desc}")
+            continue
         if r.get("content"):
             all_content.append(r["content"])
         elif r.get("title"):
@@ -2113,10 +2256,16 @@ async def generate_docx_stream(jwt_token: str, data: DocxGenerateRequest):
     # 기존 생성 데이터 삭제
     await db.generated_docx.delete_many({"project_id": data.project_id})
 
-    # 리소스 텍스트 수집
+    # 리소스 텍스트 수집 (이미지 리소스 제외)
     cursor = db.resources.find({"project_id": data.project_id})
     all_content = []
     async for r in cursor:
+        if r.get("resource_type") == "image":
+            img_desc = r.get("content", "")
+            if img_desc:
+                img_title = r.get("title") or r.get("original_filename") or "이미지"
+                all_content.append(f"[이미지: {img_title}]\n{img_desc}")
+            continue
         if r.get("content"):
             all_content.append(r["content"])
         elif r.get("title"):
@@ -2465,6 +2614,248 @@ async def rewrite_stream(jwt_token: str, data: RewriteRequest):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+# ============ 프로젝트 번역 ============
+
+@router.post("/{jwt_token}/api/generate/translate/stream")
+async def translate_project_stream(jwt_token: str, data: TranslateProjectRequest):
+    """프로젝트 슬라이드를 다른 언어로 번역 (SSE 스트리밍)"""
+    user_key = await get_user_key(jwt_token)
+    db = get_db()
+
+    # 원본 프로젝트 조회
+    project = await db.projects.find_one({"_id": ObjectId(data.project_id)})
+    if not project:
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
+
+    # 원본 생성 슬라이드 조회
+    cursor = db.generated_slides.find({"project_id": data.project_id}).sort("order", 1)
+    original_slides = await cursor.to_list(length=200)
+    if not original_slides:
+        raise HTTPException(status_code=400, detail="생성된 슬라이드가 없습니다")
+
+    # 언어 이름 매핑
+    lang_names = {"ko": "한국어", "en": "English", "ja": "日本語", "zh": "中文"}
+    lang_suffix = {"ko": "KO", "en": "EN", "ja": "JA", "zh": "ZH"}
+    lang_name = lang_names.get(data.target_lang, data.target_lang)
+
+    # 새 프로젝트 생성 (원본 복사)
+    now = datetime.utcnow()
+    new_project = {
+        "user_key": project.get("user_key"),
+        "name": f"{project.get('name', 'Project')}_{lang_suffix.get(data.target_lang, data.target_lang)}",
+        "description": project.get("description", ""),
+        "template_id": project.get("template_id"),
+        "instructions": project.get("instructions", ""),
+        "project_type": project.get("project_type", "slide"),
+        "status": "generating",
+        "created_at": now,
+        "updated_at": now,
+    }
+    result = await db.projects.insert_one(new_project)
+    new_project_id = str(result.inserted_id)
+    new_project["_id"] = new_project_id
+
+    def _sse(event: str, payload: dict) -> str:
+        return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False, default=str)}\n\n"
+
+    async def event_stream():
+        try:
+            yield _sse("start", {
+                "message": f"{lang_name}로 번역 중입니다...",
+                "new_project_id": new_project_id,
+                "new_project_name": new_project["name"],
+                "total_slides": len(original_slides),
+            })
+
+            generated = []
+            for slide_idx, orig_slide in enumerate(original_slides):
+                # 슬라이드별 텍스트 수집
+                text_objects = []
+                for obj_idx, obj in enumerate(orig_slide.get("objects", [])):
+                    if obj.get("obj_type") == "text" and obj.get("generated_text"):
+                        role = obj.get("role", "")
+                        # 날짜, 숫자 역할은 번역하지 않음
+                        if role in ("number", "date"):
+                            continue
+                        text_objects.append({
+                            "obj_idx": obj_idx,
+                            "text": obj["generated_text"],
+                        })
+
+                # items 텍스트도 수집
+                orig_items = orig_slide.get("items", [])
+
+                # 번역할 텍스트가 없으면 그대로 복사
+                if not text_objects and not orig_items:
+                    new_objects = []
+                    for obj in orig_slide.get("objects", []):
+                        new_obj = obj.copy()
+                        new_obj.pop("_id", None)
+                        new_objects.append(new_obj)
+
+                    new_slide = {
+                        "project_id": new_project_id,
+                        "template_slide_id": orig_slide.get("template_slide_id"),
+                        "order": orig_slide.get("order", slide_idx + 1),
+                        "objects": new_objects,
+                        "items": orig_items,
+                        "background_image": orig_slide.get("background_image"),
+                        "slide_meta": orig_slide.get("slide_meta", {}),
+                        "created_at": now,
+                    }
+                    res = await db.generated_slides.insert_one(new_slide)
+                    new_slide["_id"] = str(res.inserted_id)
+                    generated.append(new_slide)
+                    yield _sse("slide_progress", {"index": slide_idx, "status": "copied"})
+                    continue
+
+                # 번역용 텍스트 묶어서 한번에 요청
+                translate_parts = []
+                for to in text_objects:
+                    translate_parts.append(to["text"])
+                for item in orig_items:
+                    if item.get("heading"):
+                        translate_parts.append(item["heading"])
+                    if item.get("message"):
+                        translate_parts.append(item["message"])
+                    if item.get("detail"):
+                        translate_parts.append(item["detail"])
+
+                combined_text = "\n---SEPARATOR---\n".join(translate_parts)
+
+                # LLM으로 번역
+                from services.llm_service import _stream_claude_api
+                from routers.prompt import get_prompt_model
+
+                lang_instruction = {
+                    "ko": "모든 텍스트를 한국어로 정확하게 번역하세요.",
+                    "en": "Translate all text accurately into English.",
+                    "ja": "すべてのテキストを日本語に正確に翻訳してください。",
+                    "zh": "请将所有文本准确翻译成中文。",
+                }.get(data.target_lang, "Translate all text accurately.")
+
+                system_prompt = f"""You are a professional translator. {lang_instruction}
+
+Rules:
+- Translate each text segment separated by ---SEPARATOR---
+- Keep the ---SEPARATOR--- markers in your output exactly as they are
+- Maintain the same number of segments
+- Keep formatting, line breaks within segments
+- Do NOT add explanations, just output the translated segments
+- Keep technical terms, brand names, and proper nouns as appropriate"""
+
+                user_prompt = f"Translate the following text segments to {lang_name}:\n\n{combined_text}"
+
+                prompt_model = await get_prompt_model("rewrite_system")
+                effective_model = prompt_model or settings.ANTHROPIC_MODEL
+
+                full_response = ""
+                try:
+                    async for delta in _stream_claude_api(system_prompt, user_prompt, model=effective_model, max_tokens=16384):
+                        full_response += delta
+                        yield _sse("delta", {"index": slide_idx, "text": delta})
+                except Exception as e:
+                    print(f"[Translate] Slide {slide_idx} translation error: {e}")
+                    full_response = combined_text  # 실패 시 원본 사용
+
+                # 번역 결과 분리
+                translated_parts = full_response.split("---SEPARATOR---")
+                translated_parts = [p.strip() for p in translated_parts]
+
+                # 텍스트 오브젝트에 번역 적용
+                part_idx = 0
+                new_objects = []
+                for obj_idx, obj in enumerate(orig_slide.get("objects", [])):
+                    new_obj = obj.copy()
+                    new_obj.pop("_id", None)
+
+                    if obj.get("obj_type") == "text" and obj.get("generated_text"):
+                        role = obj.get("role", "")
+                        if role not in ("number", "date"):
+                            # 이 오브젝트의 번역 결과 적용
+                            if part_idx < len(translated_parts):
+                                new_obj["generated_text"] = translated_parts[part_idx]
+                                part_idx += 1
+                    new_objects.append(new_obj)
+
+                # items 번역 적용
+                new_items = []
+                for item in orig_items:
+                    new_item = {}
+                    if item.get("heading"):
+                        new_item["heading"] = translated_parts[part_idx] if part_idx < len(translated_parts) else item["heading"]
+                        part_idx += 1
+                    else:
+                        new_item["heading"] = item.get("heading", "")
+                    if item.get("message"):
+                        new_item["message"] = translated_parts[part_idx] if part_idx < len(translated_parts) else item["message"]
+                        part_idx += 1
+                    else:
+                        new_item["message"] = item.get("message", "")
+                    if item.get("detail"):
+                        new_item["detail"] = translated_parts[part_idx] if part_idx < len(translated_parts) else item["detail"]
+                        part_idx += 1
+                    else:
+                        new_item["detail"] = item.get("detail", "")
+                    new_items.append(new_item)
+
+                new_slide = {
+                    "project_id": new_project_id,
+                    "template_slide_id": orig_slide.get("template_slide_id"),
+                    "order": orig_slide.get("order", slide_idx + 1),
+                    "objects": new_objects,
+                    "items": new_items,
+                    "background_image": orig_slide.get("background_image"),
+                    "slide_meta": orig_slide.get("slide_meta", {}),
+                    "created_at": now,
+                }
+                res = await db.generated_slides.insert_one(new_slide)
+                new_slide["_id"] = str(res.inserted_id)
+                generated.append(new_slide)
+
+                yield _sse("slide_complete", {
+                    "index": slide_idx,
+                    "slide": new_slide,
+                })
+
+            # 프로젝트 상태 업데이트
+            update_fields = {
+                "status": "generated",
+                "updated_at": datetime.utcnow(),
+            }
+            if project.get("presentation_meta"):
+                update_fields["presentation_meta"] = project["presentation_meta"]
+            if project.get("presentation_sources"):
+                update_fields["presentation_sources"] = project["presentation_sources"]
+
+            await db.projects.update_one(
+                {"_id": ObjectId(new_project_id)},
+                {"$set": update_fields}
+            )
+
+            yield _sse("complete", {
+                "new_project_id": new_project_id,
+                "new_project_name": new_project["name"],
+                "total": len(generated),
+            })
+
+        except Exception as e:
+            print(f"[Translate] Stream error: {e}")
+            import traceback
+            traceback.print_exc()
+            yield _sse("error", {"message": str(e)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
+
+
 # ============ 프레젠테이션 공유 ============
 
 @router.get("/{jwt_token}/api/generate/{project_id}/share-link")
@@ -2753,6 +3144,9 @@ def _build_gen_objects(template_slide: dict, contents: dict) -> list:
                 else:
                     pos_num = number_order_map.get(id(obj), 1)
                     gen_obj["generated_text"] = str(pos_num).zfill(2)
+            elif role == "date":
+                # date role: 오늘 날짜를 YYYY.MM.DD 형식으로 자동 입력
+                gen_obj["generated_text"] = datetime.now().strftime("%Y.%m.%d")
             else:
                 placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
                 if placeholder_name:
@@ -2832,6 +3226,9 @@ def _build_skeleton_objects(template_slide: dict, contents: dict) -> list:
                 else:
                     pos_num = number_order_map.get(id(obj), 1)
                     gen_obj["generated_text"] = str(pos_num).zfill(2)
+            elif role == "date":
+                # date role: 스켈레톤에서도 오늘 날짜 표시
+                gen_obj["generated_text"] = datetime.now().strftime("%Y.%m.%d")
             else:
                 placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
                 if placeholder_name:
@@ -2986,6 +3383,7 @@ def _get_type_availability(slides_meta: list[dict]) -> dict:
         "section_divider": {"label": "섹션 간지", "available": False, "indices": [], "count": 0},
         "body": {"label": "본문 슬라이드", "available": False, "indices": [], "count": 0},
         "closing": {"label": "마지막 슬라이드", "available": False, "indices": [], "count": 0},
+        "image_slide": {"label": "이미지 슬라이드", "available": False, "indices": [], "count": 0},
     }
 
     for sm in slides_meta:

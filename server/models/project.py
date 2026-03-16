@@ -95,3 +95,8 @@ class RewriteRequest(BaseModel):
     instructions: str
     lang: str = "ko"
     context_text: str = ""
+
+
+class TranslateProjectRequest(BaseModel):
+    project_id: str
+    target_lang: str  # "ko", "en", "ja", "zh"

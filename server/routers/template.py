@@ -52,6 +52,7 @@ async def create_template(jwt_token: str, data: TemplateCreate):
         "description": data.description,
         "background_image": data.background_image,
         "is_published": data.is_published,
+        "slide_size": data.slide_size,
         "created_by": user.get("ky"),
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
