@@ -6,6 +6,8 @@ from pptx.enum.text import PP_ALIGN, MSO_AUTO_SIZE
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.dml.color import RGBColor
 from pptx.oxml.ns import qn
+from pptx.chart.data import CategoryChartData
+from pptx.enum.chart import XL_CHART_TYPE
 from services.mongo_service import get_db
 from bson import ObjectId
 from PIL import Image as PILImage
@@ -16,14 +18,17 @@ from config import settings
 # 캔버스 / PPTX 상수 (기본 16:9)
 SLIDE_W_PX = 960
 SLIDE_H_PX = 540
-SLIDE_W_EMU = 12192000
-SLIDE_H_EMU = 6858000
+SLIDE_W_EMU = 9144000
+SLIDE_H_EMU = 5148000
 
-# 슬라이드 사이즈별 상수
+# 슬라이드 사이즈별 상수 (1cm = 360000 EMU)
+# A4:   27.5 x 19.05 cm
+# 16:9: 25.4 x 14.3 cm
+# 4:3:  25.4 x 19.05 cm
 SLIDE_SIZES = {
-    "16:9": {"px_w": 960, "px_h": 540, "emu_w": 12192000, "emu_h": 6858000},
+    "16:9": {"px_w": 960, "px_h": 540, "emu_w": 9144000,  "emu_h": 5148000},
     "4:3":  {"px_w": 960, "px_h": 720, "emu_w": 9144000,  "emu_h": 6858000},
-    "A4":   {"px_w": 960, "px_h": 679, "emu_w": 10691136, "emu_h": 7562088},
+    "A4":   {"px_w": 960, "px_h": 665, "emu_w": 9900000,  "emu_h": 6858000},
 }
 
 
@@ -187,6 +192,12 @@ async def generate_pptx(project_id: str) -> str:
 
             elif obj["obj_type"] == "shape":
                 _render_shape(slide, obj, xe, ye, we, he)
+
+            elif obj["obj_type"] == "table":
+                _render_table(slide, obj, xe, ye, we, he)
+
+            elif obj["obj_type"] == "chart":
+                _render_chart(slide, obj, xe, ye, we, he)
 
     # 파일 저장
     output_dir = os.path.join(settings.UPLOAD_DIR, "generated")
@@ -387,6 +398,189 @@ def _render_line_shape(slide, style: dict, x: int, y: int, w: int, h: int):
                 ln_elem.append(head_end)
         except Exception:
             pass
+
+
+# ============ 테이블 렌더링 ============
+
+def _render_table(slide, obj: dict, x: int, y: int, w: int, h: int):
+    """테이블 오브젝트를 PPTX 슬라이드에 렌더링"""
+    style = obj.get("table_style", {})
+    rows = style.get("rows", 3)
+    cols = style.get("cols", 3)
+    data = style.get("data", [])
+    merged_cells = style.get("merged_cells", [])
+    cell_styles = style.get("cell_styles", {})
+
+    if rows < 1 or cols < 1:
+        return
+
+    table_shape = slide.shapes.add_table(rows, cols, Emu(x), Emu(y), Emu(w), Emu(h))
+    table = table_shape.table
+
+    font_family = style.get("font_family", "Arial")
+    font_size = style.get("font_size", 11)
+    header_row = style.get("header_row", True)
+    header_bg = style.get("header_bg_color", "#4472C4")
+    header_text = style.get("header_text_color", "#FFFFFF")
+    banded_rows = style.get("banded_rows", False)
+    border_color = style.get("border_color", "#BFBFBF")
+    border_width = style.get("border_width", 1)
+
+    for r in range(rows):
+        for c in range(cols):
+            cell = table.cell(r, c)
+            cell_text = ""
+            if r < len(data) and c < len(data[r]):
+                cell_text = str(data[r][c])
+
+            # Clear default paragraph and set text
+            cell.text = ""
+            p = cell.text_frame.paragraphs[0]
+            run = p.add_run()
+            run.text = cell_text
+            run.font.size = Pt(font_size)
+            if font_family:
+                run.font.name = font_family
+
+            # Per-cell style overrides
+            cell_key = f"{r}_{c}"
+            cs = cell_styles.get(cell_key, {})
+
+            # Header row styling
+            if header_row and r == 0:
+                bg = cs.get("bg_color", header_bg)
+                tc = cs.get("text_color", header_text)
+                _set_cell_fill(cell, bg)
+                run.font.color.rgb = _hex_to_rgb(tc)
+                run.font.bold = cs.get("bold", True)
+            else:
+                if cs.get("bg_color"):
+                    _set_cell_fill(cell, cs["bg_color"])
+                elif banded_rows and r % 2 == 0 and (not header_row or r > 0):
+                    _set_cell_fill(cell, "#D9E2F3")
+
+                if cs.get("text_color"):
+                    run.font.color.rgb = _hex_to_rgb(cs["text_color"])
+                if cs.get("bold"):
+                    run.font.bold = True
+
+            # Text alignment
+            align = cs.get("text_align", "left")
+            p.alignment = _get_alignment(align)
+
+            # Cell borders
+            _set_cell_borders(cell, border_color, border_width)
+
+    # Merge cells
+    for merge in merged_cells:
+        try:
+            sr, sc = merge.get("start_row", 0), merge.get("start_col", 0)
+            er, ec = merge.get("end_row", 0), merge.get("end_col", 0)
+            if sr < rows and sc < cols and er < rows and ec < cols:
+                table.cell(sr, sc).merge(table.cell(er, ec))
+        except Exception:
+            pass
+
+
+def _set_cell_fill(cell, hex_color: str):
+    """테이블 셀 배경색 설정"""
+    try:
+        tc_pr = cell._tc.get_or_add_tcPr()
+        solid_fill = tc_pr.makeelement(qn("a:solidFill"), {})
+        srgb_clr = solid_fill.makeelement(qn("a:srgbClr"), {"val": hex_color.lstrip("#")})
+        solid_fill.append(srgb_clr)
+        # Remove existing fill
+        for existing in tc_pr.findall(qn("a:solidFill")):
+            tc_pr.remove(existing)
+        tc_pr.append(solid_fill)
+    except Exception:
+        pass
+
+
+def _set_cell_borders(cell, border_color: str, border_width: int):
+    """테이블 셀 테두리 설정"""
+    try:
+        tc_pr = cell._tc.get_or_add_tcPr()
+        border_width_emu = Pt(border_width).emu
+        color_val = border_color.lstrip("#")
+
+        for border_name in ["lnL", "lnR", "lnT", "lnB"]:
+            # Remove existing
+            for existing in tc_pr.findall(qn(f"a:{border_name}")):
+                tc_pr.remove(existing)
+            ln = tc_pr.makeelement(qn(f"a:{border_name}"), {"w": str(border_width_emu)})
+            solid_fill = ln.makeelement(qn("a:solidFill"), {})
+            srgb = solid_fill.makeelement(qn("a:srgbClr"), {"val": color_val})
+            solid_fill.append(srgb)
+            ln.append(solid_fill)
+            tc_pr.append(ln)
+    except Exception:
+        pass
+
+
+# ============ 차트 렌더링 ============
+
+def _render_chart(slide, obj: dict, x: int, y: int, w: int, h: int):
+    """차트 오브젝트를 PPTX 슬라이드에 렌더링"""
+    style = obj.get("chart_style", {})
+    chart_type = style.get("chart_type", "bar")
+    chart_data_raw = style.get("chart_data", {})
+    labels = chart_data_raw.get("labels", [])
+    datasets = chart_data_raw.get("datasets", [])
+
+    if not labels or not datasets:
+        return
+
+    chart_type_map = {
+        "bar": XL_CHART_TYPE.COLUMN_CLUSTERED,
+        "line": XL_CHART_TYPE.LINE,
+        "pie": XL_CHART_TYPE.PIE,
+        "doughnut": XL_CHART_TYPE.DOUGHNUT,
+        "area": XL_CHART_TYPE.AREA,
+        "radar": XL_CHART_TYPE.RADAR,
+    }
+
+    chart_data = CategoryChartData()
+    chart_data.categories = labels
+    for ds in datasets:
+        series_data = ds.get("data", [])
+        # Ensure data length matches categories
+        while len(series_data) < len(labels):
+            series_data.append(0)
+        chart_data.add_series(ds.get("label", "Series"), tuple(series_data[:len(labels)]))
+
+    xl_type = chart_type_map.get(chart_type, XL_CHART_TYPE.COLUMN_CLUSTERED)
+
+    try:
+        chart_frame = slide.shapes.add_chart(xl_type, Emu(x), Emu(y), Emu(w), Emu(h), chart_data)
+        chart = chart_frame.chart
+
+        # Legend
+        chart.has_legend = style.get("show_legend", True)
+        if chart.has_legend:
+            chart.legend.include_in_layout = False
+
+        # Title
+        chart_title = style.get("title", "")
+        if chart_title:
+            chart.has_title = True
+            chart.chart_title.text_frame.paragraphs[0].text = chart_title
+        else:
+            chart.has_title = False
+
+        # Apply color scheme to series
+        color_scheme = style.get("color_scheme", ["#4472C4", "#ED7D31", "#A5A5A5", "#FFC000", "#5B9BD5", "#70AD47"])
+        try:
+            plot = chart.plots[0]
+            for i, series in enumerate(plot.series):
+                color = color_scheme[i % len(color_scheme)]
+                series.format.fill.solid()
+                series.format.fill.fore_color.rgb = _hex_to_rgb(color)
+        except Exception:
+            pass
+
+    except Exception:
+        pass
 
 
 # ============ 유틸리티 ============

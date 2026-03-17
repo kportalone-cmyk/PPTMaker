@@ -23,9 +23,35 @@ class ShapeStyle(BaseModel):
     arrow_head: str = "end"  # "none" | "end" | "both" (arrow 전용)
 
 
+class TableStyle(BaseModel):
+    rows: int = 3
+    cols: int = 3
+    data: list = []  # [[cell_text, ...], ...] 2D array
+    header_row: bool = True
+    banded_rows: bool = False
+    banded_cols: bool = False
+    cell_styles: dict = {}  # "r_c": {bg_color, text_color, text_align, bold}
+    border_color: str = "#BFBFBF"
+    border_width: int = 1
+    header_bg_color: str = "#4472C4"
+    header_text_color: str = "#FFFFFF"
+    font_family: str = "Arial"
+    font_size: int = 11
+    merged_cells: list = []  # [{start_row, start_col, end_row, end_col}]
+
+
+class ChartStyle(BaseModel):
+    chart_type: str = "bar"  # bar, line, pie, doughnut, area, radar
+    chart_data: dict = {}  # {labels:[], datasets:[{label, data, backgroundColor}]}
+    title: str = ""
+    show_legend: bool = True
+    show_grid: bool = True
+    color_scheme: list = ["#4472C4", "#ED7D31", "#A5A5A5", "#FFC000", "#5B9BD5", "#70AD47"]
+
+
 class SlideObject(BaseModel):
     obj_id: str
-    obj_type: str  # "image" | "text" | "shape"
+    obj_type: str  # "image" | "text" | "shape" | "image_area" | "table" | "chart"
     x: float = 0
     y: float = 0
     width: float = 200
@@ -38,10 +64,14 @@ class SlideObject(BaseModel):
     text_style: Optional[TextObjectStyle] = None
     # 도형용
     shape_style: Optional[ShapeStyle] = None
+    # 테이블용
+    table_style: Optional[TableStyle] = None
+    # 차트용
+    chart_style: Optional[ChartStyle] = None
     # 레이어 순서 (z-index)
     z_index: int = 10
     # 메타 정보 (슬라이드 추천용)
-    role: Optional[str] = None  # "title" | "governance" | "subtitle" | "body" | "description"
+    role: Optional[str] = None  # "title" | "governance" | "subtitle" | "body" | "description" | "table" | "chart"
     placeholder: Optional[str] = None  # 사용자 데이터가 들어갈 플레이스홀더 이름
 
 

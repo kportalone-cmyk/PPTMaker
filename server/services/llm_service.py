@@ -301,6 +301,8 @@ def _build_slides_description(slides_meta: list[dict]) -> str:
                 "body": "본문 → message/body_text 매핑",
                 "description": "설명 → items[].detail 매핑 (순서대로)",
                 "number": "번호 → items 순서 번호 자동 매핑 (LLM이 생성하지 않음)",
+                "table": "표 → table_data 필드로 매핑 (LLM이 표 데이터를 생성해야 함)",
+                "chart": "차트 → chart_data 필드로 매핑 (LLM이 차트 데이터를 생성해야 함)",
             }.get(role, role or "텍스트")
             ph_desc.append(f'    - placeholder: "{name}" (역할: {role_label})')
 
@@ -332,6 +334,13 @@ def _build_slides_description(slides_meta: list[dict]) -> str:
                 lines.append(f"  ※ 간지 슬라이드: section_title(제목)은 필수입니다. 부제목 있음 → section_subtitle도 생성하세요.")
             else:
                 lines.append(f"  ※ 간지 슬라이드: section_title(제목)은 필수입니다. 부제목 없음 → section_subtitle은 생성하지 마세요.")
+        # 표/차트 오브젝트 안내
+        ph_table_count = sum(1 for ph in placeholders if ph.get("role") == "table")
+        ph_chart_count = sum(1 for ph in placeholders if ph.get("role") == "chart")
+        if ph_table_count > 0:
+            lines.append(f"  ※ 표(table) {ph_table_count}개 포함: 이 템플릿을 선택할 경우 반드시 table_data를 생성하세요.")
+        if ph_chart_count > 0:
+            lines.append(f"  ※ 차트(chart) {ph_chart_count}개 포함: 이 템플릿을 선택할 경우 반드시 chart_data를 생성하세요.")
         lines.append(f"  placeholder 목록:")
         if ph_desc:
             lines.extend(ph_desc)
@@ -645,6 +654,9 @@ def _map_rich_schema_to_contents(schema_slides: list[dict], slides_meta: list[di
 
     # 본문(body) 템플릿을 effective_slots 기준으로 그룹화 (동일 용량 템플릿 라운드로빈용)
     _body_groups = {}  # effective_slots → [slide_index, ...]
+    # 표/차트가 있는 본문 템플릿 인덱스 사전 수집
+    _templates_with_chart = set()
+    _templates_with_table = set()
     for sm in slides_meta:
         meta = sm.get("slide_meta", {})
         if meta.get("content_type") == "body":
@@ -653,6 +665,11 @@ def _map_rich_schema_to_contents(schema_slides: list[dict], slides_meta: list[di
             ph_desc = sum(1 for ph in phs if ph.get("role") == "description")
             effective = min(ph_sub, ph_desc) if (ph_sub > 0 and ph_desc > 0) else max(ph_sub, ph_desc)
             _body_groups.setdefault(effective, []).append(sm["slide_index"])
+            # 표/차트 포함 여부 기록
+            if any(ph.get("role") == "chart" for ph in phs):
+                _templates_with_chart.add(sm["slide_index"])
+            if any(ph.get("role") == "table" for ph in phs):
+                _templates_with_table.add(sm["slide_index"])
 
     # 그룹별 각 템플릿 리스트를 셔플 (랜덤 시작점)
     for slots in _body_groups:
@@ -672,14 +689,50 @@ def _map_rich_schema_to_contents(schema_slides: list[dict], slides_meta: list[di
 
         # content 슬라이드: items 수에 맞는 최적 템플릿 강제 매칭
         # (LLM이 잘못된 template_index를 선택해도 items_count 기반으로 최적 템플릿 자동 선택)
+        has_chart_data = bool(slide.get("chart_data")) if slide_type == "content" else False
+        has_table_data = bool(slide.get("table_data")) if slide_type == "content" else False
+
         if slide_type == "content" and items_count > 0:
             template_idx = _find_best_template_for_type(slide_type, slides_meta, items_count)
         elif template_idx is None:
             # 비-content 슬라이드: template_index가 없으면 자동 매칭
             template_idx = _find_best_template_for_type(slide_type, slides_meta, items_count)
 
+        # 표/차트 데이터가 있는 슬라이드는 해당 오브젝트가 있는 템플릿으로 재매칭
+        if slide_type == "content" and (has_chart_data or has_table_data):
+            need_chart = has_chart_data and template_idx not in _templates_with_chart
+            need_table = has_table_data and template_idx not in _templates_with_table
+            if need_chart or need_table:
+                # 표/차트가 있는 본문 템플릿 중에서 가장 적합한 것 선택
+                best_idx = None
+                best_score = -1
+                for sm in slides_meta:
+                    if sm.get("slide_meta", {}).get("content_type") != "body":
+                        continue
+                    si = sm["slide_index"]
+                    match = False
+                    if need_chart and si in _templates_with_chart:
+                        match = True
+                    if need_table and si in _templates_with_table:
+                        match = True
+                    if not match:
+                        continue
+                    # items 수용 가능성 점수 계산
+                    phs = sm.get("placeholders", [])
+                    ps = sum(1 for ph in phs if ph.get("role") == "subtitle")
+                    pd = sum(1 for ph in phs if ph.get("role") == "description")
+                    eff = min(ps, pd) if (ps > 0 and pd > 0) else max(ps, pd)
+                    score = 10 if eff == items_count else (5 if eff >= items_count else 1)
+                    if score > best_score:
+                        best_score = score
+                        best_idx = si
+                if best_idx is not None:
+                    template_idx = best_idx
+                    print(f"[LLM] 표/차트 데이터 → 템플릿 {template_idx} 재매칭")
+
         # 동일 용량 본문 템플릿이 여러 개일 때 라운드로빈으로 돌아가며 사용
-        if slide_type == "content":
+        # (표/차트 재매칭된 경우는 라운드로빈 건너뜀)
+        if slide_type == "content" and not (has_chart_data or has_table_data):
             for sm in slides_meta:
                 if sm["slide_index"] == template_idx:
                     phs = sm.get("placeholders", [])
@@ -692,6 +745,9 @@ def _map_rich_schema_to_contents(schema_slides: list[dict], slides_meta: list[di
                         template_idx = group[counter % len(group)]
                         _group_counters[eff] = counter + 1
                     break
+        elif slide_type == "content" and (has_chart_data or has_table_data):
+            # 표/차트 템플릿은 라운드로빈에서 제외 (이미 재매칭됨)
+            pass
 
         # 해당 템플릿의 placeholder 정보 찾기
         target_meta = None
@@ -744,6 +800,12 @@ def _map_rich_schema_to_contents(schema_slides: list[dict], slides_meta: list[di
         # content 슬라이드의 items 배열 보존 (프론트엔드 구조화 렌더링용)
         if slide.get("type") == "content" and slide.get("items"):
             entry["items"] = slide["items"]
+
+        # 표/차트 데이터 보존
+        if slide.get("table_data"):
+            entry["table_data"] = slide["table_data"]
+        if slide.get("chart_data"):
+            entry["chart_data"] = slide["chart_data"]
 
         result.append(entry)
 
@@ -927,6 +989,55 @@ def _map_slide_content_to_placeholders(slide: dict, template_meta: dict) -> dict
                         contents[name] = "\n\n".join(text_blocks)
                         break
 
+        # 표(table) 데이터 매핑
+        table_phs = [ph["placeholder"] for ph in placeholders if ph.get("role") == "table"]
+        if table_phs and slide.get("table_data"):
+            td = slide["table_data"]
+            if isinstance(td, dict):
+                headers = td.get("headers", [])
+                rows = td.get("rows", [])
+                data_2d = [headers] + rows if headers else rows
+                if data_2d and table_phs:
+                    contents[table_phs[0]] = {
+                        "data": data_2d,
+                        "rows": len(data_2d),
+                        "cols": len(data_2d[0]) if data_2d else 0,
+                    }
+            elif isinstance(td, list):
+                for i, tdi in enumerate(td):
+                    if i >= len(table_phs):
+                        break
+                    headers = tdi.get("headers", [])
+                    rows = tdi.get("rows", [])
+                    data_2d = [headers] + rows if headers else rows
+                    if data_2d:
+                        contents[table_phs[i]] = {
+                            "data": data_2d,
+                            "rows": len(data_2d),
+                            "cols": len(data_2d[0]) if data_2d else 0,
+                        }
+
+        # 차트(chart) 데이터 매핑
+        chart_phs = [ph["placeholder"] for ph in placeholders if ph.get("role") == "chart"]
+        if chart_phs and slide.get("chart_data"):
+            cd = slide["chart_data"]
+            if isinstance(cd, dict):
+                if chart_phs:
+                    contents[chart_phs[0]] = {
+                        "chart_type": cd.get("chart_type", "bar"),
+                        "title": cd.get("title", ""),
+                        "chart_data": cd.get("chart_data", {}),
+                    }
+            elif isinstance(cd, list):
+                for i, cdi in enumerate(cd):
+                    if i >= len(chart_phs):
+                        break
+                    contents[chart_phs[i]] = {
+                        "chart_type": cdi.get("chart_type", "bar"),
+                        "title": cdi.get("title", ""),
+                        "chart_data": cdi.get("chart_data", {}),
+                    }
+
         # sources → 별도 placeholder가 없으므로 무시 (meta에 저장)
 
     elif slide_type == "closing":
@@ -1007,6 +1118,11 @@ def _find_best_template_for_type(
                 score += 5  # placeholder가 더 많음, 수용 가능 (total: 15)
             elif effective_slots > 0 and effective_slots < items_count:
                 score -= 8  # placeholder 부족, body(2) > non-body(0) 유지 (total: 2)
+
+            # 표/차트가 있는 템플릿은 일반 선택 시 감점 (표/차트 데이터 없이 배정되면 기본값 노출)
+            has_data_obj = any(ph.get("role") in ("table", "chart") for ph in placeholders)
+            if has_data_obj:
+                score -= 3  # 표/차트 데이터 없는 슬라이드에는 비선호
 
         if score > best_score:
             best_score = score

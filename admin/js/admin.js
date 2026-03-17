@@ -35,6 +35,7 @@ const state = {
     // 도형 드로잉 모드
     isDrawing: false,
     drawShapeType: null,
+    drawChartType: null,
     drawStart: null,
     // 격자/눈금자 (순환: 50 → 25 → 12 → 0(OFF))
     gridLevel: 0,  // 0=50px, 1=25px, 2=12px, 3=OFF
@@ -50,7 +51,7 @@ function getCanvasSize(slideSize) {
     const sizes = {
         '16:9': { w: 960, h: 540 },
         '4:3':  { w: 960, h: 720 },
-        'A4':   { w: 960, h: 679 },
+        'A4':   { w: 960, h: 665 },
     };
     return sizes[slideSize] || sizes['16:9'];
 }
@@ -1460,7 +1461,9 @@ function renderCanvas() {
 function createObjectElement(obj) {
     const typeClass = obj.obj_type === 'image' ? 'obj-image' :
                       obj.obj_type === 'image_area' ? 'obj-image-area' :
-                      obj.obj_type === 'shape' ? 'obj-shape' : 'obj-text';
+                      obj.obj_type === 'shape' ? 'obj-shape' :
+                      obj.obj_type === 'table' ? 'obj-table' :
+                      obj.obj_type === 'chart' ? 'obj-chart' : 'obj-text';
     const zIndex = obj.z_index !== undefined ? obj.z_index : 10;
     const div = $('<div>')
         .addClass('canvas-object')
@@ -1503,6 +1506,23 @@ function createObjectElement(obj) {
             })
             .text(obj.text_content || '텍스트를 입력하세요');
         div.append(textDiv);
+    } else if (obj.obj_type === 'table') {
+        div.addClass('obj-table');
+        const wrapper = $('<div>').addClass('table-wrapper').css({
+            width: '100%', height: '100%', overflow: 'hidden',
+        });
+        wrapper.html(createTableHTML(obj));
+        div.append(wrapper);
+        // Bind table events after appending to DOM
+        setTimeout(() => _bindTableEvents(div, obj), 0);
+    } else if (obj.obj_type === 'chart') {
+        div.addClass('obj-chart');
+        const wrapper = $('<div>').addClass('chart-wrapper').css({
+            width: '100%', height: '100%',
+        });
+        div.append(wrapper);
+        // Render chart after DOM append
+        setTimeout(() => renderChartInElement(wrapper[0], obj), 50);
     }
 
     // 리사이즈 핸들
@@ -2255,7 +2275,12 @@ $(document).on('mouseup', function (e) {
         width = Math.min(width, szBound.w - left);
         height = Math.min(height, szBound.h - top);
 
-        createShapeAtRect(state.drawShapeType, left, top, width, height);
+        if (state.drawChartType) {
+            createChartAtRect(state.drawChartType, left, top, width, height);
+            state.drawChartType = null;
+        } else {
+            createShapeAtRect(state.drawShapeType, left, top, width, height);
+        }
         cancelDrawMode();
         return;
     }
@@ -2301,6 +2326,10 @@ $(document).on('mouseup', function (e) {
     }
 
     state.isDragging = false;
+    if (state.isResizing && state.selectedObject && state.selectedObject.obj_type === 'chart') {
+        const el = $(`[data-obj-id="${state.selectedObject.obj_id}"]`);
+        setTimeout(() => renderChartInElement(el.find('.chart-wrapper')[0], state.selectedObject), 50);
+    }
     state.isResizing = false;
     state.multiDragOffsets = [];
 });
@@ -2460,6 +2489,8 @@ function updatePropertiesPanel() {
         $('#imageAreaProperties').hide();
         $('#textProperties').hide();
         $('#shapeProperties').hide();
+        $('#tableProperties').hide();
+        $('#chartProperties').hide();
         $('.multi-select-info').remove();
         return;
     }
@@ -2487,18 +2518,24 @@ function updatePropertiesPanel() {
             $('#imageAreaProperties').hide();
             $('#textProperties').hide();
             $('#shapeProperties').hide();
+            $('#tableProperties').hide();
+            $('#chartProperties').hide();
             $('#propImageFit').val(obj.image_fit || 'contain');
         } else if (obj.obj_type === 'image_area') {
             $('#imageProperties').hide();
             $('#imageAreaProperties').show();
             $('#textProperties').hide();
             $('#shapeProperties').hide();
+            $('#tableProperties').hide();
+            $('#chartProperties').hide();
             $('#propImageAreaFit').val(obj.image_fit || 'cover');
         } else if (obj.obj_type === 'text') {
             $('#imageProperties').hide();
             $('#imageAreaProperties').hide();
             $('#textProperties').show();
             $('#shapeProperties').hide();
+            $('#tableProperties').hide();
+            $('#chartProperties').hide();
             const style = obj.text_style || {};
             $('#propFont').val(style.font_family || 'Arial');
             $('#propFontSize').val(style.font_size || 16);
@@ -2512,6 +2549,8 @@ function updatePropertiesPanel() {
             $('#imageAreaProperties').hide();
             $('#textProperties').hide();
             $('#shapeProperties').show();
+            $('#tableProperties').hide();
+            $('#chartProperties').hide();
             const s = obj.shape_style || {};
             $('#propShapeType').val(s.shape_type || 'rectangle');
             $('#propFillColor').val(s.fill_color || '#4A90D9');
@@ -2524,11 +2563,41 @@ function updatePropertiesPanel() {
             $('#propBorderRadius').val(s.border_radius || 0);
             $('#propArrowHead').val(s.arrow_head || 'end');
             updateShapePropertyVisibility();
+        } else if (obj.obj_type === 'table') {
+            $('#imageProperties').hide();
+            $('#imageAreaProperties').hide();
+            $('#textProperties').hide();
+            $('#shapeProperties').hide();
+            $('#tableProperties').show();
+            $('#chartProperties').hide();
+            const ts = obj.table_style || {};
+            $('#propTableRows').val(ts.rows || 3);
+            $('#propTableCols').val(ts.cols || 3);
+            $('#propTableHeaderRow').prop('checked', ts.header_row !== false);
+            $('#propTableBandedRows').prop('checked', ts.banded_rows || false);
+            $('#propTableHeaderBg').val(ts.header_bg_color || '#4472C4');
+            $('#propTableHeaderText').val(ts.header_text_color || '#FFFFFF');
+            $('#propTableBorderColor').val(ts.border_color || '#BFBFBF');
+            $('#propTableFontSize').val(ts.font_size || 11);
+        } else if (obj.obj_type === 'chart') {
+            $('#imageProperties').hide();
+            $('#imageAreaProperties').hide();
+            $('#textProperties').hide();
+            $('#shapeProperties').hide();
+            $('#tableProperties').hide();
+            $('#chartProperties').show();
+            const cs = obj.chart_style || {};
+            $('#propChartType').val(cs.chart_type || 'bar');
+            $('#propChartTitle').val(cs.title || '');
+            $('#propChartLegend').prop('checked', cs.show_legend !== false);
+            $('#propChartGrid').prop('checked', cs.show_grid !== false);
         } else {
             $('#imageProperties').hide();
             $('#imageAreaProperties').hide();
             $('#textProperties').hide();
             $('#shapeProperties').hide();
+            $('#tableProperties').hide();
+            $('#chartProperties').hide();
         }
         return;
     }
@@ -2578,18 +2647,24 @@ function updatePropertiesPanel() {
         $('#imageAreaProperties').hide();
         $('#textProperties').show();
         $('#shapeProperties').hide();
+        $('#tableProperties').hide();
+        $('#chartProperties').hide();
         updateMultiTextPanel();
     } else if (types.length === 1 && types[0] === 'shape') {
         $('#imageProperties').hide();
         $('#imageAreaProperties').hide();
         $('#textProperties').hide();
         $('#shapeProperties').show();
+        $('#tableProperties').hide();
+        $('#chartProperties').hide();
         updateMultiShapePanel();
     } else if (types.length === 1 && types[0] === 'image') {
         $('#imageProperties').show();
         $('#imageAreaProperties').hide();
         $('#textProperties').hide();
         $('#shapeProperties').hide();
+        $('#tableProperties').hide();
+        $('#chartProperties').hide();
         const fits = [...new Set(state.selectedObjects.map(o => o.image_fit || 'contain'))];
         $('#propImageFit').val(fits.length === 1 ? fits[0] : 'contain');
     } else if (types.length === 1 && types[0] === 'image_area') {
@@ -2597,6 +2672,8 @@ function updatePropertiesPanel() {
         $('#imageAreaProperties').show();
         $('#textProperties').hide();
         $('#shapeProperties').hide();
+        $('#tableProperties').hide();
+        $('#chartProperties').hide();
         const fits = [...new Set(state.selectedObjects.map(o => o.image_fit || 'cover'))];
         $('#propImageAreaFit').val(fits.length === 1 ? fits[0] : 'cover');
     } else {
@@ -2605,6 +2682,8 @@ function updatePropertiesPanel() {
         $('#imageAreaProperties').hide();
         $('#textProperties').hide();
         $('#shapeProperties').hide();
+        $('#tableProperties').hide();
+        $('#chartProperties').hide();
     }
 }
 
@@ -2971,6 +3050,7 @@ function updateZIndex(value) {
 function cancelDrawMode() {
     state.isDrawing = false;
     state.drawShapeType = null;
+    state.drawChartType = null;
     state.drawStart = null;
     $('#drawGhost').remove();
     $('#canvas').removeClass('draw-mode');
@@ -4571,6 +4651,658 @@ function renderDashPagination(containerId, total, currentPage, pageSize, fnName)
     if (currentPage < totalPages) html += `<button onclick="${fnName}(${currentPage + 1})">다음 &#8250;</button>`;
     html += `<span class="dash-page-info">총 ${total}건</span>`;
     $(`#${containerId}`).html(html);
+}
+
+// =====================================================
+// TABLE & CHART OBJECTS
+// =====================================================
+
+// -- Chart dropdown --
+function toggleChartDropdown() {
+    const dd = $('#chartDropdown');
+    // Close other dropdowns
+    $('#shapeDropdown').hide();
+    dd.toggle();
+}
+
+// Close chart dropdown on outside click (add to existing document click handler if present)
+$(document).on('click', function(e) {
+    if (!$(e.target).closest('.shape-dropdown-wrapper').length) {
+        $('#chartDropdown').hide();
+    }
+});
+
+// -- Add Table Object --
+function addTableObject() {
+    if (!state.currentSlide) {
+        showToast('먼저 슬라이드를 선택하세요', 'error');
+        return;
+    }
+
+    const rows = 3, cols = 3;
+    const data = [];
+    for (let r = 0; r < rows; r++) {
+        const row = [];
+        for (let c = 0; c < cols; c++) {
+            row.push(r === 0 ? `항목 ${c + 1}` : '');
+        }
+        data.push(row);
+    }
+
+    const obj = {
+        obj_id: generateObjId(),
+        obj_type: 'table',
+        x: 100,
+        y: 100,
+        width: 400,
+        height: 200,
+        z_index: getNextZIndex(),
+        table_style: {
+            rows: rows,
+            cols: cols,
+            data: data,
+            header_row: true,
+            banded_rows: false,
+            banded_cols: false,
+            cell_styles: {},
+            border_color: '#BFBFBF',
+            border_width: 1,
+            header_bg_color: '#4472C4',
+            header_text_color: '#FFFFFF',
+            font_family: 'Arial',
+            font_size: 11,
+            merged_cells: [],
+        },
+        role: 'table',
+        placeholder: null,
+    };
+
+    state.objects.push(obj);
+    const el = createObjectElement(obj);
+    $('#canvas').append(el);
+    selectObject(obj.obj_id);
+    showToast('표가 추가되었습니다', 'success');
+}
+
+// -- Add Chart Object --
+function addChartObject(chartType) {
+    $('#chartDropdown').hide();
+
+    if (!state.currentSlide) {
+        showToast('먼저 슬라이드를 선택하세요', 'error');
+        return;
+    }
+
+    // Enter drawing mode like shapes
+    state.isDrawing = true;
+    state.drawShapeType = null;
+    state.drawChartType = chartType || 'bar';
+    state.drawStart = null;
+    $('#canvas').addClass('draw-mode');
+    showToast('캔버스에서 차트 영역을 드래그하세요 (ESC: 취소)', 'info');
+}
+
+function createChartAtRect(chartType, x, y, width, height) {
+    const sampleData = {
+        labels: ['항목1', '항목2', '항목3', '항목4'],
+        datasets: [{
+            label: '시리즈 1',
+            data: [65, 59, 80, 81],
+            backgroundColor: ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000'],
+        }]
+    };
+
+    const obj = {
+        obj_id: generateObjId(),
+        obj_type: 'chart',
+        x: x,
+        y: y,
+        width: Math.max(width, 200),
+        height: Math.max(height, 150),
+        z_index: getNextZIndex(),
+        chart_style: {
+            chart_type: chartType,
+            chart_data: sampleData,
+            title: '',
+            show_legend: true,
+            show_grid: true,
+            color_scheme: ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47'],
+        },
+        role: 'chart',
+        placeholder: null,
+    };
+
+    state.objects.push(obj);
+    renderCanvas();
+    selectObject(obj.obj_id);
+    showToast('차트가 추가되었습니다', 'success');
+}
+
+// -- Render Table in Canvas --
+function createTableHTML(obj) {
+    const style = obj.table_style || {};
+    const rows = style.rows || 3;
+    const cols = style.cols || 3;
+    const data = style.data || [];
+    const headerRow = style.header_row !== false;
+    const bandedRows = style.banded_rows || false;
+    const headerBg = style.header_bg_color || '#4472C4';
+    const headerText = style.header_text_color || '#FFFFFF';
+    const borderColor = style.border_color || '#BFBFBF';
+    const fontSize = style.font_size || 11;
+    const cellStyles = style.cell_styles || {};
+    const mergedCells = style.merged_cells || [];
+
+    // Build merged cell lookup
+    const mergedLookup = {};
+    mergedCells.forEach(m => {
+        for (let r = m.start_row; r <= m.end_row; r++) {
+            for (let c = m.start_col; c <= m.end_col; c++) {
+                if (r === m.start_row && c === m.start_col) {
+                    mergedLookup[`${r}_${c}`] = {
+                        rowspan: m.end_row - m.start_row + 1,
+                        colspan: m.end_col - m.start_col + 1
+                    };
+                } else {
+                    mergedLookup[`${r}_${c}`] = 'skip';
+                }
+            }
+        }
+    });
+
+    let html = `<table style="border-collapse:collapse;width:100%;height:100%;table-layout:fixed;border:1px solid ${borderColor};">`;
+    for (let r = 0; r < rows; r++) {
+        html += '<tr>';
+        for (let c = 0; c < cols; c++) {
+            const key = `${r}_${c}`;
+            const mergeInfo = mergedLookup[key];
+            if (mergeInfo === 'skip') continue;
+
+            const cellText = (r < data.length && c < data[r].length) ? data[r][c] : '';
+            const cs = cellStyles[key] || {};
+
+            let bgColor = cs.bg_color || '';
+            let textColor = cs.text_color || '#000000';
+            let bold = cs.bold || false;
+            let textAlign = cs.text_align || 'left';
+
+            if (headerRow && r === 0) {
+                bgColor = bgColor || headerBg;
+                textColor = cs.text_color || headerText;
+                bold = cs.bold !== false;
+            } else if (bandedRows && r % 2 === 0 && (!headerRow || r > 0)) {
+                bgColor = bgColor || '#D9E2F3';
+            }
+
+            let attrs = `contenteditable="true" data-row="${r}" data-col="${c}"`;
+            let styles = `border:1px solid ${borderColor};padding:2px 4px;font-size:${fontSize}px;`;
+            styles += `text-align:${textAlign};`;
+            if (bgColor) styles += `background:${bgColor};`;
+            if (textColor) styles += `color:${textColor};`;
+            if (bold) styles += `font-weight:bold;`;
+
+            if (mergeInfo && typeof mergeInfo === 'object') {
+                attrs += ` rowspan="${mergeInfo.rowspan}" colspan="${mergeInfo.colspan}"`;
+            }
+
+            html += `<td ${attrs} style="${styles}">${cellText}</td>`;
+        }
+        html += '</tr>';
+    }
+    html += '</table>';
+    return html;
+}
+
+// -- Render Chart in Canvas --
+const chartInstances = {};
+
+function renderChartInElement(el, obj) {
+    const chartStyle = obj.chart_style || {};
+    const chartType = chartStyle.chart_type || 'bar';
+    const chartData = chartStyle.chart_data || {};
+
+    // Destroy previous instance if exists
+    if (chartInstances[obj.obj_id]) {
+        chartInstances[obj.obj_id].destroy();
+        delete chartInstances[obj.obj_id];
+    }
+
+    const container = $(el);
+    container.empty();
+
+    if (!chartData.labels || !chartData.datasets || chartData.datasets.length === 0) {
+        container.html('<div class="chart-placeholder"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="8" y1="15" x2="8" y2="9"/><line x1="12" y1="15" x2="12" y2="6"/><line x1="16" y1="15" x2="16" y2="12"/></svg><span>차트 영역</span></div>');
+        return;
+    }
+
+    const canvas = document.createElement('canvas');
+    container.append(canvas);
+
+    // Map chart type for Chart.js
+    let cjsType = chartType;
+    if (chartType === 'area') cjsType = 'line';
+
+    const datasets = (chartData.datasets || []).map((ds, i) => {
+        const colors = chartStyle.color_scheme || ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47'];
+        const result = { ...ds };
+        if (chartType === 'pie' || chartType === 'doughnut') {
+            result.backgroundColor = (ds.data || []).map((_, j) => colors[j % colors.length]);
+        } else {
+            result.backgroundColor = ds.backgroundColor || colors[i % colors.length];
+            result.borderColor = ds.borderColor || colors[i % colors.length];
+        }
+        if (chartType === 'area') {
+            result.fill = true;
+            result.backgroundColor = (colors[i % colors.length]) + '40';
+        }
+        return result;
+    });
+
+    const config = {
+        type: cjsType,
+        data: {
+            labels: chartData.labels || [],
+            datasets: datasets,
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            plugins: {
+                legend: { display: chartStyle.show_legend !== false },
+                title: chartStyle.title ? { display: true, text: chartStyle.title } : { display: false },
+            },
+        }
+    };
+
+    if (chartType !== 'pie' && chartType !== 'doughnut' && chartType !== 'radar') {
+        config.options.scales = {
+            x: { display: chartStyle.show_grid !== false },
+            y: { display: chartStyle.show_grid !== false, beginAtZero: true },
+        };
+    }
+
+    try {
+        chartInstances[obj.obj_id] = new Chart(canvas, config);
+    } catch (e) {
+        container.html('<div class="chart-placeholder"><span>차트 렌더링 오류</span></div>');
+    }
+}
+
+// -- Table Context Menu --
+let tableCtxState = { objId: null, row: -1, col: -1, selectedCells: [] };
+
+function showTableContextMenu(e, objId) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const cell = $(e.target).closest('td, th');
+    if (!cell.length) return;
+
+    tableCtxState.objId = objId;
+    tableCtxState.row = parseInt(cell.attr('data-row'));
+    tableCtxState.col = parseInt(cell.attr('data-col'));
+
+    // Collect selected cells
+    const tableEl = cell.closest('table');
+    tableCtxState.selectedCells = [];
+    tableEl.find('.cell-selected').each(function() {
+        tableCtxState.selectedCells.push({
+            row: parseInt($(this).attr('data-row')),
+            col: parseInt($(this).attr('data-col'))
+        });
+    });
+    if (tableCtxState.selectedCells.length === 0) {
+        tableCtxState.selectedCells = [{ row: tableCtxState.row, col: tableCtxState.col }];
+    }
+
+    const menu = $('#tableContextMenu');
+    menu.css({ left: e.clientX + 'px', top: e.clientY + 'px', display: 'block' });
+
+    // Ensure menu doesn't go off screen
+    setTimeout(() => {
+        const rect = menu[0].getBoundingClientRect();
+        if (rect.right > window.innerWidth) menu.css('left', (e.clientX - rect.width) + 'px');
+        if (rect.bottom > window.innerHeight) menu.css('top', (e.clientY - rect.height) + 'px');
+    }, 0);
+}
+
+$(document).on('click', function(e) {
+    if (!$(e.target).closest('#tableContextMenu').length) {
+        $('#tableContextMenu').hide();
+    }
+});
+
+function tableCtxAction(action, value) {
+    const obj = state.objects.find(o => o.obj_id === tableCtxState.objId);
+    if (!obj || obj.obj_type !== 'table') return;
+
+    const ts = obj.table_style;
+    const r = tableCtxState.row;
+    const c = tableCtxState.col;
+
+    switch (action) {
+        case 'insertRowAbove':
+            ts.rows++;
+            ts.data.splice(r, 0, new Array(ts.cols).fill(''));
+            _shiftCellStyles(ts, 'row', r, 1);
+            break;
+        case 'insertRowBelow':
+            ts.rows++;
+            ts.data.splice(r + 1, 0, new Array(ts.cols).fill(''));
+            _shiftCellStyles(ts, 'row', r + 1, 1);
+            break;
+        case 'insertColLeft':
+            ts.cols++;
+            ts.data.forEach(row => row.splice(c, 0, ''));
+            _shiftCellStyles(ts, 'col', c, 1);
+            break;
+        case 'insertColRight':
+            ts.cols++;
+            ts.data.forEach(row => row.splice(c + 1, 0, ''));
+            _shiftCellStyles(ts, 'col', c + 1, 1);
+            break;
+        case 'deleteRow':
+            if (ts.rows <= 1) return;
+            ts.rows--;
+            ts.data.splice(r, 1);
+            _shiftCellStyles(ts, 'row', r, -1);
+            break;
+        case 'deleteCol':
+            if (ts.cols <= 1) return;
+            ts.cols--;
+            ts.data.forEach(row => row.splice(c, 1));
+            _shiftCellStyles(ts, 'col', c, -1);
+            break;
+        case 'mergeCells': {
+            const cells = tableCtxState.selectedCells;
+            if (cells.length < 2) { showToast('2개 이상의 셀을 선택하세요', 'error'); return; }
+            const minR = Math.min(...cells.map(c => c.row));
+            const maxR = Math.max(...cells.map(c => c.row));
+            const minC = Math.min(...cells.map(c => c.col));
+            const maxC = Math.max(...cells.map(c => c.col));
+            ts.merged_cells = ts.merged_cells || [];
+            ts.merged_cells.push({ start_row: minR, start_col: minC, end_row: maxR, end_col: maxC });
+            break;
+        }
+        case 'splitCell':
+            ts.merged_cells = (ts.merged_cells || []).filter(m =>
+                !(r >= m.start_row && r <= m.end_row && c >= m.start_col && c <= m.end_col)
+            );
+            break;
+        case 'cellBgColor':
+            tableCtxState.selectedCells.forEach(sc => {
+                const key = `${sc.row}_${sc.col}`;
+                ts.cell_styles[key] = ts.cell_styles[key] || {};
+                ts.cell_styles[key].bg_color = value;
+            });
+            break;
+        case 'cellTextColor':
+            tableCtxState.selectedCells.forEach(sc => {
+                const key = `${sc.row}_${sc.col}`;
+                ts.cell_styles[key] = ts.cell_styles[key] || {};
+                ts.cell_styles[key].text_color = value;
+            });
+            break;
+        case 'alignLeft':
+        case 'alignCenter':
+        case 'alignRight': {
+            const align = action.replace('align', '').toLowerCase();
+            tableCtxState.selectedCells.forEach(sc => {
+                const key = `${sc.row}_${sc.col}`;
+                ts.cell_styles[key] = ts.cell_styles[key] || {};
+                ts.cell_styles[key].text_align = align;
+            });
+            break;
+        }
+        case 'toggleBold':
+            tableCtxState.selectedCells.forEach(sc => {
+                const key = `${sc.row}_${sc.col}`;
+                ts.cell_styles[key] = ts.cell_styles[key] || {};
+                ts.cell_styles[key].bold = !ts.cell_styles[key].bold;
+            });
+            break;
+    }
+
+    // Re-render table
+    const el = $(`[data-obj-id="${obj.obj_id}"]`);
+    el.find('.table-wrapper').html(createTableHTML(obj));
+    _bindTableEvents(el, obj);
+    updatePropertiesPanel();
+    $('#tableContextMenu').hide();
+}
+
+function _shiftCellStyles(ts, dimension, index, delta) {
+    const newStyles = {};
+    for (const [key, val] of Object.entries(ts.cell_styles || {})) {
+        const [r, c] = key.split('_').map(Number);
+        let nr = r, nc = c;
+        if (dimension === 'row') {
+            if (delta > 0 && r >= index) nr = r + delta;
+            else if (delta < 0 && r === index) continue;
+            else if (delta < 0 && r > index) nr = r + delta;
+        } else {
+            if (delta > 0 && c >= index) nc = c + delta;
+            else if (delta < 0 && c === index) continue;
+            else if (delta < 0 && c > index) nc = c + delta;
+        }
+        newStyles[`${nr}_${nc}`] = val;
+    }
+    ts.cell_styles = newStyles;
+
+    // Shift merged cells
+    ts.merged_cells = (ts.merged_cells || []).map(m => {
+        const nm = { ...m };
+        if (dimension === 'row') {
+            if (delta > 0) {
+                if (nm.start_row >= index) nm.start_row += delta;
+                if (nm.end_row >= index) nm.end_row += delta;
+            } else {
+                if (nm.start_row > index) nm.start_row += delta;
+                if (nm.end_row > index) nm.end_row += delta;
+            }
+        } else {
+            if (delta > 0) {
+                if (nm.start_col >= index) nm.start_col += delta;
+                if (nm.end_col >= index) nm.end_col += delta;
+            } else {
+                if (nm.start_col > index) nm.start_col += delta;
+                if (nm.end_col > index) nm.end_col += delta;
+            }
+        }
+        return nm;
+    }).filter(m => m.start_row >= 0 && m.start_col >= 0 && m.end_row < ts.rows && m.end_col < ts.cols);
+}
+
+// -- Table Cell Selection (for merge) --
+function _bindTableEvents(el, obj) {
+    const tableEl = el.find('table');
+    let isSelecting = false;
+    let startCell = null;
+
+    // Cell editing -> sync to data
+    tableEl.find('td').on('blur', function() {
+        const r = parseInt($(this).attr('data-row'));
+        const c = parseInt($(this).attr('data-col'));
+        const text = $(this).text();
+        const ts = obj.table_style;
+        while (ts.data.length <= r) ts.data.push([]);
+        while (ts.data[r].length <= c) ts.data[r].push('');
+        ts.data[r][c] = text;
+    });
+
+    // Cell click -> prevent object drag when editing
+    tableEl.find('td').on('mousedown', function(e) {
+        e.stopPropagation();
+        if (e.button === 2) return; // right click handled by context menu
+
+        // Clear previous selection
+        tableEl.find('.cell-selected').removeClass('cell-selected');
+        isSelecting = true;
+        startCell = { row: parseInt($(this).attr('data-row')), col: parseInt($(this).attr('data-col')) };
+        $(this).addClass('cell-selected');
+    });
+
+    tableEl.find('td').on('mouseover', function() {
+        if (!isSelecting) return;
+        const endRow = parseInt($(this).attr('data-row'));
+        const endCol = parseInt($(this).attr('data-col'));
+        tableEl.find('.cell-selected').removeClass('cell-selected');
+        const minR = Math.min(startCell.row, endRow);
+        const maxR = Math.max(startCell.row, endRow);
+        const minC = Math.min(startCell.col, endCol);
+        const maxC = Math.max(startCell.col, endCol);
+        tableEl.find('td').each(function() {
+            const r = parseInt($(this).attr('data-row'));
+            const c = parseInt($(this).attr('data-col'));
+            if (r >= minR && r <= maxR && c >= minC && c <= maxC) {
+                $(this).addClass('cell-selected');
+            }
+        });
+    });
+
+    $(document).on('mouseup.tablesel', function() {
+        isSelecting = false;
+    });
+
+    // Right-click context menu
+    tableEl.on('contextmenu', function(e) {
+        showTableContextMenu(e, obj.obj_id);
+        return false;
+    });
+}
+
+// -- Table Properties --
+function updateTableDimension(dim, value) {
+    if (!state.selectedObject || state.selectedObject.obj_type !== 'table') return;
+    const ts = state.selectedObject.table_style;
+    const oldVal = ts[dim === 'rows' ? 'rows' : 'cols'];
+    ts[dim] = value;
+
+    if (dim === 'rows') {
+        while (ts.data.length < value) ts.data.push(new Array(ts.cols).fill(''));
+        if (ts.data.length > value) ts.data.length = value;
+    } else {
+        ts.data.forEach(row => {
+            while (row.length < value) row.push('');
+            if (row.length > value) row.length = value;
+        });
+    }
+
+    const el = $(`[data-obj-id="${state.selectedObject.obj_id}"]`);
+    el.find('.table-wrapper').html(createTableHTML(state.selectedObject));
+    _bindTableEvents(el, state.selectedObject);
+}
+
+function updateTableOption(key, value) {
+    if (!state.selectedObject || state.selectedObject.obj_type !== 'table') return;
+    state.selectedObject.table_style[key] = value;
+    const el = $(`[data-obj-id="${state.selectedObject.obj_id}"]`);
+    el.find('.table-wrapper').html(createTableHTML(state.selectedObject));
+    _bindTableEvents(el, state.selectedObject);
+}
+
+function applyTablePreset(preset) {
+    if (!state.selectedObject || state.selectedObject.obj_type !== 'table') return;
+    const ts = state.selectedObject.table_style;
+
+    const presets = {
+        default: { header_bg_color: '#4472C4', header_text_color: '#FFFFFF', border_color: '#BFBFBF', header_row: true, banded_rows: false },
+        dark: { header_bg_color: '#333333', header_text_color: '#FFFFFF', border_color: '#555555', header_row: true, banded_rows: true },
+        green: { header_bg_color: '#70AD47', header_text_color: '#FFFFFF', border_color: '#BFBFBF', header_row: true, banded_rows: false },
+        orange: { header_bg_color: '#ED7D31', header_text_color: '#FFFFFF', border_color: '#BFBFBF', header_row: true, banded_rows: false },
+        plain: { header_bg_color: '#FFFFFF', header_text_color: '#000000', border_color: '#999999', header_row: false, banded_rows: false },
+    };
+
+    const p = presets[preset] || presets.default;
+    Object.assign(ts, p);
+    ts.cell_styles = {}; // Reset per-cell overrides
+
+    const el = $(`[data-obj-id="${state.selectedObject.obj_id}"]`);
+    el.find('.table-wrapper').html(createTableHTML(state.selectedObject));
+    _bindTableEvents(el, state.selectedObject);
+    updatePropertiesPanel();
+    showToast('테이블 스타일이 적용되었습니다', 'success');
+}
+
+// -- Chart Properties --
+function updateChartOption(key, value) {
+    if (!state.selectedObject || state.selectedObject.obj_type !== 'chart') return;
+    state.selectedObject.chart_style[key] = value;
+    const el = $(`[data-obj-id="${state.selectedObject.obj_id}"]`);
+    renderChartInElement(el.find('.chart-wrapper')[0], state.selectedObject);
+}
+
+// -- Chart Data Editor Modal --
+function openChartDataEditor() {
+    if (!state.selectedObject || state.selectedObject.obj_type !== 'chart') return;
+    const cs = state.selectedObject.chart_style;
+    const cd = cs.chart_data || {};
+
+    $('#chartLabelsInput').val((cd.labels || []).join(', '));
+
+    const container = $('#chartDatasetsContainer');
+    container.empty();
+    (cd.datasets || []).forEach((ds, i) => {
+        container.append(`
+            <div class="dataset-row" data-idx="${i}" style="border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin-top:8px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                    <input type="text" class="ds-label" value="${ds.label || 'Series ' + (i+1)}" placeholder="시리즈 이름" style="width:60%;">
+                    <button class="btn btn-danger btn-sm" onclick="removeChartDataset(${i})" style="padding:2px 8px;">삭제</button>
+                </div>
+                <input type="text" class="ds-data" value="${(ds.data || []).join(', ')}" placeholder="값 (쉼표 구분)" style="width:100%;">
+            </div>
+        `);
+    });
+
+    $('#chartDataModal').show();
+}
+
+function closeChartDataEditor() {
+    $('#chartDataModal').hide();
+}
+
+function addChartDataset() {
+    const container = $('#chartDatasetsContainer');
+    const idx = container.children().length;
+    container.append(`
+        <div class="dataset-row" data-idx="${idx}" style="border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin-top:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                <input type="text" class="ds-label" value="시리즈 ${idx+1}" placeholder="시리즈 이름" style="width:60%;">
+                <button class="btn btn-danger btn-sm" onclick="$(this).closest('.dataset-row').remove()" style="padding:2px 8px;">삭제</button>
+            </div>
+            <input type="text" class="ds-data" value="" placeholder="값 (쉼표 구분)" style="width:100%;">
+        </div>
+    `);
+}
+
+function removeChartDataset(idx) {
+    $(`#chartDatasetsContainer .dataset-row[data-idx="${idx}"]`).remove();
+}
+
+function applyChartData() {
+    if (!state.selectedObject || state.selectedObject.obj_type !== 'chart') return;
+
+    const labels = $('#chartLabelsInput').val().split(',').map(s => s.trim()).filter(Boolean);
+    const datasets = [];
+    const colors = state.selectedObject.chart_style.color_scheme || ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47'];
+
+    $('#chartDatasetsContainer .dataset-row').each(function(i) {
+        const label = $(this).find('.ds-label').val() || 'Series ' + (i + 1);
+        const data = $(this).find('.ds-data').val().split(',').map(s => parseFloat(s.trim()) || 0);
+        datasets.push({
+            label: label,
+            data: data,
+            backgroundColor: colors[i % colors.length],
+        });
+    });
+
+    state.selectedObject.chart_style.chart_data = { labels, datasets };
+
+    const el = $(`[data-obj-id="${state.selectedObject.obj_id}"]`);
+    renderChartInElement(el.find('.chart-wrapper')[0], state.selectedObject);
+    closeChartDataEditor();
+    showToast('차트 데이터가 적용되었습니다', 'success');
 }
 
 // ============ 유틸리티 ============

@@ -44,6 +44,7 @@ DEFAULT_PROMPTS = [
    필수 필드: section_num (첫 번째 간지는 "01", 두 번째는 "02", 세 번째는 "03" 등 순서대로 자동 증가하는 두 자리 번호)
 4. **content** - 본문 콘텐츠 슬라이드
    필드: title(제목), governance(거버넌스/섹션태그), items[] (heading=부제목 + detail=설명, 순서대로 매핑), sources[]
+   선택 필드: table_data (표가 포함된 템플릿 선택 시), chart_data (차트가 포함된 템플릿 선택 시)
 5. **closing** - 마무리 슬라이드
    필드: title, message, contact
 
@@ -65,6 +66,17 @@ DEFAULT_PROMPTS = [
        {{"heading":"업무 자동화 도입","detail":"RPA와 AI를 활용한 반복 업무 자동화로 직원 생산성을 40% 이상 향상시킬 수 있습니다."}}
      ]}}
 5. sources가 있으면 출처를 명시합니다.
+6. **표/차트 데이터 생성 규칙** (카탈로그에서 "표(table) 포함" 또는 "차트(chart) 포함"으로 표시된 템플릿을 선택한 경우):
+   - 표가 포함된 템플릿 선택 시, 반드시 table_data를 생성합니다.
+     table_data 형식: {{"headers": ["열1", "열2", "열3"], "rows": [["값1", "값2", "값3"], ["값4", "값5", "값6"]]}}
+     headers는 열 제목 배열, rows는 2D 배열(각 행은 열 수와 동일한 셀 수를 가짐)
+   - 차트가 포함된 템플릿 선택 시, 반드시 chart_data를 생성합니다.
+     chart_data 형식: {{"chart_type": "bar", "title": "차트 제목", "chart_data": {{"labels": ["항목1", "항목2"], "datasets": [{{"label": "시리즈명", "data": [10, 20]}}]}}}}
+     chart_type: bar(막대)|line(선)|pie(원형)|doughnut(도넛)|area(영역)|radar(레이더)
+   - 표/차트 데이터는 해당 슬라이드의 주제와 items 내용에 관련된 의미 있는 데이터를 생성합니다.
+   - 리소스 자료에 수치/통계 데이터가 있으면 해당 데이터를 활용하세요.
+   - 표는 최소 2열, 2행 이상의 데이터를 포함합니다.
+   - 표/차트가 없는 템플릿에는 table_data/chart_data를 생성하지 마세요.
 
 ## 구조 설계 규칙
 1. 권장 순서: title → toc → (section → content 슬라이드들)... → closing
@@ -143,6 +155,8 @@ DEFAULT_PROMPTS = [
                 {{"heading": "두 번째 핵심 포인트", "detail": "두 번째 포인트에 대한 상세 설명. 논리적 근거와 함께 1~3문장으로 작성합니다."}},
                 {{"heading": "세 번째 핵심 포인트", "detail": "세 번째 포인트에 대한 상세 설명. 결론이나 시사점을 1~3문장으로 작성합니다."}}
             ],
+            "table_data": {{"headers": ["구분", "수치", "비고"], "rows": [["항목1", "100", "설명1"], ["항목2", "200", "설명2"]]}},
+            "chart_data": {{"chart_type": "bar", "title": "비교 차트", "chart_data": {{"labels": ["항목1", "항목2"], "datasets": [{{"label": "시리즈", "data": [100, 200]}}]}}}},
             "sources": ["출처1"]
         }},
         {{
@@ -157,7 +171,8 @@ DEFAULT_PROMPTS = [
         {{"ref": "source_id", "title": "출처 제목"}}
     ]
 }}
-```""",
+```
+※ table_data와 chart_data는 카탈로그에서 표/차트가 포함된 템플릿을 선택한 경우에만 추가합니다. 포함되지 않은 템플릿에는 생략하세요.""",
     },
     {
         "key": "excel_generation_system",

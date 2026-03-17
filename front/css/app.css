@@ -1349,10 +1349,12 @@ body {
 .slide-text-panel {
     width: 280px;
     min-width: 280px;
+    max-width: 280px;
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
     background: var(--surface);
+    overflow: hidden;
 }
 
 /* 탭 헤더 */
@@ -1498,6 +1500,7 @@ body {
 .slide-text-list {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 4px 0;
 }
 /* 스트리밍 중: 외부 스크롤 제거, 내부 스크롤 사용 */
@@ -3165,6 +3168,7 @@ body {
     padding: 12px 14px;
     border-bottom: 1px solid var(--border-light);
     animation: streamSlideIn 0.35s ease-out;
+    overflow: hidden;
 }
 .outline-summary-title {
     font-size: 11px;
@@ -3201,6 +3205,80 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* 표/차트 데이터 배지 */
+.slide-data-badge {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-left: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+.table-badge {
+    background: rgba(68, 114, 196, 0.12);
+    color: #4472C4;
+}
+.chart-badge {
+    background: rgba(237, 125, 49, 0.12);
+    color: #ED7D31;
+}
+
+/* 아웃라인 데이터 미리보기 */
+.outline-data-preview {
+    margin: 4px 0 6px 26px;
+    padding: 6px 8px;
+    background: var(--bg-secondary, #f8f9fa);
+    border-radius: 6px;
+    border: 1px solid var(--border-light, #e5e7eb);
+    overflow-x: auto;
+    min-width: 0;
+}
+.outline-data-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-secondary, #6b7280);
+    margin-bottom: 4px;
+}
+.outline-mini-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9px;
+    margin-top: 2px;
+    table-layout: fixed;
+}
+.outline-mini-table th {
+    background: var(--accent, #4472C4);
+    color: #fff;
+    padding: 2px 6px;
+    text-align: left;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.outline-mini-table td {
+    padding: 2px 6px;
+    border-bottom: 1px solid var(--border-light, #e5e7eb);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.outline-mini-table tbody tr:nth-child(even) {
+    background: rgba(0,0,0,0.02);
+}
+.outline-chart-info {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    font-size: 9px;
+    color: var(--text-tertiary, #9ca3af);
+    line-height: 1.4;
 }
 
 /* ============ 토스트 ============ */
@@ -5792,4 +5870,23 @@ body {
 .translate-lang-item .lang-arrow {
     color: var(--text-secondary);
     font-size: 18px;
+}
+
+/* ============ Table preview ============ */
+.preview-obj table {
+    border-collapse: collapse;
+    width: 100%;
+    height: 100%;
+    table-layout: fixed;
+}
+.preview-obj table td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ============ Chart preview ============ */
+.preview-obj canvas {
+    width: 100% !important;
+    height: 100% !important;
 }

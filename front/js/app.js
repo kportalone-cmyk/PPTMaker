@@ -70,7 +70,7 @@ function getSlideCanvasSize(slideSize) {
     const sizes = {
         '16:9': { w: 960, h: 540 },
         '4:3':  { w: 960, h: 720 },
-        'A4':   { w: 960, h: 679 },
+        'A4':   { w: 960, h: 665 },
     };
     return sizes[slideSize] || sizes['16:9'];
 }
@@ -2708,6 +2708,17 @@ async function _animateSlideTextUpdate(index) {
             if (text) {
                 textEls.push({ $el: div, text: text });
             }
+        } else if (obj.obj_type === 'table') {
+            div.css('height', (obj.height * scaleY) + 'px');
+            const tableHtml = _createPreviewTableHTML(obj, scaleX, scaleY);
+            div.html(tableHtml);
+            canvas.append(div);
+        } else if (obj.obj_type === 'chart') {
+            div.css('height', (obj.height * scaleY) + 'px');
+            const chartWrapper = $('<div>').css({ width: '100%', height: '100%' });
+            div.append(chartWrapper);
+            canvas.append(div);
+            setTimeout(() => _renderPreviewChart(chartWrapper[0], obj), 50);
         }
     });
 
@@ -3144,7 +3155,46 @@ function _handleStreamEvent(data) {
                 outlineHtml += `<span class="outline-summary-num">${i + 1}</span>`;
                 outlineHtml += `<span class="outline-summary-text">${escapeHtml(s.title || '슬라이드 ' + (i + 1))}</span>`;
                 outlineHtml += `<span class="slide-type-badge">${badge}</span>`;
+                if (s.has_table) outlineHtml += '<span class="slide-data-badge table-badge">Table</span>';
+                if (s.has_chart) outlineHtml += '<span class="slide-data-badge chart-badge">Chart</span>';
                 outlineHtml += '</div>';
+                // 표/차트 데이터 미리보기
+                if (s.table_data) {
+                    const td = s.table_data;
+                    const headers = td.headers || [];
+                    const rows = td.rows || [];
+                    if (headers.length > 0) {
+                        outlineHtml += '<div class="outline-data-preview">';
+                        outlineHtml += '<div class="outline-data-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg> 표 데이터</div>';
+                        outlineHtml += '<table class="outline-mini-table"><thead><tr>';
+                        headers.forEach(h => { outlineHtml += `<th>${escapeHtml(String(h))}</th>`; });
+                        outlineHtml += '</tr></thead><tbody>';
+                        rows.slice(0, 3).forEach(row => {
+                            outlineHtml += '<tr>';
+                            (row || []).forEach(cell => { outlineHtml += `<td>${escapeHtml(String(cell))}</td>`; });
+                            outlineHtml += '</tr>';
+                        });
+                        if (rows.length > 3) outlineHtml += `<tr><td colspan="${headers.length}" style="text-align:center;color:var(--text-tertiary)">... +${rows.length - 3}행</td></tr>`;
+                        outlineHtml += '</tbody></table></div>';
+                    }
+                }
+                if (s.chart_data) {
+                    const cd = s.chart_data;
+                    const chartTypeLabel = {bar:'막대', line:'선', pie:'원형', doughnut:'도넛', area:'영역', radar:'레이더'}[cd.chart_type] || cd.chart_type;
+                    outlineHtml += '<div class="outline-data-preview">';
+                    outlineHtml += `<div class="outline-data-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="22,6 13.5,15.5 8.5,10.5 2,17"/></svg> ${escapeHtml(cd.title || '차트')} (${chartTypeLabel})</div>`;
+                    const labels = (cd.chart_data || {}).labels || [];
+                    const datasets = (cd.chart_data || {}).datasets || [];
+                    if (labels.length > 0 && datasets.length > 0) {
+                        outlineHtml += '<div class="outline-chart-info">';
+                        outlineHtml += `<span>항목: ${labels.slice(0, 5).map(l => escapeHtml(String(l))).join(', ')}${labels.length > 5 ? '...' : ''}</span>`;
+                        datasets.forEach(ds => {
+                            outlineHtml += `<span>· ${escapeHtml(ds.label || '데이터')}: ${(ds.data || []).slice(0, 5).join(', ')}${(ds.data || []).length > 5 ? '...' : ''}</span>`;
+                        });
+                        outlineHtml += '</div>';
+                    }
+                    outlineHtml += '</div>';
+                }
             });
             outlineHtml += '</div>';
 
@@ -3368,6 +3418,47 @@ function _appendSlideOutline(slide, index) {
         sections.push({ header: item.heading || '', body: item.detail || '' });
     });
 
+    // 표/차트 오브젝트에서 데이터 추출
+    let tableHtml = '';
+    let chartHtml = '';
+    (slide.objects || []).forEach(obj => {
+        if (obj.obj_type === 'table' && obj.table_style) {
+            const ts = obj.table_style;
+            const data = ts.data || [];
+            if (data.length > 0) {
+                tableHtml += '<div class="outline-data-preview">';
+                tableHtml += '<div class="outline-data-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg> 표 데이터</div>';
+                tableHtml += '<table class="outline-mini-table"><thead><tr>';
+                (data[0] || []).forEach(h => { tableHtml += `<th>${escapeHtml(String(h))}</th>`; });
+                tableHtml += '</tr></thead><tbody>';
+                data.slice(1, 4).forEach(row => {
+                    tableHtml += '<tr>';
+                    (row || []).forEach(cell => { tableHtml += `<td>${escapeHtml(String(cell))}</td>`; });
+                    tableHtml += '</tr>';
+                });
+                if (data.length > 4) tableHtml += `<tr><td colspan="${(data[0]||[]).length}" style="text-align:center;color:var(--text-tertiary)">... +${data.length - 4}행</td></tr>`;
+                tableHtml += '</tbody></table></div>';
+            }
+        }
+        if (obj.obj_type === 'chart' && obj.chart_style) {
+            const cs = obj.chart_style;
+            const chartTypeLabel = {bar:'막대', line:'선', pie:'원형', doughnut:'도넛', area:'영역', radar:'레이더'}[cs.chart_type] || cs.chart_type;
+            chartHtml += '<div class="outline-data-preview">';
+            chartHtml += `<div class="outline-data-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="22,6 13.5,15.5 8.5,10.5 2,17"/></svg> ${escapeHtml(cs.title || '차트')} (${chartTypeLabel})</div>`;
+            const labels = (cs.chart_data || {}).labels || [];
+            const datasets = (cs.chart_data || {}).datasets || [];
+            if (labels.length > 0 && datasets.length > 0) {
+                chartHtml += '<div class="outline-chart-info">';
+                chartHtml += `<span>항목: ${labels.slice(0, 5).map(l => escapeHtml(String(l))).join(', ')}${labels.length > 5 ? '...' : ''}</span>`;
+                datasets.forEach(ds => {
+                    chartHtml += `<span>· ${escapeHtml(ds.label || '데이터')}: ${(ds.data || []).slice(0, 5).join(', ')}${(ds.data || []).length > 5 ? '...' : ''}</span>`;
+                });
+                chartHtml += '</div>';
+            }
+            chartHtml += '</div>';
+        }
+    });
+
     const meta = slide.slide_meta || {};
     const typeLabel = typeLabels[meta.content_type || ''] || '';
     const badgeHtml = typeLabel ? `<span class="slide-type-badge">${typeLabel}</span>` : '';
@@ -3390,6 +3481,8 @@ function _appendSlideOutline(slide, index) {
                 ${badgeHtml}
             </div>
             ${sectionsHtml}
+            ${tableHtml}
+            ${chartHtml}
         </div>
     `);
 
@@ -3527,6 +3620,15 @@ function renderSlideAtIndex(index) {
             if (role !== 'number' && role !== 'governance') {
                 div.css({ height: 'auto', minHeight: (obj.height * scaleY) + 'px', overflow: 'visible' });
             }
+        } else if (obj.obj_type === 'table') {
+            const tableHtml = _createPreviewTableHTML(obj, scaleX, scaleY);
+            div.html(tableHtml);
+        } else if (obj.obj_type === 'chart') {
+            const chartWrapper = $('<div>').css({ width: '100%', height: '100%' });
+            div.append(chartWrapper);
+            canvas.append(div);
+            setTimeout(() => _renderPreviewChart(chartWrapper[0], obj), 50);
+            return; // already appended
         }
 
         canvas.append(div);
@@ -3594,6 +3696,15 @@ function renderSlideToContainer(container, slide, thumbW, thumbH, slideSize) {
                 div.css('whiteSpace', 'pre-wrap');
                 div.text(text);
             }
+        } else if (obj.obj_type === 'table') {
+            const tableHtml = _createPreviewTableHTML(obj, scaleX, scaleY);
+            div.html(tableHtml);
+        } else if (obj.obj_type === 'chart') {
+            const chartWrapper = $('<div>').css({ width: '100%', height: '100%' });
+            div.append(chartWrapper);
+            container.append(div);
+            setTimeout(() => _renderPreviewChart(chartWrapper[0], obj), 50);
+            return; // already appended
         }
 
         container.append(div);
@@ -3812,6 +3923,45 @@ function renderSlideTextPanel() {
             }
         });
 
+        // 표/차트 오브젝트 데이터 미리보기
+        let dataHtml = '';
+        (slide.objects || []).forEach(obj => {
+            if (obj.obj_type === 'table' && obj.table_style) {
+                const ts = obj.table_style;
+                const tData = ts.data || [];
+                if (tData.length > 0) {
+                    dataHtml += '<div class="outline-data-preview">';
+                    dataHtml += '<div class="outline-data-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg> 표 데이터</div>';
+                    dataHtml += '<table class="outline-mini-table"><thead><tr>';
+                    (tData[0] || []).forEach(h => { dataHtml += `<th>${escapeHtml(String(h))}</th>`; });
+                    dataHtml += '</tr></thead><tbody>';
+                    tData.slice(1, 4).forEach(row => {
+                        dataHtml += '<tr>';
+                        (row || []).forEach(cell => { dataHtml += `<td>${escapeHtml(String(cell))}</td>`; });
+                        dataHtml += '</tr>';
+                    });
+                    if (tData.length > 4) dataHtml += `<tr><td colspan="${(tData[0]||[]).length}" style="text-align:center;color:var(--text-tertiary)">... +${tData.length - 4}행</td></tr>`;
+                    dataHtml += '</tbody></table></div>';
+                }
+            }
+            if (obj.obj_type === 'chart' && obj.chart_style) {
+                const cs = obj.chart_style;
+                const cLabels = (cs.chart_data || {}).labels || [];
+                const cDatasets = (cs.chart_data || {}).datasets || [];
+                if (cLabels.length > 0 && cDatasets.length > 0) {
+                    const ctLabel = {bar:'막대', line:'선', pie:'원형', doughnut:'도넛', area:'영역', radar:'레이더'}[cs.chart_type] || cs.chart_type;
+                    dataHtml += '<div class="outline-data-preview">';
+                    dataHtml += `<div class="outline-data-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="22,6 13.5,15.5 8.5,10.5 2,17"/></svg> ${escapeHtml(cs.title || '차트')} (${ctLabel})</div>`;
+                    dataHtml += '<div class="outline-chart-info">';
+                    dataHtml += `<span>항목: ${cLabels.slice(0, 5).map(l => escapeHtml(String(l))).join(', ')}${cLabels.length > 5 ? '...' : ''}</span>`;
+                    cDatasets.forEach(ds => {
+                        dataHtml += `<span>· ${escapeHtml(ds.label || '데이터')}: ${(ds.data || []).slice(0, 5).join(', ')}${(ds.data || []).length > 5 ? '...' : ''}</span>`;
+                    });
+                    dataHtml += '</div></div>';
+                }
+            }
+        });
+
         list.append(`
             <div class="slide-text-item ${isActive ? 'active' : ''}" onclick="goToSlide(${i})" data-slide-idx="${i}">
                 <div class="slide-text-item-header">
@@ -3820,6 +3970,7 @@ function renderSlideTextPanel() {
                     ${badgeHtml}
                 </div>
                 ${sectionsHtml}
+                ${dataHtml}
             </div>
         `);
     });
@@ -4429,6 +4580,14 @@ function renderSlideAtIndexEditable(index) {
             if (role === 'description') {
                 div.css({ height: 'auto', minHeight: (obj.height * scaleY) + 'px', overflow: 'visible' });
             }
+        } else if (obj.obj_type === 'table') {
+            const tableHtml = _createPreviewTableHTML(obj, scaleX, scaleY);
+            div.html(tableHtml);
+        } else if (obj.obj_type === 'chart') {
+            const chartWrapper = $('<div>').css({ width: '100%', height: '100%' });
+            div.append(chartWrapper);
+            canvas.append(div);
+            setTimeout(() => _renderPreviewChart(chartWrapper[0], obj), 50);
         }
 
         // Resize handles + delete button
@@ -5908,6 +6067,19 @@ function renderPresentationSlide(index, panel) {
             var animClass = role === 'title' ? 'pres-anim-title' : '';
             div.addClass('pres-obj-animate ' + animClass + ' pres-delay-' + Math.min(animIdx, 8));
             animIdx++;
+        } else if (obj.obj_type === 'table') {
+            var tableHtml = _createPreviewTableHTML(obj, scaleX, scaleY);
+            div.html(tableHtml);
+            div.addClass('pres-obj-animate pres-delay-' + Math.min(animIdx, 8));
+            animIdx++;
+        } else if (obj.obj_type === 'chart') {
+            var chartWrapper = $('<div>').css({ width: '100%', height: '100%' });
+            div.append(chartWrapper);
+            div.addClass('pres-obj-animate pres-delay-' + Math.min(animIdx, 8));
+            animIdx++;
+            container.append(div);
+            setTimeout(function() { _renderPreviewChart(chartWrapper[0], obj); }, 50);
+            return; // already appended
         }
 
         container.append(div);
@@ -11833,4 +12005,156 @@ function _buildEChartsOptionFromChartJson(config) {
         yAxis: { type: 'value', splitLine: { lineStyle: { color: 'rgba(0,0,0,0.06)' } } },
         series: series,
     };
+}
+
+// =====================================================
+// TABLE & CHART PREVIEW RENDERING
+// =====================================================
+
+function _createPreviewTableHTML(obj, scaleX, scaleY) {
+    const style = obj.table_style || {};
+    const rows = style.rows || 3;
+    const cols = style.cols || 3;
+    const data = style.data || [];
+    const headerRow = style.header_row !== false;
+    const bandedRows = style.banded_rows || false;
+    const headerBg = style.header_bg_color || '#4472C4';
+    const headerText = style.header_text_color || '#FFFFFF';
+    const borderColor = style.border_color || '#BFBFBF';
+    const fontSize = Math.max(8, (style.font_size || 11) * Math.min(scaleX, scaleY));
+    const cellStyles = style.cell_styles || {};
+    const mergedCells = style.merged_cells || [];
+
+    // Build merged cell lookup
+    const mergedLookup = {};
+    mergedCells.forEach(m => {
+        for (let r = m.start_row; r <= m.end_row; r++) {
+            for (let c = m.start_col; c <= m.end_col; c++) {
+                if (r === m.start_row && c === m.start_col) {
+                    mergedLookup[`${r}_${c}`] = {
+                        rowspan: m.end_row - m.start_row + 1,
+                        colspan: m.end_col - m.start_col + 1
+                    };
+                } else {
+                    mergedLookup[`${r}_${c}`] = 'skip';
+                }
+            }
+        }
+    });
+
+    let html = `<table style="border-collapse:collapse;width:100%;height:100%;table-layout:fixed;">`;
+    for (let r = 0; r < rows; r++) {
+        html += '<tr>';
+        for (let c = 0; c < cols; c++) {
+            const key = `${r}_${c}`;
+            const mergeInfo = mergedLookup[key];
+            if (mergeInfo === 'skip') continue;
+
+            const cellText = (r < data.length && c < data[r].length) ? data[r][c] : '';
+            const cs = cellStyles[key] || {};
+
+            let bgColor = cs.bg_color || '';
+            let textColor = cs.text_color || '#000000';
+            let bold = cs.bold || false;
+            let textAlign = cs.text_align || 'left';
+
+            if (headerRow && r === 0) {
+                bgColor = bgColor || headerBg;
+                textColor = cs.text_color || headerText;
+                bold = cs.bold !== false;
+            } else if (bandedRows && r % 2 === 0 && (!headerRow || r > 0)) {
+                bgColor = bgColor || '#D9E2F3';
+            }
+
+            let styles = `border:1px solid ${borderColor};padding:2px 4px;font-size:${fontSize}px;`;
+            styles += `text-align:${textAlign};overflow:hidden;`;
+            if (bgColor) styles += `background:${bgColor};`;
+            if (textColor) styles += `color:${textColor};`;
+            if (bold) styles += `font-weight:bold;`;
+
+            let attrs = '';
+            if (mergeInfo && typeof mergeInfo === 'object') {
+                attrs = `rowspan="${mergeInfo.rowspan}" colspan="${mergeInfo.colspan}"`;
+            }
+
+            html += `<td ${attrs} style="${styles}">${cellText}</td>`;
+        }
+        html += '</tr>';
+    }
+    html += '</table>';
+    return html;
+}
+
+const _previewChartInstances = {};
+
+function _renderPreviewChart(container, obj) {
+    const chartStyle = obj.chart_style || {};
+    const chartType = chartStyle.chart_type || 'bar';
+    const chartData = chartStyle.chart_data || {};
+
+    // Destroy previous instance
+    const key = obj.obj_id || Math.random().toString(36);
+    if (_previewChartInstances[key]) {
+        _previewChartInstances[key].destroy();
+        delete _previewChartInstances[key];
+    }
+
+    const $container = $(container);
+    $container.empty();
+
+    if (!chartData.labels || !chartData.datasets || chartData.datasets.length === 0) {
+        $container.html('<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:#9ca3af;font-size:11px;border:1px dashed #d1d5db;">차트</div>');
+        return;
+    }
+
+    const canvas = document.createElement('canvas');
+    $container.append(canvas);
+
+    let cjsType = chartType;
+    if (chartType === 'area') cjsType = 'line';
+
+    const colors = chartStyle.color_scheme || ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47'];
+    const datasets = (chartData.datasets || []).map((ds, i) => {
+        const result = { ...ds };
+        if (chartType === 'pie' || chartType === 'doughnut') {
+            result.backgroundColor = (ds.data || []).map((_, j) => colors[j % colors.length]);
+        } else {
+            result.backgroundColor = ds.backgroundColor || colors[i % colors.length];
+            result.borderColor = ds.borderColor || colors[i % colors.length];
+        }
+        if (chartType === 'area') {
+            result.fill = true;
+            result.backgroundColor = (colors[i % colors.length]) + '40';
+        }
+        return result;
+    });
+
+    const config = {
+        type: cjsType,
+        data: { labels: chartData.labels || [], datasets: datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            plugins: {
+                legend: { display: chartStyle.show_legend !== false, labels: { font: { size: 9 } } },
+                title: chartStyle.title ? { display: true, text: chartStyle.title, font: { size: 10 } } : { display: false },
+            },
+        }
+    };
+
+    if (chartType !== 'pie' && chartType !== 'doughnut' && chartType !== 'radar') {
+        config.options.scales = {
+            x: { display: chartStyle.show_grid !== false, ticks: { font: { size: 8 } } },
+            y: { display: chartStyle.show_grid !== false, beginAtZero: true, ticks: { font: { size: 8 } } },
+        };
+    }
+
+    try {
+        if (typeof Chart !== 'undefined') {
+            _previewChartInstances[key] = new Chart(canvas, config);
+        }
+    } catch (e) {
+        $container.html('<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:#9ca3af;font-size:11px;">차트</div>');
+    }
 }

@@ -475,11 +475,19 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
                     slide_type = rs.get("type", "content")
                     title = rs.get("title", "") or rs.get("section_title", "")
                     items_count = len(rs.get("items", []))
-                    outline_items.append({
+                    oi = {
                         "type": slide_type,
                         "title": title,
                         "items_count": items_count,
-                    })
+                    }
+                    # 표/차트 데이터 포함
+                    if rs.get("table_data"):
+                        oi["has_table"] = True
+                        oi["table_data"] = rs["table_data"]
+                    if rs.get("chart_data"):
+                        oi["has_chart"] = True
+                        oi["chart_data"] = rs["chart_data"]
+                    outline_items.append(oi)
                 yield _sse("outline", {"slides": outline_items})
 
             # 리치 스키마 결과 처리
@@ -3080,6 +3088,20 @@ def _analyze_template_slides(slides: list) -> list[dict]:
 
             placeholders.append({"placeholder": placeholder, "role": role})
 
+        # 테이블/차트 오브젝트도 placeholder 할당
+        for obj in slide.get("objects", []):
+            if obj.get("obj_type") in ("table", "chart"):
+                role = obj.get("role", obj.get("obj_type"))
+                placeholder = obj.get("placeholder", "")
+                if not placeholder:
+                    counter = role_counters.get(role, 0)
+                    placeholder = f"auto_{role}_{counter}"
+                    role_counters[role] = counter + 1
+                    obj["_auto_placeholder"] = placeholder
+                else:
+                    role_counters[role] = role_counters.get(role, 0) + 1
+                placeholders.append({"placeholder": placeholder, "role": role})
+
         enriched_meta = _enrich_slide_meta(slide, placeholders)
         slides_meta.append({
             "slide_index": idx,
@@ -3167,6 +3189,43 @@ def _build_gen_objects(template_slide: dict, contents: dict) -> list:
                 gen_obj["role_auto"] = True  # 자동 추론 역할 표시 (PPTX 렌더링 시 필터링 방지)
             gen_obj.pop("_auto_placeholder", None)
             gen_obj.pop("_auto_role", None)
+
+        elif obj.get("obj_type") == "table":
+            gen_obj = obj.copy()
+            placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
+            if placeholder_name and placeholder_name in contents:
+                table_content = contents[placeholder_name]
+                if isinstance(table_content, dict):
+                    table_style = gen_obj.get("table_style", {})
+                    if table_content.get("data"):
+                        table_style["data"] = table_content["data"]
+                    if table_content.get("rows"):
+                        table_style["rows"] = table_content["rows"]
+                    if table_content.get("cols"):
+                        table_style["cols"] = table_content["cols"]
+                    gen_obj["table_style"] = table_style
+            gen_obj.pop("_auto_placeholder", None)
+            gen_objects.append(gen_obj)
+            continue
+
+        elif obj.get("obj_type") == "chart":
+            gen_obj = obj.copy()
+            placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
+            if placeholder_name and placeholder_name in contents:
+                chart_content = contents[placeholder_name]
+                if isinstance(chart_content, dict):
+                    chart_style = gen_obj.get("chart_style", {})
+                    if chart_content.get("chart_data"):
+                        chart_style["chart_data"] = chart_content["chart_data"]
+                    if chart_content.get("chart_type"):
+                        chart_style["chart_type"] = chart_content["chart_type"]
+                    if chart_content.get("title"):
+                        chart_style["title"] = chart_content["title"]
+                    gen_obj["chart_style"] = chart_style
+            gen_obj.pop("_auto_placeholder", None)
+            gen_objects.append(gen_obj)
+            continue
+
         gen_objects.append(gen_obj)
     _ensure_number_above_shapes(gen_objects)
     return gen_objects
@@ -3371,6 +3430,9 @@ def _enrich_slide_meta(slide: dict, placeholders: list) -> dict:
     # content_type이 없으면 기본 body
     if not meta.get("content_type"):
         meta["content_type"] = "body"
+
+    meta["has_table"] = any(p["role"] == "table" for p in placeholders)
+    meta["has_chart"] = any(p["role"] == "chart" for p in placeholders)
 
     return meta
 

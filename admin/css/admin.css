@@ -1697,8 +1697,14 @@ button.mixed {
 }
 
 .size-preview.size-a4 {
-    width: 28px;
-    height: 40px;
+    width: 43px;
+    height: 30px;
+}
+
+.size-cm {
+    font-size: 10px;
+    color: #999;
+    font-weight: 400;
 }
 
 /* 템플릿 크기 배지 */
@@ -1712,4 +1718,143 @@ button.mixed {
     color: #2d5a8e;
     border: 1px solid #c5d8f0;
     white-space: nowrap;
+}
+
+/* ============ Table Object ============ */
+.obj-table {
+    overflow: visible;
+}
+.obj-table .table-wrapper {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+.obj-table table {
+    width: 100%;
+    height: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+.obj-table td, .obj-table th {
+    border: 1px solid #BFBFBF;
+    padding: 2px 4px;
+    font-size: 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    outline: none;
+    min-width: 20px;
+    position: relative;
+    user-select: text;
+}
+.obj-table td[contenteditable]:focus {
+    background: rgba(68, 114, 196, 0.08);
+    outline: 2px solid #4472C4;
+    outline-offset: -2px;
+}
+.obj-table td.cell-selected,
+.obj-table th.cell-selected {
+    background: rgba(68, 114, 196, 0.15) !important;
+    outline: 2px solid #4472C4;
+    outline-offset: -2px;
+}
+
+/* Table Context Menu */
+.table-context-menu {
+    position: fixed;
+    background: #fff;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    z-index: 99999;
+    min-width: 180px;
+    padding: 4px 0;
+    font-size: 13px;
+}
+.table-context-menu .ctx-item {
+    padding: 7px 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: background 0.1s;
+}
+.table-context-menu .ctx-item:hover {
+    background: #f3f4f6;
+}
+.table-context-menu .ctx-separator {
+    height: 1px;
+    background: #e5e7eb;
+    margin: 4px 0;
+}
+.table-context-menu .ctx-has-sub {
+    position: relative;
+}
+.table-context-menu .ctx-submenu {
+    display: none;
+    position: absolute;
+    right: -4px;
+    top: 0;
+    transform: translateX(100%);
+    background: #fff;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    padding: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+.table-context-menu .ctx-has-sub:hover .ctx-submenu {
+    display: block;
+}
+
+/* Table Preset Grid */
+.table-preset-grid {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+.table-preset-btn {
+    border: 2px solid transparent;
+    background: #f9f9f9;
+    border-radius: 4px;
+    padding: 4px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+}
+.table-preset-btn:hover {
+    border-color: #4472C4;
+}
+
+/* ============ Chart Object ============ */
+.obj-chart {
+    overflow: visible;
+}
+.obj-chart .chart-wrapper {
+    width: 100%;
+    height: 100%;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+.obj-chart canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+.obj-chart .chart-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #9ca3af;
+    font-size: 12px;
+    width: 100%;
+    height: 100%;
+    border: 2px dashed #d1d5db;
+    border-radius: 4px;
+}
+
+/* Chart Dropdown (reuse shape dropdown styles) */
+#chartDropdown .shape-grid {
+    grid-template-columns: repeat(3, 1fr);
 }

@@ -2,8 +2,12 @@ import os
 import sys
 import time
 import hashlib
+import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
+
+# Windows asyncio ConnectionResetError 로그 억제
+logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
