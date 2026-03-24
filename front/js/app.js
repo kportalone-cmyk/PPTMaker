@@ -57,6 +57,14 @@ const state = {
     generatedDocx: null,
     // DOCX 양식 템플릿
     docxTemplateId: null,
+    // Custom PPTX Template (Feature 2)
+    customTemplateId: null,
+    customTemplateInfo: null, // {filename, slides_count, slide_size}
+    // HTML Report (Feature 3)
+    selectedSkillId: null,
+    selectedSkillInfo: null,
+    generatedHtml: null,
+    htmlSkills: [],
 };
 
 let _animationCancelled = false;
@@ -1590,6 +1598,11 @@ async function openProject(projectId) {
         state.generatedExcel = res.generated_excel || null;
         state.onlyofficeDoc = res.onlyoffice_doc || null;
         state.generatedDocx = res.generated_docx || null;
+        state.generatedHtml = null;
+        state.selectedSkillId = null;
+        state.selectedSkillInfo = null;
+        state.customTemplateId = null;
+        state.customTemplateInfo = null;
         state.currentSlideIndex = 0;
         state.collabRole = res.project._collab_role || 'owner';
 
@@ -1689,12 +1702,16 @@ function renderProjectWorkspace() {
     const isOnlyOffice = projectType.startsWith('onlyoffice_');
     const isWord = (projectType === 'word');
 
+    const isHtmlReport = (projectType === 'html_report');
+
     // 모든 워크스페이스 숨기기
     $('#excelWorkspace').hide();
     $('#onlyofficeWorkspace').hide();
     $('#wordWorkspace').hide();
+    $('#htmlReportWorkspace').hide();
     $('#btnModifyExcel').hide();
     $('#btnDocxTemplate').hide();
+    $('#htmlPageCountSelect').hide();
     _destroyExcelCharts();
     // 전체화면 상태 해제
     $('#appView').removeClass('canvas-fullscreen');
@@ -1771,6 +1788,20 @@ function renderProjectWorkspace() {
         $('#instructionsInput').attr('placeholder', '문서에 작성할 내용에 대한 지침을 입력하세요...');
         $('#btnCanvasFullscreen').show();
         initWordWorkspace();
+    } else if (isHtmlReport) {
+        // HTML 리포트 모드
+        $('#slideEmpty').hide();
+        $('#slidePreview').hide();
+        $('#htmlReportWorkspace').show();
+        $('#templateSelectBtn').show(); // skill selector
+        $('#slideCountSelect').hide();
+        $('#docxPageCountSelect').hide();
+        $('#htmlPageCountSelect').show();
+        $('#btnAddSlide').hide();
+        $('#btnGenerate span').text('리포트 생성');
+        $('#instructionsInput').attr('placeholder', 'HTML 리포트에 작성할 내용에 대한 지침을 입력하세요...');
+        $('#btnCanvasFullscreen').hide();
+        initHtmlReportWorkspace();
     } else {
         // 슬라이드 모드
         $('#templateSelectBtn').show();
@@ -1791,9 +1822,23 @@ function renderProjectWorkspace() {
         $('#instructionsInput').val('');
     }
 
-    if (!isExcel && !isOnlyOffice && !isWord) {
+    if (isHtmlReport) {
+        // HTML 리포트: skill 선택 복원
+        state.selectedSkillId = state.currentProject.skill_id || null;
+        state.selectedSkillInfo = null;
+        if (state.selectedSkillId && state.htmlSkills.length > 0) {
+            state.selectedSkillInfo = state.htmlSkills.find(s => s._id === state.selectedSkillId) || null;
+        }
+        updateTemplateButtonLabel();
+    } else if (!isExcel && !isOnlyOffice && !isWord) {
         // 템플릿 선택 복원
         state.selectedTemplateId = state.currentProject.template_id || null;
+        // Custom template 복원
+        state.customTemplateId = state.currentProject.custom_template_id || null;
+        state.customTemplateInfo = null;
+        if (state.customTemplateId) {
+            _loadCustomPptxInfo();
+        }
         // 템플릿 slide_size 복원
         const _tmpl = state.templates.find(t => t._id === state.selectedTemplateId);
         state._templateSlideSize = (_tmpl && _tmpl.slide_size) || '16:9';
@@ -1819,6 +1864,12 @@ function renderProjectWorkspace() {
         loadDocxTemplate();
     } else {
         state.docxTemplateId = null;
+    }
+
+    // HTML 리포트: 스킬 목록 및 기존 데이터 로드
+    if (isHtmlReport) {
+        _loadHtmlSkills();
+        _loadExistingHtmlReport();
     }
 }
 
@@ -1892,6 +1943,9 @@ async function executeProjectReset() {
         state.generatedExcel = null;
         state.onlyofficeDoc = null;
         state.generatedDocx = null;
+        state.generatedHtml = null;
+        state.customTemplateId = null;
+        state.customTemplateInfo = null;
         state.currentProject.status = 'draft';
         state.currentProject.template_id = null;
         state.selectedTemplateId = null;
@@ -2227,15 +2281,29 @@ async function showResourceContent(resourceId) {
         }
         viewer.html(html);
     } else if (content && content.trim()) {
+        let urlHeader = '';
+        if (resource.source_url) {
+            urlHeader = '<div style="margin-bottom:12px;padding:8px 12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;font-size:13px;">'
+                + '<span style="color:#64748b;margin-right:6px;">🔗 URL:</span>'
+                + '<a href="' + escapeHtml(resource.source_url) + '" target="_blank" rel="noopener" style="color:#0284c7;word-break:break-all;">' + escapeHtml(resource.source_url) + '</a>'
+                + '</div>';
+        }
         if (resource.resource_type === 'text') {
             // 사용자 직접 입력 텍스트는 그대로 표시
-            viewer.html('<pre style="white-space:pre-wrap;font-family:inherit;margin:0;">' + escapeHtml(content) + '</pre>');
+            viewer.html(urlHeader + '<pre style="white-space:pre-wrap;font-family:inherit;margin:0;">' + escapeHtml(content) + '</pre>');
         } else {
             // 파일/검색 결과는 마크다운 렌더링
-            viewer.html(simpleMarkdownToHtml(content));
+            viewer.html(urlHeader + simpleMarkdownToHtml(content));
         }
     } else {
-        viewer.html('<div class="empty-content">내용이 없습니다</div>');
+        let urlOnly = '';
+        if (resource.source_url) {
+            urlOnly = '<div style="margin-bottom:12px;padding:8px 12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;font-size:13px;">'
+                + '<span style="color:#64748b;margin-right:6px;">🔗 URL:</span>'
+                + '<a href="' + escapeHtml(resource.source_url) + '" target="_blank" rel="noopener" style="color:#0284c7;word-break:break-all;">' + escapeHtml(resource.source_url) + '</a>'
+                + '</div>';
+        }
+        viewer.html(urlOnly + '<div class="empty-content">내용이 없습니다</div>');
     }
 
     const modalCard = $('#resourceContentModal .modal-card');
@@ -2779,6 +2847,27 @@ async function loadTemplates() {
 }
 
 function updateTemplateButtonLabel() {
+    const projectType = state.currentProject ? state.currentProject.project_type : 'slide';
+
+    // HTML Report: show skill label
+    if (projectType === 'html_report') {
+        if (state.selectedSkillId && state.selectedSkillInfo) {
+            $('#templateSelectLabel').text(state.selectedSkillInfo.title);
+            $('#templateSelectBtn').addClass('has-value');
+        } else {
+            $('#templateSelectLabel').text('스킬 선택');
+            $('#templateSelectBtn').removeClass('has-value');
+        }
+        return;
+    }
+
+    // Custom PPTX template selected
+    if (state.customTemplateId && state.customTemplateInfo) {
+        $('#templateSelectLabel').text(state.customTemplateInfo.filename);
+        $('#templateSelectBtn').addClass('has-value');
+        return;
+    }
+
     if (state.selectedTemplateId) {
         const tmpl = state.templates.find(t => t._id === state.selectedTemplateId);
         if (tmpl) {
@@ -2792,8 +2881,41 @@ function updateTemplateButtonLabel() {
 }
 
 function openTemplatePickerModal() {
+    const projectType = state.currentProject ? state.currentProject.project_type : 'slide';
+
+    // HTML Report: show skill picker instead
+    if (projectType === 'html_report') {
+        _openSkillPickerModal();
+        return;
+    }
+
     const grid = $('#templatePickerGrid');
     grid.empty();
+
+    // Show/hide custom PPTX section based on project type (only for slide type)
+    const isSlideType = (projectType === 'slide' || projectType === 'onlyoffice_pptx');
+    if (isSlideType) {
+        $('#customPptxSection').show();
+        $('#templatePickerDivider').show();
+        // Restore custom PPTX state if exists
+        if (state.customTemplateId && state.customTemplateInfo) {
+            $('#customPptxDropzone').hide();
+            $('#customPptxCard').show();
+            $('#customPptxFilename').text(state.customTemplateInfo.filename);
+            $('#customPptxMeta').text(state.customTemplateInfo.slides_count + '개 슬라이드');
+        } else {
+            $('#customPptxDropzone').show();
+            $('#customPptxCard').hide();
+        }
+    } else {
+        $('#customPptxSection').hide();
+        $('#templatePickerDivider').hide();
+    }
+
+    // Hide skill grid, show template grid
+    $('#skillPickerGrid').hide();
+    $('#templatePickerGrid').show();
+    $('#templatePickerTitle').text('템플릿을 선택하세요');
 
     if (state.templates.length === 0) {
         grid.append('<div style="text-align:center;padding:40px;color:var(--text-muted);">등록된 템플릿이 없습니다</div>');
@@ -2802,7 +2924,7 @@ function openTemplatePickerModal() {
     }
 
     state.templates.forEach(tmpl => {
-        const isActive = state.selectedTemplateId === tmpl._id;
+        const isActive = state.selectedTemplateId === tmpl._id && !state.customTemplateId;
         const card = $(`
             <div class="template-picker-card ${isActive ? 'active' : ''}" onclick="selectTemplateFromPicker('${tmpl._id}')">
                 <div class="template-picker-thumb"></div>
@@ -2833,9 +2955,17 @@ function openTemplatePickerModal() {
     });
 
     $('#templatePickerModal').show();
+
+    // Setup drag & drop for custom PPTX
+    _initCustomPptxDragDrop();
 }
 
 function selectTemplateFromPicker(templateId) {
+    // Mutual exclusion: clear custom PPTX when admin template selected
+    if (state.customTemplateId) {
+        _clearCustomPptxState();
+    }
+
     state.selectedTemplateId = templateId;
     // 선택한 템플릿의 slide_size 저장
     const tmpl = state.templates.find(t => t._id === templateId);
@@ -2947,11 +3077,13 @@ async function generateImageSlides(templateId) {
 // ============ PPT 생성 ============
 async function generatePPT() {
     const templateId = state.selectedTemplateId;
+    const customTemplateId = state.customTemplateId;
     const instructions = $('#instructionsInput').val().trim();
     const lang = $('#langSelect').val();
     const slideCount = $('#slideCountSelect').val();
 
-    if (!templateId) { showToast(t('msgSelectTemplate'), 'error'); return; }
+    // Allow generation with either admin template or custom template
+    if (!templateId && !customTemplateId) { showToast(t('msgSelectTemplate'), 'error'); return; }
     const hasImageResources = state.resources.some(r => r.resource_type === 'image');
     const hasNonImageResources = state.resources.some(r => r.resource_type !== 'image');
     if (!instructions && !hasImageResources) { showToast(t('msgNeedInstructions'), 'error'); return; }
@@ -3025,10 +3157,11 @@ async function generatePPT() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 project_id: state.currentProject._id,
-                template_id: templateId,
+                template_id: templateId || '',
                 instructions: instructions,
                 lang: lang,
                 slide_count: slideCount,
+                custom_template_id: customTemplateId || '',
             }),
             signal: _abortController.signal,
         });
@@ -3361,6 +3494,10 @@ function _showGenerateOrRestartButton() {
         hasContent = !!state.generatedDocx;
         genLabel = t('generateWord');
         restartLabel = t('generateWord');
+    } else if (projectType === 'html_report') {
+        hasContent = !!(state.generatedHtml && state.generatedHtml.pages && state.generatedHtml.pages.length > 0);
+        genLabel = '리포트 생성';
+        restartLabel = '리포트 재생성';
     } else {
         hasContent = state.generatedSlides.length > 0;
         genLabel = t('generateBtn');
@@ -4581,13 +4718,17 @@ function renderSlideAtIndexEditable(index) {
                 div.css({ height: 'auto', minHeight: (obj.height * scaleY) + 'px', overflow: 'visible' });
             }
         } else if (obj.obj_type === 'table') {
-            const tableHtml = _createPreviewTableHTML(obj, scaleX, scaleY);
-            div.html(tableHtml);
+            const tableHtml = _createEditableTableHTML(obj, scaleX, scaleY);
+            const tableWrapper = $('<div>').addClass('table-wrapper').css({ width: '100%', height: '100%', overflow: 'hidden' }).html(tableHtml);
+            div.append(tableWrapper);
         } else if (obj.obj_type === 'chart') {
             const chartWrapper = $('<div>').css({ width: '100%', height: '100%' });
             div.append(chartWrapper);
-            canvas.append(div);
-            setTimeout(() => _renderPreviewChart(chartWrapper[0], obj), 50);
+            // Chart edit button
+            const chartEditBtn = $('<div>').addClass('chart-edit-overlay')
+                .html('<button class="chart-edit-btn" onclick="openChartDataEditor()">데이터 편집</button>');
+            div.append(chartEditBtn);
+            div._chartWrapper = chartWrapper;
         }
 
         // Resize handles + delete button
@@ -4604,6 +4745,11 @@ function renderSlideAtIndexEditable(index) {
                 // let button handler work
             } else if ($(e.target).hasClass('edit-text-content')) {
                 editSelectObject(objIdx);
+            } else if ($(e.target).closest('td').length && obj.obj_type === 'table') {
+                editSelectObject(objIdx);
+                // Don't start drag when clicking table cells
+            } else if ($(e.target).hasClass('chart-edit-btn')) {
+                editSelectObject(objIdx);
             } else {
                 editSelectObject(objIdx);
                 startEditDrag(e, objIdx);
@@ -4611,6 +4757,13 @@ function renderSlideAtIndexEditable(index) {
         });
 
         canvas.append(div);
+
+        // Post-append initialization for table and chart
+        if (obj.obj_type === 'table') {
+            _bindEditTableEvents(div, obj, objIdx, index);
+        } else if (obj.obj_type === 'chart' && div._chartWrapper) {
+            setTimeout(() => _renderPreviewChart(div._chartWrapper[0], obj), 50);
+        }
     });
 }
 
@@ -5778,6 +5931,22 @@ function collectEditedText() {
                 slide.items[itemIdx].detail = newText;
             } else if (!isNaN(objIdx) && slide.objects[objIdx]) {
                 slide.objects[objIdx].generated_text = newText;
+            }
+        } else if (objType === 'table') {
+            // Collect table cell edits from contenteditable cells
+            if (!isNaN(objIdx) && slide.objects[objIdx]) {
+                const tableObj = slide.objects[objIdx];
+                const ts = tableObj.table_style;
+                if (ts && ts.data) {
+                    el.find('td[contenteditable]').each(function () {
+                        const r = parseInt($(this).attr('data-row'));
+                        const c = parseInt($(this).attr('data-col'));
+                        const text = $(this).text();
+                        while (ts.data.length <= r) ts.data.push([]);
+                        while (ts.data[r].length <= c) ts.data[r].push('');
+                        ts.data[r][c] = text;
+                    });
+                }
             }
         }
     });
@@ -8029,6 +8198,8 @@ function handleGenerate() {
         } else {
             generateWord();
         }
+    } else if (type === 'html_report') {
+        generateHtmlReport();
     } else {
         generatePPT();
     }
@@ -9995,6 +10166,7 @@ function _getProjectTypeBadge(projectType) {
         'onlyoffice_xlsx': '<span class="rc-type-badge oo-xlsx">OO Excel</span>',
         'onlyoffice_docx': '<span class="rc-type-badge oo-docx">OO Word</span>',
         'word': '<span class="rc-type-badge word">Word</span>',
+        'html_report': '<span class="rc-type-badge html">HTML</span>',
     };
     return badges[projectType] || '<span class="rc-type-badge ppt">PPT</span>';
 }
@@ -10007,6 +10179,7 @@ function _getProjectTypeClass(projectType) {
         'onlyoffice_xlsx': 'ptype-excel',
         'word': 'ptype-word',
         'onlyoffice_docx': 'ptype-word',
+        'html_report': 'ptype-html',
     };
     return map[projectType] || 'ptype-ppt';
 }
@@ -10019,6 +10192,7 @@ function _getProjectTypeIcon(projectType) {
         'onlyoffice_xlsx': '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="2" width="12" height="12" rx="2"/><line x1="2" y1="6" x2="14" y2="6"/><line x1="2" y1="10" x2="14" y2="10"/><line x1="6" y1="2" x2="6" y2="14"/><line x1="10" y1="2" x2="10" y2="14"/></svg>',
         'word': '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="2" width="10" height="12" rx="2"/><path d="M6 5h4M6 8h4M6 11h2"/></svg>',
         'onlyoffice_docx': '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="2" width="10" height="12" rx="2"/><path d="M6 5h4M6 8h4M6 11h2"/></svg>',
+        'html_report': '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 1H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V5z"/><path d="M10 1v4h4"/><path d="M5 8h6M5 10.5h4"/></svg>',
     };
     return icons[projectType] || '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M7 7l3 2-3 2V7z"/></svg>';
 }
@@ -12157,4 +12331,1810 @@ function _renderPreviewChart(container, obj) {
     } catch (e) {
         $container.html('<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:#9ca3af;font-size:11px;">차트</div>');
     }
+}
+
+// =====================================================
+// TABLE EDITABLE RENDERING (Edit Mode)
+// =====================================================
+
+function _createEditableTableHTML(obj, scaleX, scaleY) {
+    const style = obj.table_style || {};
+    const rows = style.rows || 3;
+    const cols = style.cols || 3;
+    const data = style.data || [];
+    const headerRow = style.header_row !== false;
+    const bandedRows = style.banded_rows || false;
+    const headerBg = style.header_bg_color || '#4472C4';
+    const headerText = style.header_text_color || '#FFFFFF';
+    const borderColor = style.border_color || '#BFBFBF';
+    const fontSize = Math.max(8, (style.font_size || 11) * Math.min(scaleX, scaleY));
+    const cellStyles = style.cell_styles || {};
+    const mergedCells = style.merged_cells || [];
+
+    const mergedLookup = {};
+    mergedCells.forEach(m => {
+        for (let r = m.start_row; r <= m.end_row; r++) {
+            for (let c = m.start_col; c <= m.end_col; c++) {
+                if (r === m.start_row && c === m.start_col) {
+                    mergedLookup[`${r}_${c}`] = {
+                        rowspan: m.end_row - m.start_row + 1,
+                        colspan: m.end_col - m.start_col + 1
+                    };
+                } else {
+                    mergedLookup[`${r}_${c}`] = 'skip';
+                }
+            }
+        }
+    });
+
+    let html = `<table style="border-collapse:collapse;width:100%;height:100%;table-layout:fixed;">`;
+    for (let r = 0; r < rows; r++) {
+        html += '<tr>';
+        for (let c = 0; c < cols; c++) {
+            const key = `${r}_${c}`;
+            const mergeInfo = mergedLookup[key];
+            if (mergeInfo === 'skip') continue;
+
+            const cellText = (r < data.length && c < data[r].length) ? data[r][c] : '';
+            const cs = cellStyles[key] || {};
+
+            let bgColor = cs.bg_color || '';
+            let textColor = cs.text_color || '#000000';
+            let bold = cs.bold || false;
+            let textAlign = cs.text_align || 'left';
+
+            if (headerRow && r === 0) {
+                bgColor = bgColor || headerBg;
+                textColor = cs.text_color || headerText;
+                bold = cs.bold !== false;
+            } else if (bandedRows && r % 2 === 0 && (!headerRow || r > 0)) {
+                bgColor = bgColor || '#D9E2F3';
+            }
+
+            let styles = `border:1px solid ${borderColor};padding:2px 4px;font-size:${fontSize}px;`;
+            styles += `text-align:${textAlign};overflow:hidden;outline:none;min-width:20px;`;
+            if (bgColor) styles += `background:${bgColor};`;
+            if (textColor) styles += `color:${textColor};`;
+            if (bold) styles += `font-weight:bold;`;
+
+            let attrs = `contenteditable="true" data-row="${r}" data-col="${c}"`;
+            if (mergeInfo && typeof mergeInfo === 'object') {
+                attrs += ` rowspan="${mergeInfo.rowspan}" colspan="${mergeInfo.colspan}"`;
+            }
+
+            html += `<td ${attrs} style="${styles}">${cellText}</td>`;
+        }
+        html += '</tr>';
+    }
+    html += '</table>';
+    return html;
+}
+
+// =====================================================
+// TABLE EDIT EVENTS & CONTEXT MENU (User Edit Mode)
+// =====================================================
+
+let _editTableCtxState = { objIdx: -1, row: -1, col: -1, selectedCells: [], slideIndex: -1 };
+
+function _bindEditTableEvents(el, obj, objIdx, slideIndex) {
+    const tableEl = el.find('table');
+    let isSelecting = false;
+    let startCell = null;
+
+    // Cell editing -> sync to data
+    tableEl.find('td').on('blur', function () {
+        const r = parseInt($(this).attr('data-row'));
+        const c = parseInt($(this).attr('data-col'));
+        const text = $(this).text();
+        const ts = obj.table_style;
+        if (!ts.data) ts.data = [];
+        while (ts.data.length <= r) ts.data.push([]);
+        while (ts.data[r].length <= c) ts.data[r].push('');
+        ts.data[r][c] = text;
+        markSlideDirty(slideIndex);
+    });
+
+    // Cell click -> prevent drag
+    tableEl.find('td').on('mousedown', function (e) {
+        e.stopPropagation();
+        editSelectObject(objIdx);
+        if (e.button === 2) return; // right click
+
+        tableEl.find('.cell-selected').removeClass('cell-selected');
+        isSelecting = true;
+        startCell = { row: parseInt($(this).attr('data-row')), col: parseInt($(this).attr('data-col')) };
+        $(this).addClass('cell-selected');
+    });
+
+    tableEl.find('td').on('mouseover', function () {
+        if (!isSelecting) return;
+        const endRow = parseInt($(this).attr('data-row'));
+        const endCol = parseInt($(this).attr('data-col'));
+        tableEl.find('.cell-selected').removeClass('cell-selected');
+        const minR = Math.min(startCell.row, endRow);
+        const maxR = Math.max(startCell.row, endRow);
+        const minC = Math.min(startCell.col, endCol);
+        const maxC = Math.max(startCell.col, endCol);
+        tableEl.find('td').each(function () {
+            const r = parseInt($(this).attr('data-row'));
+            const c = parseInt($(this).attr('data-col'));
+            if (r >= minR && r <= maxR && c >= minC && c <= maxC) {
+                $(this).addClass('cell-selected');
+            }
+        });
+    });
+
+    $(document).on('mouseup.tableeditsel', function () {
+        isSelecting = false;
+    });
+
+    // Right-click context menu
+    tableEl.on('contextmenu', function (e) {
+        if (!state.editMode) return;
+        _showEditTableContextMenu(e, objIdx, slideIndex);
+        return false;
+    });
+}
+
+function _showEditTableContextMenu(e, objIdx, slideIndex) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const cell = $(e.target).closest('td');
+    if (!cell.length) return;
+
+    _editTableCtxState.objIdx = objIdx;
+    _editTableCtxState.slideIndex = slideIndex;
+    _editTableCtxState.row = parseInt(cell.attr('data-row'));
+    _editTableCtxState.col = parseInt(cell.attr('data-col'));
+
+    const tableEl = cell.closest('table');
+    _editTableCtxState.selectedCells = [];
+    tableEl.find('.cell-selected').each(function () {
+        _editTableCtxState.selectedCells.push({
+            row: parseInt($(this).attr('data-row')),
+            col: parseInt($(this).attr('data-col'))
+        });
+    });
+    if (_editTableCtxState.selectedCells.length === 0) {
+        _editTableCtxState.selectedCells = [{ row: _editTableCtxState.row, col: _editTableCtxState.col }];
+    }
+
+    const menu = $('#tableContextMenu');
+    menu.css({ left: e.clientX + 'px', top: e.clientY + 'px', display: 'block' });
+
+    setTimeout(() => {
+        const rect = menu[0].getBoundingClientRect();
+        if (rect.right > window.innerWidth) menu.css('left', (e.clientX - rect.width) + 'px');
+        if (rect.bottom > window.innerHeight) menu.css('top', (e.clientY - rect.height) + 'px');
+    }, 0);
+}
+
+$(document).on('click', function (e) {
+    if (!$(e.target).closest('#tableContextMenu').length) {
+        $('#tableContextMenu').hide();
+    }
+});
+
+function tableCtxAction(action, value) {
+    const slide = state.generatedSlides[_editTableCtxState.slideIndex];
+    if (!slide) return;
+    const obj = slide.objects[_editTableCtxState.objIdx];
+    if (!obj || obj.obj_type !== 'table') return;
+
+    const ts = obj.table_style;
+    const r = _editTableCtxState.row;
+    const c = _editTableCtxState.col;
+
+    switch (action) {
+        case 'insertRowAbove':
+            ts.rows++;
+            ts.data.splice(r, 0, new Array(ts.cols).fill(''));
+            _editShiftCellStyles(ts, 'row', r, 1);
+            break;
+        case 'insertRowBelow':
+            ts.rows++;
+            ts.data.splice(r + 1, 0, new Array(ts.cols).fill(''));
+            _editShiftCellStyles(ts, 'row', r + 1, 1);
+            break;
+        case 'insertColLeft':
+            ts.cols++;
+            ts.data.forEach(row => row.splice(c, 0, ''));
+            _editShiftCellStyles(ts, 'col', c, 1);
+            break;
+        case 'insertColRight':
+            ts.cols++;
+            ts.data.forEach(row => row.splice(c + 1, 0, ''));
+            _editShiftCellStyles(ts, 'col', c + 1, 1);
+            break;
+        case 'deleteRow':
+            if (ts.rows <= 1) return;
+            ts.rows--;
+            ts.data.splice(r, 1);
+            _editShiftCellStyles(ts, 'row', r, -1);
+            break;
+        case 'deleteCol':
+            if (ts.cols <= 1) return;
+            ts.cols--;
+            ts.data.forEach(row => row.splice(c, 1));
+            _editShiftCellStyles(ts, 'col', c, -1);
+            break;
+        case 'mergeCells': {
+            const cells = _editTableCtxState.selectedCells;
+            if (cells.length < 2) { showToast('2개 이상의 셀을 선택하세요', 'error'); return; }
+            const minR = Math.min(...cells.map(c => c.row));
+            const maxR = Math.max(...cells.map(c => c.row));
+            const minC = Math.min(...cells.map(c => c.col));
+            const maxC = Math.max(...cells.map(c => c.col));
+            ts.merged_cells = ts.merged_cells || [];
+            ts.merged_cells.push({ start_row: minR, start_col: minC, end_row: maxR, end_col: maxC });
+            break;
+        }
+        case 'splitCell':
+            ts.merged_cells = (ts.merged_cells || []).filter(m =>
+                !(r >= m.start_row && r <= m.end_row && c >= m.start_col && c <= m.end_col)
+            );
+            break;
+        case 'cellBgColor':
+            _editTableCtxState.selectedCells.forEach(sc => {
+                const key = `${sc.row}_${sc.col}`;
+                ts.cell_styles = ts.cell_styles || {};
+                ts.cell_styles[key] = ts.cell_styles[key] || {};
+                ts.cell_styles[key].bg_color = value;
+            });
+            break;
+        case 'cellTextColor':
+            _editTableCtxState.selectedCells.forEach(sc => {
+                const key = `${sc.row}_${sc.col}`;
+                ts.cell_styles = ts.cell_styles || {};
+                ts.cell_styles[key] = ts.cell_styles[key] || {};
+                ts.cell_styles[key].text_color = value;
+            });
+            break;
+        case 'alignLeft':
+        case 'alignCenter':
+        case 'alignRight': {
+            const align = action.replace('align', '').toLowerCase();
+            _editTableCtxState.selectedCells.forEach(sc => {
+                const key = `${sc.row}_${sc.col}`;
+                ts.cell_styles = ts.cell_styles || {};
+                ts.cell_styles[key] = ts.cell_styles[key] || {};
+                ts.cell_styles[key].text_align = align;
+            });
+            break;
+        }
+        case 'toggleBold':
+            _editTableCtxState.selectedCells.forEach(sc => {
+                const key = `${sc.row}_${sc.col}`;
+                ts.cell_styles = ts.cell_styles || {};
+                ts.cell_styles[key] = ts.cell_styles[key] || {};
+                ts.cell_styles[key].bold = !ts.cell_styles[key].bold;
+            });
+            break;
+    }
+
+    // Re-render table
+    const scale = editGetScale();
+    const el = $(`#previewCanvas .preview-obj[data-obj-idx="${_editTableCtxState.objIdx}"]`);
+    el.find('.table-wrapper').html(_createEditableTableHTML(obj, scale.x, scale.y));
+    _bindEditTableEvents(el, obj, _editTableCtxState.objIdx, _editTableCtxState.slideIndex);
+    markSlideDirty(_editTableCtxState.slideIndex);
+    $('#tableContextMenu').hide();
+}
+
+function _editShiftCellStyles(ts, dimension, index, delta) {
+    const newStyles = {};
+    for (const [key, val] of Object.entries(ts.cell_styles || {})) {
+        const [r, c] = key.split('_').map(Number);
+        let nr = r, nc = c;
+        if (dimension === 'row') {
+            if (delta > 0 && r >= index) nr = r + delta;
+            else if (delta < 0 && r === index) continue;
+            else if (delta < 0 && r > index) nr = r + delta;
+        } else {
+            if (delta > 0 && c >= index) nc = c + delta;
+            else if (delta < 0 && c === index) continue;
+            else if (delta < 0 && c > index) nc = c + delta;
+        }
+        newStyles[`${nr}_${nc}`] = val;
+    }
+    ts.cell_styles = newStyles;
+
+    ts.merged_cells = (ts.merged_cells || []).map(m => {
+        const nm = { ...m };
+        if (dimension === 'row') {
+            if (delta > 0) {
+                if (nm.start_row >= index) nm.start_row += delta;
+                if (nm.end_row >= index) nm.end_row += delta;
+            } else {
+                if (nm.start_row > index) nm.start_row += delta;
+                if (nm.end_row > index) nm.end_row += delta;
+            }
+        } else {
+            if (delta > 0) {
+                if (nm.start_col >= index) nm.start_col += delta;
+                if (nm.end_col >= index) nm.end_col += delta;
+            } else {
+                if (nm.start_col > index) nm.start_col += delta;
+                if (nm.end_col > index) nm.end_col += delta;
+            }
+        }
+        return nm;
+    }).filter(m => m.start_row >= 0 && m.start_col >= 0 && m.end_row < ts.rows && m.end_col < ts.cols);
+}
+
+// =====================================================
+// CHART DATA EDITOR (User Edit Mode)
+// =====================================================
+
+let _editChartState = { objIdx: -1, slideIndex: -1 };
+
+function openChartDataEditor() {
+    if (!state.editSelectedObj || state.editSelectedObj.obj.obj_type !== 'chart') return;
+    const obj = state.editSelectedObj.obj;
+    const cs = obj.chart_style || {};
+    const cd = cs.chart_data || {};
+
+    _editChartState.objIdx = state.editSelectedObj.objIdx;
+    _editChartState.slideIndex = state.currentSlideIndex;
+
+    // Set chart type
+    $('#chartTypeSelect').val(cs.chart_type || 'bar');
+
+    // Set labels
+    $('#chartLabelsInput').val((cd.labels || []).join(', '));
+
+    // Set datasets
+    const container = $('#chartDatasetsContainer');
+    container.empty();
+    (cd.datasets || []).forEach((ds, i) => {
+        container.append(_chartDatasetRowHTML(i, ds.label || 'Series ' + (i + 1), (ds.data || []).join(', ')));
+    });
+
+    $('#chartDataModal').show();
+}
+
+function _chartDatasetRowHTML(idx, label, dataStr) {
+    return `
+        <div class="dataset-row" data-idx="${idx}" style="border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin-top:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                <input type="text" class="ds-label" value="${label}" placeholder="시리즈 이름" style="width:60%;padding:4px 6px;border:1px solid #d1d5db;border-radius:4px;">
+                <button class="btn btn-sm" onclick="$(this).closest('.dataset-row').remove()" style="padding:2px 8px;color:#ef4444;border-color:#ef4444;">삭제</button>
+            </div>
+            <input type="text" class="ds-data" value="${dataStr}" placeholder="값 (쉼표 구분)" style="width:100%;padding:4px 6px;border:1px solid #d1d5db;border-radius:4px;">
+        </div>
+    `;
+}
+
+function closeChartDataEditor() {
+    $('#chartDataModal').hide();
+}
+
+function addChartDataset() {
+    const container = $('#chartDatasetsContainer');
+    const idx = container.children().length;
+    container.append(_chartDatasetRowHTML(idx, '시리즈 ' + (idx + 1), ''));
+}
+
+function applyChartData() {
+    const slide = state.generatedSlides[_editChartState.slideIndex];
+    if (!slide) return;
+    const obj = slide.objects[_editChartState.objIdx];
+    if (!obj || obj.obj_type !== 'chart') return;
+
+    const chartType = $('#chartTypeSelect').val();
+    const labels = $('#chartLabelsInput').val().split(',').map(s => s.trim()).filter(Boolean);
+    const datasets = [];
+    const colors = obj.chart_style.color_scheme || ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47'];
+
+    $('#chartDatasetsContainer .dataset-row').each(function (i) {
+        const label = $(this).find('.ds-label').val() || 'Series ' + (i + 1);
+        const data = $(this).find('.ds-data').val().split(',').map(s => parseFloat(s.trim()) || 0);
+        datasets.push({
+            label: label,
+            data: data,
+            backgroundColor: colors[i % colors.length],
+        });
+    });
+
+    obj.chart_style.chart_type = chartType;
+    obj.chart_style.chart_data = { labels, datasets };
+
+    // Re-render chart
+    const el = $(`#previewCanvas .preview-obj[data-obj-idx="${_editChartState.objIdx}"]`);
+    const chartWrapper = el.children('div').not('.edit-resize-handle, .chart-edit-overlay, .edit-move-hint').first();
+    if (chartWrapper.length) {
+        _renderPreviewChart(chartWrapper[0], obj);
+    }
+
+    markSlideDirty(_editChartState.slideIndex);
+    closeChartDataEditor();
+    showToast('차트 데이터가 적용되었습니다', 'success');
+}
+
+// =====================================================
+// Feature 2: Custom PPTX Template Upload
+// =====================================================
+
+function _initCustomPptxDragDrop() {
+    const dropzone = document.getElementById('customPptxDropzone');
+    if (!dropzone) return;
+
+    // Remove old listeners by cloning
+    const newDropzone = dropzone.cloneNode(true);
+    newDropzone.onclick = function() { document.getElementById('customPptxFileInput').click(); };
+    dropzone.parentNode.replaceChild(newDropzone, dropzone);
+
+    newDropzone.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.classList.add('drag-over');
+    });
+
+    newDropzone.addEventListener('dragleave', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.classList.remove('drag-over');
+    });
+
+    newDropzone.addEventListener('drop', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.classList.remove('drag-over');
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            const file = files[0];
+            if (file.name.toLowerCase().endsWith('.pptx')) {
+                uploadCustomPptx(file);
+            } else {
+                showToast('PPTX 파일만 업로드 가능합니다', 'error');
+            }
+        }
+    });
+}
+
+function handleCustomPptxUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.pptx')) {
+        showToast('PPTX 파일만 업로드 가능합니다', 'error');
+        return;
+    }
+    uploadCustomPptx(file);
+    // Reset input so same file can be re-uploaded
+    event.target.value = '';
+}
+
+async function uploadCustomPptx(file) {
+    if (!state.currentProject) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('project_id', state.currentProject._id);
+
+    try {
+        showToast('PPTX 업로드 중...', 'info');
+
+        const response = await fetch(`/${state.jwtToken}/api/custom-templates/upload`, {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || '업로드 실패');
+        }
+
+        const data = await response.json();
+
+        // Mutual exclusion: clear admin template
+        state.selectedTemplateId = null;
+
+        // Set custom template state
+        state.customTemplateId = data.custom_template_id;
+        state.customTemplateInfo = {
+            filename: data.filename,
+            slides_count: data.slides_count,
+            slide_size: data.slide_size,
+        };
+
+        // Update UI in modal
+        $('#customPptxDropzone').hide();
+        $('#customPptxCard').show();
+        $('#customPptxFilename').text(data.filename);
+        $('#customPptxMeta').text(data.slides_count + '개 슬라이드');
+
+        // Remove active state from admin template cards
+        $('.template-picker-card').removeClass('active');
+
+        updateTemplateButtonLabel();
+        showToast('PPTX 템플릿이 업로드되었습니다', 'success');
+
+        // Close modal after short delay
+        setTimeout(() => closeModal('templatePickerModal'), 500);
+    } catch (e) {
+        console.error('[CustomPPTX] Upload failed:', e);
+        showToast(e.message || 'PPTX 업로드 실패', 'error');
+    }
+}
+
+async function removeCustomPptx() {
+    if (!state.currentProject || !state.customTemplateId) return;
+
+    try {
+        await fetch(`/${state.jwtToken}/api/custom-templates/${state.currentProject._id}`, {
+            method: 'DELETE',
+        });
+    } catch (e) {
+        console.error('[CustomPPTX] Delete failed:', e);
+    }
+
+    _clearCustomPptxState();
+    updateTemplateButtonLabel();
+
+    // Reset UI in modal
+    $('#customPptxDropzone').show();
+    $('#customPptxCard').hide();
+
+    showToast('커스텀 템플릿이 삭제되었습니다', 'info');
+}
+
+function _clearCustomPptxState() {
+    state.customTemplateId = null;
+    state.customTemplateInfo = null;
+}
+
+async function _loadCustomPptxInfo() {
+    if (!state.currentProject || !state.customTemplateId) return;
+    try {
+        const res = await apiGet('/api/custom-templates/' + state.currentProject._id);
+        const tmpl = res.custom_template;
+        if (tmpl) {
+            state.customTemplateInfo = {
+                filename: tmpl.original_filename || tmpl.filename || '',
+                slides_count: tmpl.total_slides || tmpl.slides_count || 0,
+                slide_size: tmpl.slide_size || '16:9',
+            };
+            updateTemplateButtonLabel();
+        }
+    } catch (e) {
+        // Custom template may no longer exist
+        state.customTemplateId = null;
+        state.customTemplateInfo = null;
+    }
+}
+
+// =====================================================
+// Feature 3: HTML Report
+// =====================================================
+
+function initHtmlReportWorkspace() {
+    // Reset panels
+    $('#htmlOutlineList').empty();
+    $('#htmlPagePreview').hide();
+    $('#htmlStreamingPreview').hide();
+    $('#htmlReportEmpty').show();
+    $('#htmlProgressOverlay').hide();
+    $('#htmlTextPanelList').empty();
+    $('#htmlReportPageCount').text('');
+    $('#btnHtmlPresentation').hide();
+    $('#btnShareHtml').hide();
+    $('#btnDownloadHtml').hide();
+    // Reset tabs - show outline tab by default
+    _switchHtmlLeftTab('outline');
+    // Reset state flags
+    state._htmlOutlineReceived = false;
+    state._htmlOutlineData = null;
+    state._htmlPageDeltaBuffer = '';
+    state._htmlPageDeltaIndex = -1;
+    state._htmlCompletedPages = {};
+}
+
+async function _loadHtmlSkills() {
+    try {
+        const res = await apiGet('/api/html-skills');
+        state.htmlSkills = res.skills || [];
+        // Restore skill info if needed
+        if (state.selectedSkillId && !state.selectedSkillInfo) {
+            state.selectedSkillInfo = state.htmlSkills.find(s => s._id === state.selectedSkillId) || null;
+            updateTemplateButtonLabel();
+        }
+    } catch (e) {
+        console.error('[HTML] Failed to load skills:', e);
+        state.htmlSkills = [];
+    }
+}
+
+async function _loadExistingHtmlReport() {
+    if (!state.currentProject) return;
+    try {
+        const res = await fetch(`/${state.jwtToken}/api/generate/${state.currentProject._id}/html`);
+        if (res.ok) {
+            const resp = await res.json();
+            // API는 {"html": doc} 형태로 반환
+            const data = resp.html || resp;
+            if (data && data.pages && data.pages.length > 0) {
+                state.generatedHtml = data;
+                if (data.common_css) {
+                    state._htmlCommonCss = data.common_css;
+                }
+                if (data.meta && data.meta.title) {
+                    $('#htmlReportTitle').text(data.meta.title);
+                }
+                // 페이지 수 표시
+                $('#htmlReportPageCount').text(data.pages.length + '페이지');
+                // Render using new 3-column layout
+                renderHtmlPages(data.pages);
+                $('#btnHtmlPresentation').show();
+                $('#btnShareHtml').show();
+                $('#btnDownloadHtml').show();
+                _showGenerateOrRestartButton();
+            }
+        }
+    } catch (e) {
+        // No existing data - normal for new projects
+    }
+}
+
+function _openSkillPickerModal() {
+    const grid = $('#skillPickerGrid');
+    grid.empty();
+
+    // Hide template-specific UI
+    $('#customPptxSection').hide();
+    $('#templatePickerDivider').hide();
+    $('#templatePickerGrid').hide();
+    $('#skillPickerGrid').show();
+    $('#templatePickerTitle').text('스킬을 선택하세요');
+
+    if (state.htmlSkills.length === 0) {
+        grid.append('<div style="text-align:center;padding:40px;color:var(--text-tertiary);">등록된 스킬이 없습니다</div>');
+        $('#templatePickerModal').show();
+        return;
+    }
+
+    state.htmlSkills.forEach(skill => {
+        const isActive = state.selectedSkillId === skill._id;
+        const card = $(`
+            <div class="skill-picker-card ${isActive ? 'active' : ''}" onclick="selectSkillFromPicker('${skill._id}')">
+                <div class="skill-picker-card-title">${escapeHtml(skill.title)}</div>
+                <div class="skill-picker-card-desc">${escapeHtml(skill.description || '')}</div>
+            </div>
+        `);
+        grid.append(card);
+    });
+
+    $('#templatePickerModal').show();
+}
+
+function selectSkillFromPicker(skillId) {
+    state.selectedSkillId = skillId;
+    state.selectedSkillInfo = state.htmlSkills.find(s => s._id === skillId) || null;
+    updateTemplateButtonLabel();
+    closeModal('templatePickerModal');
+
+    // Save skill_id to project
+    if (state.currentProject && state.currentProject._id) {
+        state.currentProject.skill_id = skillId;
+        apiPut('/api/projects/' + state.currentProject._id, { skill_id: skillId }).catch(() => {});
+    }
+}
+
+// ---- HTML Report Progress helpers ----
+function _showHtmlProgress(msg, detail) {
+    $('#htmlProgressOverlay').show();
+    $('#htmlProgressMsg').text(msg);
+    $('#htmlProgressDetail').text(detail || '');
+}
+
+function _hideHtmlProgress() {
+    $('#htmlProgressOverlay').hide();
+    $('#htmlProgressBar').css('width', '0%');
+}
+
+// ---- HTML Left Panel Tab Switching ----
+function _switchHtmlLeftTab(tabName) {
+    $('.html-left-tab').removeClass('active');
+    $(`.html-left-tab[data-tab="${tabName}"]`).addClass('active');
+    $('.html-left-tab-content').removeClass('active').hide();
+    if (tabName === 'outline') {
+        $('#htmlTabOutline').addClass('active').show();
+    } else {
+        $('#htmlTabPages').addClass('active').show();
+    }
+}
+
+// ---- HTML Report Streaming Outline (incremental parsing) ----
+let _outlineDeltaBuffer = '';
+let _outlineParsedCount = 0;
+let _outlinePhase = false;
+let _outlineDeltaTimer = null;
+
+function _tryParseOutlinePages(buffer) {
+    const pagesIdx = buffer.indexOf('"pages"');
+    if (pagesIdx === -1) return [];
+    const bracketIdx = buffer.indexOf('[', pagesIdx);
+    if (bracketIdx === -1) return [];
+    const pages = [];
+    let i = bracketIdx + 1;
+    while (i < buffer.length) {
+        while (i < buffer.length && /[\s,]/.test(buffer[i])) i++;
+        if (i >= buffer.length || buffer[i] === ']') break;
+        if (buffer[i] !== '{') break;
+        let depth = 0, start = i, inStr = false, esc = false;
+        for (; i < buffer.length; i++) {
+            if (esc) { esc = false; continue; }
+            if (buffer[i] === '\\' && inStr) { esc = true; continue; }
+            if (buffer[i] === '"') { inStr = !inStr; continue; }
+            if (inStr) continue;
+            if (buffer[i] === '{') depth++;
+            if (buffer[i] === '}') { depth--; if (depth === 0) { i++; break; } }
+        }
+        if (depth === 0) {
+            try {
+                pages.push(JSON.parse(buffer.substring(start, i)));
+            } catch (e) { break; }
+        } else {
+            break;
+        }
+    }
+    return pages;
+}
+
+function _processOutlineDelta(text) {
+    _outlineDeltaBuffer += text;
+    if (_outlineDeltaTimer) return;
+    _outlineDeltaTimer = setTimeout(() => {
+        _outlineDeltaTimer = null;
+        const pages = _tryParseOutlinePages(_outlineDeltaBuffer);
+        while (_outlineParsedCount < pages.length) {
+            _renderIncrementalOutlineItem(pages[_outlineParsedCount], _outlineParsedCount);
+            _outlineParsedCount++;
+        }
+    }, 100);
+}
+
+function _renderIncrementalOutlineItem(page, idx) {
+    const list = $('#htmlOutlineList');
+    const keyPoints = (page.key_points || []).slice(0, 3).map(kp => escapeHtml(kp)).join(' / ');
+    const item = $(`
+        <div class="html-outline-item streaming-in" data-page-idx="${idx}">
+            <div class="outline-page-num">PAGE ${idx + 1}</div>
+            <div class="outline-page-title">${escapeHtml(page.title || 'Page ' + (idx + 1))}</div>
+            <div class="outline-page-summary">${escapeHtml(page.summary || '')}</div>
+            ${keyPoints ? '<div class="outline-page-summary" style="margin-top:2px;font-style:italic;">' + keyPoints + '</div>' : ''}
+            <div class="outline-status pending">
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><circle cx="5" cy="5" r="3"/></svg>
+                대기 중
+            </div>
+        </div>
+    `);
+    const loader = $('#outlineStreamingLoader');
+    if (loader.length) {
+        loader.before(item);
+    } else {
+        list.append(item);
+    }
+    setTimeout(() => item.removeClass('streaming-in').addClass('streaming-appear'), 30);
+    const itemEl = item[0];
+    if (itemEl) itemEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// ---- HTML content responsive cleaning ----
+function _cleanHtmlForResponsive(html) {
+    if (!html) return html;
+    // Remove fixed width/height on top-level div (e.g. width:960px;height:540px)
+    return html.replace(
+        /^(\s*<div\s+style="[^"]*?)width\s*:\s*\d+px\s*;?/i,
+        '$1width:100%;'
+    ).replace(
+        /^(\s*<div\s+style="[^"]*?)height\s*:\s*\d+px\s*;?/i,
+        '$1min-height:auto;'
+    );
+}
+
+/**
+ * Shadow DOM 기반 HTML 보고서 렌더링 유틸리티
+ * - 공통 CSS를 적용하고, Shadow DOM으로 스타일 격리
+ * - iframe 없이 빠르게 렌더링
+ *
+ * @param {HTMLElement} container - 콘텐츠를 삽입할 컨테이너
+ * @param {string} htmlContent - 렌더링할 HTML (공통 CSS 미포함)
+ * @param {object} options - { overflow, padding }
+ */
+function _renderHtmlWithShadow(container, htmlContent, options = {}) {
+    const {
+        overflow = 'hidden',
+        padding = '',
+    } = options;
+
+    // 기존 shadow root이 있으면 컨테이너 교체
+    if (container.shadowRoot) {
+        const newContainer = container.cloneNode(false);
+        if (container.parentElement) {
+            container.parentElement.replaceChild(newContainer, container);
+        }
+        container = newContainer;
+    }
+
+    const shadow = container.attachShadow({ mode: 'open' });
+    const commonCss = state._htmlCommonCss || '';
+    const cleanedHtml = _cleanHtmlForResponsive(htmlContent);
+
+    const baseStyle = `
+        :host { display: block; width: 100%; overflow: ${overflow}; }
+        * { box-sizing: border-box; }
+        img, svg { max-width: 100%; height: auto; }
+        table { max-width: 100%; border-collapse: collapse; }
+    `;
+    const paddingStyle = padding ? `div.rpt-shadow-wrap { padding: ${padding}; }` : '';
+
+    shadow.innerHTML =
+        '<style>' + baseStyle + paddingStyle + '</style>' +
+        (commonCss ? '<style>' + commonCss + '</style>' : '') +
+        '<div class="rpt-shadow-wrap">' + cleanedHtml + '</div>';
+
+    return container;
+}
+
+/**
+ * iframe srcdoc 기반 HTML 렌더링 유틸리티
+ * - CSS/JS 완전 격리: position:fixed, 전역 스타일 누출 차단
+ * - 자동 높이 조절: iframe 내 콘텐츠에 맞춰 높이 자동 조정
+ *
+ * @param {HTMLElement} container - iframe을 삽입할 컨테이너
+ * @param {string} htmlContent - 렌더링할 HTML
+ * @param {object} options - { autoHeight, padding, maxHeight, onLoad }
+ * @returns {HTMLIFrameElement}
+ */
+function _createIsolatedHtmlFrame(container, htmlContent, options = {}) {
+    const {
+        autoHeight = true,
+        padding = '24px',
+        maxHeight = '',
+        width = '100%',
+        height = '',
+        overflow = 'hidden',
+        onLoad = null,
+    } = options;
+
+    const iframe = document.createElement('iframe');
+    iframe.style.width = width;
+    iframe.style.height = height || (autoHeight ? '200px' : '100%');
+    iframe.style.border = 'none';
+    iframe.style.display = 'block';
+    if (maxHeight) iframe.style.maxHeight = maxHeight;
+    iframe.style.overflow = overflow;
+    iframe.setAttribute('sandbox', 'allow-same-origin');
+    iframe.setAttribute('loading', 'lazy');
+
+    const cleanedHtml = _cleanHtmlForResponsive(htmlContent);
+
+    // 자동 높이 조절 스크립트 (sandbox allow-same-origin에서 동작)
+    const autoHeightScript = autoHeight ? `
+        <script>
+            function _notifyHeight() {
+                try {
+                    var h = document.documentElement.scrollHeight || document.body.scrollHeight;
+                    if (h > 0 && window.frameElement) {
+                        window.frameElement.style.height = h + 'px';
+                    }
+                } catch(e) {}
+            }
+            window.addEventListener('load', function() { setTimeout(_notifyHeight, 50); setTimeout(_notifyHeight, 300); });
+            new MutationObserver(_notifyHeight).observe(document.body, { childList: true, subtree: true });
+        <\/script>
+    ` : '';
+
+    const srcdoc = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+    html, body { margin: 0; padding: 0; overflow: ${overflow}; background: transparent; }
+    body { padding: ${padding}; box-sizing: border-box; font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', Arial, sans-serif; }
+    body > div { width: 100% !important; max-width: 100% !important; height: auto !important; min-height: auto !important; box-sizing: border-box; }
+    img, svg { max-width: 100%; height: auto; }
+    table { max-width: 100%; border-collapse: collapse; }
+    * { box-sizing: border-box; }
+</style>
+</head><body>${cleanedHtml}${autoHeightScript}</body></html>`;
+
+    iframe.srcdoc = srcdoc;
+
+    if (onLoad) {
+        iframe.addEventListener('load', onLoad);
+    }
+
+    container.appendChild(iframe);
+    return iframe;
+}
+
+// ---- HTML Report Streaming Preview (outline phase) ----
+let _htmlStreamBuffer = '';
+let _htmlStreamRenderTimer = null;
+
+function _showHtmlStreamingPreview() {
+    _htmlStreamBuffer = '';
+    $('#htmlReportEmpty').hide();
+    $('#htmlPagePreview').hide();
+    $('#htmlStreamingPreview').show().scrollTop(0);
+    $('#htmlStreamingContent').html('');
+}
+
+function _hideHtmlStreamingPreview() {
+    if (_htmlStreamRenderTimer) {
+        clearTimeout(_htmlStreamRenderTimer);
+        _htmlStreamRenderTimer = null;
+    }
+    $('#htmlStreamingPreview').hide();
+}
+
+function _appendHtmlStreamDelta(text) {
+    _htmlStreamBuffer += text;
+    // Throttled render: 80ms
+    if (!_htmlStreamRenderTimer) {
+        _htmlStreamRenderTimer = setTimeout(() => {
+            _htmlStreamRenderTimer = null;
+            _renderHtmlStreamingContent();
+        }, 80);
+    }
+}
+
+function _renderHtmlStreamingContent() {
+    const container = document.getElementById('htmlStreamingContent');
+    if (!container) return;
+    const escaped = escapeHtml(_htmlStreamBuffer);
+    container.innerHTML = escaped + '<span class="html-typing-cursor"></span>';
+    const preview = document.getElementById('htmlStreamingPreview');
+    if (preview) {
+        preview.scrollTop = preview.scrollHeight;
+    }
+}
+
+// ---- HTML Report Outline Panel ----
+function _renderHtmlOutline(outlineData) {
+    const list = $('#htmlOutlineList');
+    list.empty();
+    const pages = outlineData.pages || [];
+
+    pages.forEach((page, idx) => {
+        const keyPoints = (page.key_points || []).slice(0, 3).map(kp => escapeHtml(kp)).join(' / ');
+        const item = $(`
+            <div class="html-outline-item" data-page-idx="${idx}" onclick="_selectHtmlPage(${idx})">
+                <div class="outline-page-num">PAGE ${idx + 1}</div>
+                <div class="outline-page-title">${escapeHtml(page.title || 'Page ' + (idx + 1))}</div>
+                <div class="outline-page-summary">${escapeHtml(page.summary || '')}</div>
+                ${keyPoints ? '<div class="outline-page-summary" style="margin-top:2px;font-style:italic;">' + keyPoints + '</div>' : ''}
+                <div class="outline-status pending">
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><circle cx="5" cy="5" r="3"/></svg>
+                    대기 중
+                </div>
+            </div>
+        `);
+        list.append(item);
+    });
+
+}
+
+function _setHtmlOutlineActive(index) {
+    $('.html-outline-item').removeClass('active generating');
+    const item = $(`.html-outline-item[data-page-idx="${index}"]`);
+    item.addClass('active generating');
+    item.find('.outline-status').attr('class', 'outline-status generating').html(
+        '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="5" r="3"/></svg> 생성 중...'
+    );
+    // Scroll into view
+    const listEl = document.getElementById('htmlOutlineList');
+    const itemEl = item[0];
+    if (listEl && itemEl) {
+        itemEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+}
+
+function _setHtmlOutlineCompleted(index) {
+    const item = $(`.html-outline-item[data-page-idx="${index}"]`);
+    item.removeClass('generating').addClass('completed');
+    item.find('.outline-status').attr('class', 'outline-status completed').html(
+        '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 5l2.5 2.5L8 3"/></svg> 완료'
+    );
+}
+
+// ---- HTML Report Page Preview (center panel) ----
+let _htmlPageDeltaRenderTimer = null;
+
+function _showHtmlPageGenerating(index, title) {
+    state._htmlPageDeltaBuffer = '';
+    state._htmlPageDeltaIndex = index;
+    $('#htmlReportEmpty').hide();
+    $('#htmlStreamingPreview').hide();
+    $('#htmlPagePreview').show();
+    $('#htmlPagePreviewHeader').html(
+        '<span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;background:#0d9488;color:#fff;font-size:11px;font-weight:700;flex-shrink:0;">' + (index + 1) + '</span> ' +
+        escapeHtml(title || 'Page ' + (index + 1))
+    );
+    $('#htmlPagePreviewBody').html(
+        '<div class="html-page-preview-card">' +
+        '<div class="html-page-generating">' +
+        '<div class="page-gen-spinner"></div>' +
+        '<div class="page-gen-title">' + escapeHtml(title || '') + '</div>' +
+        '<div class="page-gen-status">HTML 콘텐츠를 생성하고 있습니다...</div>' +
+        '</div>' +
+        '</div>'
+    );
+}
+
+function _appendHtmlPageDelta(text, index) {
+    if (index !== state._htmlPageDeltaIndex) {
+        state._htmlPageDeltaBuffer = '';
+        state._htmlPageDeltaIndex = index;
+    }
+    state._htmlPageDeltaBuffer += text;
+
+    // Throttled render: 200ms for performance
+    if (!_htmlPageDeltaRenderTimer) {
+        _htmlPageDeltaRenderTimer = setTimeout(() => {
+            _htmlPageDeltaRenderTimer = null;
+            _renderHtmlPageDelta();
+        }, 200);
+    }
+}
+
+function _renderHtmlPageDelta() {
+    const body = document.getElementById('htmlPagePreviewBody');
+    if (!body) return;
+
+    // Create or reuse the card
+    let card = body.querySelector('.html-page-preview-card');
+    if (!card) {
+        card = document.createElement('div');
+        card.className = 'html-page-preview-card';
+        body.innerHTML = '';
+        body.appendChild(card);
+    }
+
+    // Shadow DOM으로 공통 CSS 적용 + 실시간 렌더링 (커서는 콘텐츠 밖에 배치)
+    const htmlContent = state._htmlPageDeltaBuffer || '';
+
+    // Shadow root 재사용 (빠른 업데이트)
+    let shadowHost = card.querySelector('.html-shadow-host');
+    if (shadowHost && shadowHost.shadowRoot) {
+        const wrap = shadowHost.shadowRoot.querySelector('.rpt-shadow-wrap');
+        if (wrap) {
+            wrap.innerHTML = _cleanHtmlForResponsive(htmlContent);
+        }
+    } else {
+        // 최초 생성
+        card.innerHTML = '';
+        shadowHost = document.createElement('div');
+        shadowHost.className = 'html-shadow-host';
+        card.appendChild(shadowHost);
+        _renderHtmlWithShadow(shadowHost, htmlContent);
+    }
+
+    // 커서를 Shadow DOM 밖(카드 하단)에 별도 표시
+    let cursor = card.querySelector('.html-gen-cursor');
+    if (!cursor) {
+        cursor = document.createElement('div');
+        cursor.className = 'html-gen-cursor';
+        cursor.innerHTML = '<span class="html-source-cursor" style="display:inline-block;width:8px;height:16px;background:#0d9488;border-radius:2px;margin-left:12px;"></span> <span style="color:#94a3b8;font-size:12px;">생성 중...</span>';
+        card.appendChild(cursor);
+    }
+
+    // Auto-scroll
+    body.scrollTop = body.scrollHeight;
+}
+
+function _renderHtmlPageComplete(index, pageData) {
+    // If this is the currently displayed page, render it cleanly
+    if (index === state._htmlPageDeltaIndex || !state._htmlCompletedPages || Object.keys(state._htmlCompletedPages).length === 0) {
+        _renderPageInPreview(index, pageData);
+    }
+
+    // Store completed page
+    if (!state._htmlCompletedPages) state._htmlCompletedPages = {};
+    state._htmlCompletedPages[index] = pageData;
+
+    // Clear delta timer
+    if (_htmlPageDeltaRenderTimer) {
+        clearTimeout(_htmlPageDeltaRenderTimer);
+        _htmlPageDeltaRenderTimer = null;
+    }
+}
+
+function _renderPageInPreview(index, pageData) {
+    $('#htmlReportEmpty').hide();
+    $('#htmlStreamingPreview').hide();
+    $('#htmlPagePreview').show();
+
+    const title = pageData.title || 'Page ' + (index + 1);
+    $('#htmlPagePreviewHeader').html(
+        '<span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;background:#0d9488;color:#fff;font-size:11px;font-weight:700;flex-shrink:0;">' + (index + 1) + '</span> ' +
+        escapeHtml(title)
+    );
+
+    const body = document.getElementById('htmlPagePreviewBody');
+    if (!body) return;
+
+    body.innerHTML = '';
+    const card = document.createElement('div');
+    card.className = 'html-page-preview-card';
+    body.appendChild(card);
+
+    const shadowHost = document.createElement('div');
+    shadowHost.className = 'html-shadow-host';
+    card.appendChild(shadowHost);
+    _renderHtmlWithShadow(shadowHost, pageData.html_content || '');
+
+    body.scrollTop = 0;
+}
+
+function _selectHtmlPage(index) {
+    // Update outline active state
+    $('.html-outline-item').removeClass('active');
+    $(`.html-outline-item[data-page-idx="${index}"]`).addClass('active');
+
+    // Update text panel active state
+    $('.html-text-item').removeClass('active');
+    $(`.html-text-item[data-page-idx="${index}"]`).addClass('active');
+
+    // Render the page in preview
+    let pageData = null;
+    if (state._htmlCompletedPages && state._htmlCompletedPages[index]) {
+        pageData = state._htmlCompletedPages[index];
+    } else if (state.generatedHtml && state.generatedHtml.pages && state.generatedHtml.pages[index]) {
+        pageData = state.generatedHtml.pages[index];
+    }
+
+    if (pageData) {
+        _renderPageInPreview(index, pageData);
+    }
+}
+
+// ---- HTML Report Text Panel (right side) ----
+function _updateHtmlTextPanel(index, pageData) {
+    const list = $('#htmlTextPanelList');
+    const title = pageData.title || 'Page ' + (index + 1);
+
+    // Check if item already exists
+    let existing = list.find(`.html-text-item[data-page-idx="${index}"]`);
+    if (existing.length > 0) {
+        existing.find('.text-item-title').text(title);
+        _renderPageThumbnail(existing.find('.text-item-thumb')[0], pageData.html_content);
+    } else {
+        const item = $(`
+            <div class="html-text-item" data-page-idx="${index}" onclick="_selectHtmlPage(${index})">
+                <div class="text-item-thumb-wrap">
+                    <div class="text-item-thumb"></div>
+                </div>
+                <div class="text-item-info">
+                    <div class="text-item-num">PAGE ${index + 1}</div>
+                    <div class="text-item-title">${escapeHtml(title)}</div>
+                </div>
+            </div>
+        `);
+        list.append(item);
+        _renderPageThumbnail(item.find('.text-item-thumb')[0], pageData.html_content);
+    }
+}
+
+function _renderPageThumbnail(container, htmlContent) {
+    if (!container || !htmlContent) return;
+
+    // 기존 shadow root이 있으면 컨테이너 교체
+    if (container.shadowRoot) {
+        const newContainer = container.cloneNode(false);
+        container.parentElement.replaceChild(newContainer, container);
+        container = newContainer;
+    }
+
+    // Shadow DOM 기반 썸네일 (960x540 스케일 다운)
+    container.style.width = '960px';
+    container.style.height = '540px';
+    container.style.overflow = 'hidden';
+    container.style.pointerEvents = 'none';
+    container.style.transformOrigin = 'top left';
+
+    _renderHtmlWithShadow(container, htmlContent, { overflow: 'hidden', padding: '20px' });
+
+    // Scale the thumbnail after render
+    requestAnimationFrame(() => {
+        const wrapWidth = container.parentElement ? container.parentElement.clientWidth : 200;
+        const scale = wrapWidth / 960;
+        container.style.transform = `scale(${scale})`;
+        const contentHeight = container.scrollHeight || 540;
+        if (container.parentElement) {
+            container.parentElement.style.height = (contentHeight * scale) + 'px';
+        }
+    });
+}
+
+// ---- HTML Report Generation ----
+async function generateHtmlReport() {
+    const instructions = $('#instructionsInput').val().trim();
+    const lang = $('#langSelect').val();
+    const pageCount = $('#htmlPageCountSelect').val();
+    const skillId = state.selectedSkillId;
+
+    if (!skillId) {
+        showToast('스킬을 선택하세요', 'error');
+        return;
+    }
+
+    if (state.resources.length === 0 && !instructions) {
+        showToast(t('msgEnterInstructions'), 'error');
+        return;
+    }
+
+    _isGenerating = true;
+    state.generatedHtml = null;
+    state._htmlOutlineReceived = false;
+    state._htmlOutlineData = null;
+    state._htmlPageDeltaBuffer = '';
+    state._htmlPageDeltaIndex = -1;
+    state._htmlCompletedPages = {};
+    state._htmlCommonCss = '';
+    $('#btnHtmlPresentation').hide();
+    $('#btnShareHtml').hide();
+    $('#btnDownloadHtml').hide();
+    $('#htmlReportPageCount').text('');
+    $('#htmlTextPanelList').empty();
+
+    _showStopButton();
+    _showHtmlProgress('리소스를 분석하고 있습니다...', '');
+    // Switch to outline tab and set up streaming outline
+    _switchHtmlLeftTab('outline');
+    $('#htmlReportEmpty').hide();
+    $('#htmlPagePreview').hide();
+    $('#htmlStreamingPreview').hide();
+    // Initialize streaming outline state
+    _outlineDeltaBuffer = '';
+    _outlineParsedCount = 0;
+    _outlinePhase = true;
+    if (_outlineDeltaTimer) { clearTimeout(_outlineDeltaTimer); _outlineDeltaTimer = null; }
+    $('#htmlOutlineList').html(
+        '<div class="html-outline-loading" id="outlineStreamingLoader">' +
+        '<div class="outline-loading-spinner"></div>' +
+        '<span>아웃라인 생성 중...</span>' +
+        '</div>'
+    );
+
+    _abortController = new AbortController();
+
+    try {
+        const response = await fetch(`/${state.jwtToken}/api/generate/html-report/stream`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                project_id: state.currentProject._id,
+                skill_id: skillId,
+                instructions: instructions,
+                lang: lang,
+                page_count: pageCount,
+            }),
+            signal: _abortController.signal,
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Generation failed');
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lineArr = buffer.split('\n');
+            buffer = lineArr.pop() || '';
+
+            for (const line of lineArr) {
+                if (!line.startsWith('data: ')) continue;
+                try {
+                    const evt = JSON.parse(line.slice(6));
+                    _handleHtmlSSEEvent(evt);
+                } catch (e) { /* ignore */ }
+            }
+        }
+
+        if (buffer.startsWith('data: ')) {
+            try {
+                const evt = JSON.parse(buffer.slice(6));
+                _handleHtmlSSEEvent(evt);
+            } catch (e) {}
+        }
+
+    } catch (e) {
+        if (e.name !== 'AbortError') {
+            console.error('[HTML Report] Generation failed:', e);
+            showToast(e.message || 'HTML 리포트 생성 실패', 'error');
+            _hideHtmlStreamingPreview();
+            // If we have some completed pages, keep them; otherwise show empty
+            if (!state._htmlCompletedPages || Object.keys(state._htmlCompletedPages).length === 0) {
+                $('#htmlReportEmpty').show();
+            }
+        } else {
+            // User abort
+            _outlinePhase = false;
+            if (_outlineDeltaTimer) { clearTimeout(_outlineDeltaTimer); _outlineDeltaTimer = null; }
+            if (_htmlStreamRenderTimer) {
+                clearTimeout(_htmlStreamRenderTimer);
+                _htmlStreamRenderTimer = null;
+            }
+            if (_htmlPageDeltaRenderTimer) {
+                clearTimeout(_htmlPageDeltaRenderTimer);
+                _htmlPageDeltaRenderTimer = null;
+            }
+            const cursor = document.querySelector('#htmlStreamingContent .html-typing-cursor');
+            if (cursor) cursor.remove();
+            showToast(t('msgStopped'), 'info');
+        }
+    } finally {
+        _isGenerating = false;
+        _abortController = null;
+        _outlinePhase = false;
+        _hideHtmlProgress();
+        _showGenerateOrRestartButton();
+    }
+}
+
+function _handleHtmlSSEEvent(evt) {
+    const eventType = evt.event;
+
+    switch (eventType) {
+        case 'start':
+            _showHtmlProgress(evt.message || '리포트를 생성하고 있습니다...', '');
+            break;
+
+        case 'searching':
+            _showHtmlProgress('인터넷에서 자료를 검색하고 있습니다...', '');
+            break;
+
+        case 'search_done':
+            _showHtmlProgress('검색 완료! 리포트를 작성합니다...', evt.result_count ? evt.result_count + '개 결과' : '');
+            break;
+
+        case 'delta':
+            // Outline phase: incrementally parse and display outline items
+            if (_outlinePhase && evt.text) {
+                // retry delta인 경우 이미 리셋되었으므로 그대로 진행
+                _processOutlineDelta(evt.text);
+            }
+            break;
+
+        case 'outline_retry':
+            // 아웃라인 재시도 - 기존 스트리밍 표시 리셋
+            _outlineDeltaBuffer = '';
+            _outlineParsedCount = 0;
+            if (_outlineDeltaTimer) { clearTimeout(_outlineDeltaTimer); _outlineDeltaTimer = null; }
+            $('#htmlOutlineList').html(
+                '<div class="html-outline-loading" id="outlineStreamingLoader">' +
+                '<div class="outline-loading-spinner"></div>' +
+                '<span>아웃라인 재구성 중...</span>' +
+                '</div>'
+            );
+            break;
+
+        case 'outline':
+            // Outline finalized - stop streaming phase and clean re-render
+            _outlinePhase = false;
+            if (_outlineDeltaTimer) { clearTimeout(_outlineDeltaTimer); _outlineDeltaTimer = null; }
+            state._htmlOutlineReceived = true;
+            state._htmlOutlineData = evt;
+            _hideHtmlStreamingPreview();
+            _renderHtmlOutline(evt);
+            // Show empty page preview state
+            $('#htmlPagePreview').hide();
+            $('#htmlReportEmpty').hide();
+            break;
+
+        case 'css_start':
+            _showHtmlProgress(evt.message || '디자인 스타일을 생성하고 있습니다...', '');
+            // Show CSS streaming in the center preview area
+            state._htmlCssDeltaBuffer = '';
+            $('#htmlReportEmpty').hide();
+            $('#htmlStreamingPreview').hide();
+            $('#htmlPagePreview').show();
+            $('#htmlPagePreviewHeader').html(
+                '<span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;background:#6366f1;color:#fff;font-size:11px;font-weight:700;flex-shrink:0;">CSS</span> ' +
+                '공통 스타일 생성 중...'
+            );
+            $('#htmlPagePreviewBody').html(
+                '<div class="html-page-preview-card"><pre class="html-source-view"></pre></div>'
+            );
+            break;
+
+        case 'css_delta':
+            if (evt.text) {
+                state._htmlCssDeltaBuffer = (state._htmlCssDeltaBuffer || '') + evt.text;
+                // Throttled render
+                if (!window._cssDeltaRenderTimer) {
+                    window._cssDeltaRenderTimer = setTimeout(() => {
+                        window._cssDeltaRenderTimer = null;
+                        const pre = document.querySelector('#htmlPagePreviewBody .html-source-view');
+                        if (pre) {
+                            const escaped = escapeHtml(state._htmlCssDeltaBuffer || '');
+                            pre.innerHTML = escaped + '<span class="html-source-cursor"></span>';
+                            pre.scrollTop = pre.scrollHeight;
+                        }
+                    }, 100);
+                }
+            }
+            break;
+
+        case 'css_complete':
+            if (window._cssDeltaRenderTimer) {
+                clearTimeout(window._cssDeltaRenderTimer);
+                window._cssDeltaRenderTimer = null;
+            }
+            state._htmlCommonCss = evt.css || '';
+            // Show final CSS in source view briefly
+            {
+                const pre = document.querySelector('#htmlPagePreviewBody .html-source-view');
+                if (pre) {
+                    pre.innerHTML = escapeHtml(state._htmlCommonCss);
+                }
+                $('#htmlPagePreviewHeader').html(
+                    '<span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;background:#22c55e;color:#fff;font-size:11px;font-weight:700;flex-shrink:0;">CSS</span> ' +
+                    '공통 스타일 생성 완료'
+                );
+            }
+            break;
+
+        case 'generating_pages':
+            _showHtmlProgress(evt.message || '페이지를 생성하고 있습니다...', '0 / ' + (evt.total || '?') + ' 페이지');
+            break;
+
+        case 'page_start':
+            // Highlight current page in outline
+            _setHtmlOutlineActive(evt.index);
+            _showHtmlProgress('페이지를 생성하고 있습니다...', (evt.index + 1) + ' / ' + (evt.total || '?') + ': ' + (evt.title || ''));
+            // Show page preview area with "generating" state
+            _showHtmlPageGenerating(evt.index, evt.title || '');
+            break;
+
+        case 'page_delta':
+            // Streaming HTML for current page - show in preview
+            if (evt.text) {
+                _appendHtmlPageDelta(evt.text, evt.index);
+            }
+            break;
+
+        case 'page_content': {
+            // Complete page received - render final HTML
+            _hideHtmlProgress();
+            if (!state.generatedHtml) state.generatedHtml = { pages: [] };
+            state.generatedHtml.pages[evt.index] = evt.page;
+            _renderHtmlPageComplete(evt.index, evt.page);
+            _setHtmlOutlineCompleted(evt.index);
+            _updateHtmlTextPanel(evt.index, evt.page);
+            $('#htmlReportPageCount').text((evt.index + 1) + ' / ' + (evt.total || '?') + ' 페이지');
+            break;
+        }
+
+        case 'parsing':
+            // Legacy event: outline parsing phase
+            if (_htmlStreamRenderTimer) {
+                clearTimeout(_htmlStreamRenderTimer);
+                _htmlStreamRenderTimer = null;
+            }
+            _showHtmlProgress('페이지를 구성하고 있습니다...', '');
+            break;
+
+        case 'page_ready': {
+            // Legacy incremental page event
+            const page = evt.page;
+            if (!state.generatedHtml) {
+                state.generatedHtml = { pages: [] };
+            }
+            state.generatedHtml.pages.push(page);
+            _showHtmlProgress('페이지를 구성하고 있습니다...', (evt.index + 1) + '페이지 완료');
+            break;
+        }
+
+        case 'html_data':
+            _hideHtmlProgress();
+            state.generatedHtml = evt.html;
+            if (state.generatedHtml && state.generatedHtml.common_css) {
+                state._htmlCommonCss = state.generatedHtml.common_css;
+            }
+            state.currentProject.status = 'generated';
+            $('#wsProjectStatus').text(t('statusGenerated')).attr('class', 'ws-status generated');
+
+            _hideHtmlStreamingPreview();
+            if (state.generatedHtml && state.generatedHtml.meta && state.generatedHtml.meta.title) {
+                $('#htmlReportTitle').text(state.generatedHtml.meta.title);
+            }
+            // If we received pages incrementally with new events, they're already rendered.
+            // If not (legacy flow), render them now.
+            if (state.generatedHtml && state.generatedHtml.pages) {
+                if (!state._htmlCompletedPages || Object.keys(state._htmlCompletedPages).length === 0) {
+                    renderHtmlPages(state.generatedHtml.pages);
+                }
+            }
+            $('#btnHtmlPresentation').show();
+            $('#btnShareHtml').show();
+            $('#btnDownloadHtml').show();
+            break;
+
+        case 'complete':
+            _hideHtmlProgress();
+            _hideHtmlStreamingPreview();
+            if (state.generatedHtml && state.generatedHtml.pages && state.generatedHtml.pages.length > 0) {
+                // If pages weren't rendered via new events, render them now (legacy flow)
+                if (!state._htmlCompletedPages || Object.keys(state._htmlCompletedPages).length === 0) {
+                    renderHtmlPages(state.generatedHtml.pages);
+                }
+            }
+            $('#btnHtmlPresentation').show();
+            $('#btnShareHtml').show();
+            $('#btnDownloadHtml').show();
+            showToast('HTML 리포트가 생성되었습니다', 'success');
+            // Switch to pages tab and select first page
+            _switchHtmlLeftTab('pages');
+            if (state.generatedHtml && state.generatedHtml.pages && state.generatedHtml.pages.length > 0) {
+                _selectHtmlPage(0);
+            }
+            break;
+
+        case 'stopped':
+            _outlinePhase = false;
+            if (_outlineDeltaTimer) { clearTimeout(_outlineDeltaTimer); _outlineDeltaTimer = null; }
+            _hideHtmlProgress();
+            if (_htmlStreamRenderTimer) {
+                clearTimeout(_htmlStreamRenderTimer);
+                _htmlStreamRenderTimer = null;
+            }
+            if (_htmlPageDeltaRenderTimer) {
+                clearTimeout(_htmlPageDeltaRenderTimer);
+                _htmlPageDeltaRenderTimer = null;
+            }
+            {
+                const stoppedCursor = document.querySelector('#htmlStreamingContent .html-typing-cursor');
+                if (stoppedCursor) stoppedCursor.remove();
+            }
+            state.currentProject.status = 'stopped';
+            $('#wsProjectStatus').text(t('statusStopped')).attr('class', 'ws-status stopped');
+            showToast(t('msgStopped'), 'info');
+            break;
+
+        case 'error':
+            _hideHtmlProgress();
+            _hideHtmlStreamingPreview();
+            if (!state._htmlCompletedPages || Object.keys(state._htmlCompletedPages).length === 0) {
+                $('#htmlReportEmpty').show();
+            }
+            showToast(evt.message || 'HTML 리포트 생성 실패', 'error');
+            break;
+    }
+}
+
+// ---- HTML Page Rendering (for loading existing reports) ----
+function renderHtmlPages(pages) {
+    if (!pages || pages.length === 0) return;
+
+    $('#htmlReportEmpty').hide();
+    $('#htmlStreamingPreview').hide();
+
+    // Reset completed pages state
+    state._htmlCompletedPages = {};
+    state._htmlOutlineReceived = true;
+
+    // Populate outline panel
+    const outlineList = $('#htmlOutlineList');
+    outlineList.empty();
+
+    pages.forEach((page, idx) => {
+        state._htmlCompletedPages[idx] = page;
+
+        // Build outline item
+        const item = $(`
+            <div class="html-outline-item completed ${idx === 0 ? 'active' : ''}" data-page-idx="${idx}" onclick="_selectHtmlPage(${idx})">
+                <div class="outline-page-num">PAGE ${idx + 1}</div>
+                <div class="outline-page-title">${escapeHtml(page.title || 'Page ' + (idx + 1))}</div>
+                <div class="outline-status completed">
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 5l2.5 2.5L8 3"/></svg> 완료
+                </div>
+            </div>
+        `);
+        outlineList.append(item);
+
+        // Build text panel item
+        _updateHtmlTextPanel(idx, page);
+    });
+
+    // Show page count
+    $('#htmlReportPageCount').text(pages.length + '페이지');
+
+    // Switch to pages tab for completed reports
+    _switchHtmlLeftTab('pages');
+
+    // Select first page
+    _selectHtmlPage(0);
+}
+
+// ---- HTML Report Presentation Mode ----
+let _htmlPresPages = [];
+let _htmlPresIndex = 0;
+
+function htmlReportPresentation() {
+    if (!state.generatedHtml || !state.generatedHtml.pages || state.generatedHtml.pages.length === 0) {
+        showToast('생성된 리포트가 없습니다', 'error');
+        return;
+    }
+
+    _htmlPresPages = state.generatedHtml.pages;
+    _htmlPresIndex = 0;
+
+    // Reuse existing presentation overlay
+    const presOverlay = document.getElementById('presentationMode');
+    if (!presOverlay) return;
+
+    $(presOverlay).show();
+    $(presOverlay).find('.presentation-close').show();
+
+    // Clear existing slide content
+    const slideA = document.getElementById('presentationSlideA');
+    const slideB = document.getElementById('presentationSlideB');
+
+    // Mark as HTML presentation mode
+    $(presOverlay).attr('data-html-mode', 'true');
+
+    // Render first page
+    _renderHtmlPresPage(0, slideA);
+    $(slideA).addClass('active');
+    $(slideB).removeClass('active');
+
+    // Build carousel
+    _buildHtmlPresCarousel();
+    _updateHtmlPresNav();
+
+    // Keyboard navigation
+    $(document).off('keydown.presentation').on('keydown.presentation', function(e) {
+        if (e.key === 'ArrowRight' || e.key === ' ') {
+            e.preventDefault();
+            _htmlPresNext();
+        } else if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            _htmlPresPrev();
+        } else if (e.key === 'Escape') {
+            _exitHtmlPresentation();
+        } else if (e.key === 'f' || e.key === 'F') {
+            togglePresFullscreen();
+        }
+    });
+}
+
+function _renderHtmlPresPage(index, slideEl) {
+    if (!slideEl || !_htmlPresPages[index]) return;
+
+    const page = _htmlPresPages[index];
+    // Clear existing content
+    slideEl.innerHTML = '';
+    slideEl.style.background = '#fff';
+
+    const shadowHost = document.createElement('div');
+    shadowHost.className = 'html-shadow-host';
+    shadowHost.style.width = '100%';
+    shadowHost.style.height = '100%';
+    slideEl.appendChild(shadowHost);
+    _renderHtmlWithShadow(shadowHost, page.html_content || '', { overflow: 'auto' });
+}
+
+function _buildHtmlPresCarousel() {
+    const carousel = document.getElementById('presNavCarousel');
+    if (!carousel) return;
+    carousel.innerHTML = '';
+
+    _htmlPresPages.forEach((page, idx) => {
+        const thumb = document.createElement('div');
+        thumb.className = 'pres-nav-thumb' + (idx === 0 ? ' active' : '');
+        thumb.onclick = function() { _htmlPresGoTo(idx); };
+        thumb.style.display = 'flex';
+        thumb.style.alignItems = 'center';
+        thumb.style.justifyContent = 'center';
+        thumb.style.fontSize = '10px';
+        thumb.style.color = '#fff';
+        thumb.style.background = 'rgba(255,255,255,0.15)';
+        thumb.textContent = idx + 1;
+        carousel.appendChild(thumb);
+    });
+}
+
+function _updateHtmlPresNav() {
+    const total = _htmlPresPages.length;
+    $('#presNavCurrent').text(_htmlPresIndex + 1);
+    $('#presNavTotal').text(total);
+    $('#presNavPrev').prop('disabled', _htmlPresIndex <= 0);
+    $('#presNavNext').prop('disabled', _htmlPresIndex >= total - 1);
+
+    // Update carousel active
+    const thumbs = document.querySelectorAll('#presNavCarousel .pres-nav-thumb');
+    thumbs.forEach((t, i) => t.classList.toggle('active', i === _htmlPresIndex));
+
+    // Update progress bar
+    const pct = total > 1 ? ((_htmlPresIndex) / (total - 1)) * 100 : 100;
+    $('#presProgressBar').css('width', pct + '%');
+}
+
+function _htmlPresNext() {
+    if (_htmlPresIndex >= _htmlPresPages.length - 1) return;
+    _htmlPresIndex++;
+    const slideA = document.getElementById('presentationSlideA');
+    _renderHtmlPresPage(_htmlPresIndex, slideA);
+    _updateHtmlPresNav();
+}
+
+function _htmlPresPrev() {
+    if (_htmlPresIndex <= 0) return;
+    _htmlPresIndex--;
+    const slideA = document.getElementById('presentationSlideA');
+    _renderHtmlPresPage(_htmlPresIndex, slideA);
+    _updateHtmlPresNav();
+}
+
+function _htmlPresGoTo(idx) {
+    if (idx < 0 || idx >= _htmlPresPages.length) return;
+    _htmlPresIndex = idx;
+    const slideA = document.getElementById('presentationSlideA');
+    _renderHtmlPresPage(_htmlPresIndex, slideA);
+    _updateHtmlPresNav();
+}
+
+function _exitHtmlPresentation() {
+    $('#presentationMode').hide();
+    $('#presentationMode').removeAttr('data-html-mode');
+    $(document).off('keydown.presentation');
+    // Exit fullscreen
+    if (document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement) {
+        if (document.exitFullscreen) document.exitFullscreen();
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        else if (document.msExitFullscreen) document.msExitFullscreen();
+    }
+    // Restore original presentation handlers
+    // (presNavPrev/presNavNext are global, they'll just work normally for slide mode)
+}
+
+// Patch exitPresentation / presNavPrev / presNavNext for HTML report mode
+(function _patchPresentationForHtmlMode() {
+    var origExit = window.exitPresentation;
+    var origPrev = window.presNavPrev;
+    var origNext = window.presNavNext;
+
+    window.exitPresentation = function() {
+        if ($('#presentationMode').attr('data-html-mode') === 'true') {
+            _exitHtmlPresentation();
+        } else if (origExit) {
+            origExit();
+        }
+    };
+
+    if (origPrev) {
+        window.presNavPrev = function() {
+            if ($('#presentationMode').attr('data-html-mode') === 'true') {
+                _htmlPresPrev();
+            } else {
+                origPrev();
+            }
+        };
+    }
+
+    if (origNext) {
+        window.presNavNext = function() {
+            if ($('#presentationMode').attr('data-html-mode') === 'true') {
+                _htmlPresNext();
+            } else {
+                origNext();
+            }
+        };
+    }
+})();
+
+// ---- HTML Report Download ----
+function downloadHtmlReport() {
+    if (!state.currentProject) return;
+    const url = `/${state.jwtToken}/api/generate/${state.currentProject._id}/download/html`;
+    _downloadFile(url, (state.currentProject.name || 'report') + '.html');
 }

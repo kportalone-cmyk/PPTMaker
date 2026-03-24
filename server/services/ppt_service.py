@@ -89,6 +89,88 @@ def _apply_cover_crop(pic, img_path: str, target_w_emu: int, target_h_emu: int):
         pass
 
 
+async def _generate_pptx_from_custom_template(project_id: str, project: dict) -> str:
+    """커스텀 PPTX 템플릿을 기반으로 PPTX 파일 생성 (클론-앤-필)
+
+    원본 PPTX를 열어서 생성된 텍스트로 교체합니다.
+    """
+    db = get_db()
+    custom_template_id = project.get("custom_template_id", "")
+    if not custom_template_id:
+        raise ValueError("커스텀 템플릿 ID가 없습니다")
+
+    custom_tmpl = await db.custom_templates.find_one({"_id": ObjectId(custom_template_id)})
+    if not custom_tmpl:
+        custom_tmpl = await db.custom_templates.find_one({"project_id": project_id})
+    if not custom_tmpl:
+        raise ValueError("커스텀 템플릿을 찾을 수 없습니다")
+
+    file_path = custom_tmpl.get("file_path", "")
+    abs_path = os.path.join(".", file_path.lstrip("/"))
+    if not os.path.exists(abs_path):
+        raise ValueError(f"커스텀 템플릿 파일을 찾을 수 없습니다: {file_path}")
+
+    # 생성된 슬라이드 데이터 조회
+    cursor = db.generated_slides.find({"project_id": project_id}).sort("order", 1)
+    gen_slides = []
+    async for s in cursor:
+        gen_slides.append(s)
+
+    if not gen_slides:
+        raise ValueError("생성된 슬라이드가 없습니다")
+
+    # 원본 PPTX 열기
+    prs = Presentation(abs_path)
+    original_slides = list(prs.slides)
+
+    # 각 생성 슬라이드에 대해 원본 슬라이드의 텍스트 교체
+    for gen_idx, gen_slide in enumerate(gen_slides):
+        if gen_idx >= len(original_slides):
+            break  # 원본보다 생성 슬라이드가 많으면 초과분은 무시
+
+        pptx_slide = original_slides[gen_idx]
+        gen_objects = gen_slide.get("objects", [])
+
+        # generated_text가 있는 텍스트 오브젝트 수집
+        text_replacements = []
+        for obj in gen_objects:
+            if obj.get("obj_type") == "text":
+                generated_text = obj.get("generated_text", "")
+                if generated_text:
+                    text_replacements.append(generated_text)
+
+        # 원본 슬라이드의 텍스트 프레임에 순서대로 교체
+        text_idx = 0
+        for shape in pptx_slide.shapes:
+            if text_idx >= len(text_replacements):
+                break
+            if shape.has_text_frame:
+                text_content = shape.text_frame.text.strip()
+                if text_content:
+                    # 첫 번째 paragraph의 run에 텍스트 교체
+                    tf = shape.text_frame
+                    for para in tf.paragraphs:
+                        for run in para.runs:
+                            run.text = ""
+                    if tf.paragraphs:
+                        p = tf.paragraphs[0]
+                        if p.runs:
+                            p.runs[0].text = text_replacements[text_idx]
+                        else:
+                            run = p.add_run()
+                            run.text = text_replacements[text_idx]
+                    text_idx += 1
+
+    # 파일 저장
+    output_dir = os.path.join(settings.UPLOAD_DIR, "generated")
+    os.makedirs(output_dir, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.pptx"
+    output_path = os.path.join(output_dir, filename)
+    prs.save(output_path)
+
+    return f"/uploads/generated/{filename}"
+
+
 async def generate_pptx(project_id: str) -> str:
     """생성된 슬라이드 데이터를 기반으로 PPTX 파일 생성"""
     db = get_db()
@@ -96,6 +178,14 @@ async def generate_pptx(project_id: str) -> str:
     project = await db.projects.find_one({"_id": ObjectId(project_id)})
     if not project:
         raise ValueError("프로젝트를 찾을 수 없습니다")
+
+    # 커스텀 템플릿이 있으면 클론-앤-필 방식 사용
+    if project.get("custom_template_id"):
+        try:
+            return await _generate_pptx_from_custom_template(project_id, project)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"커스텀 템플릿 PPTX 생성 실패, 기본 방식으로 폴백: {e}")
 
     cursor = db.generated_slides.find({"project_id": project_id}).sort("order", 1)
     gen_slides = []

@@ -69,7 +69,7 @@ async def lifespan(app: FastAPI):
     print("기본 프롬프트 초기화 완료")
 
     # 업로드 디렉토리 생성
-    for sub in ["backgrounds", "images", "resources", "generated", "documents"]:
+    for sub in ["backgrounds", "images", "resources", "generated", "documents", "custom_templates"]:
         os.makedirs(os.path.join(settings.UPLOAD_DIR, sub), exist_ok=True)
 
     try:
@@ -280,6 +280,24 @@ async def list_templates_for_user(jwt_token: str):
         raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다")
     templates = await get_all_templates_summary()
     return {"templates": templates}
+
+
+@app.get("/{jwt_token}/api/html-skills")
+async def list_html_skills_for_user(jwt_token: str):
+    """사용자용 HTML 스킬 목록 (발행된 스킬만)"""
+    from services.auth_service import decode_jwt_token
+    from services.mongo_service import get_db
+    payload = decode_jwt_token(jwt_token)
+    if not payload:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다")
+    db = get_db()
+    cursor = db.html_skills.find({"is_published": True}).sort("title", 1)
+    skills = []
+    async for s in cursor:
+        s["_id"] = str(s["_id"])
+        skills.append(s)
+    return {"skills": skills}
 
 
 @app.get("/{jwt_token}/api/templates/{template_id}/slides")

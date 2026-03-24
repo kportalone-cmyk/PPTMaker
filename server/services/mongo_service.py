@@ -110,6 +110,16 @@ async def init_indexes():
     # collab-status에서 project_id + last_seen 필터링용
     await db.online_presence.create_index([("project_id", 1), ("last_seen", -1)])
 
+    # custom_templates 컬렉션
+    await db.custom_templates.create_index("project_id", unique=True)
+
+    # html_skills 컬렉션
+    await db.html_skills.create_index("is_published")
+    await db.html_skills.create_index("created_at")
+
+    # generated_html 컬렉션
+    await db.generated_html.create_index("project_id", unique=True)
+
     # 조직도 인덱스
     org_db = get_org_db()
     org_col = org_db[settings.ORG_COLLECTION]

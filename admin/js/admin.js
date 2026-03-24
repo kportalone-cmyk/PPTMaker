@@ -44,6 +44,10 @@ const state = {
     _previousLayout: '',
     // 최근 사용 색상 (최대 5개)
     recentColors: [],
+    // 스킬 관리
+    activeTab: 'templates', // 'templates' | 'skills'
+    skills: [],
+    currentSkill: null,
 };
 
 // ============ 슬라이드 크기 관리 ============
@@ -487,6 +491,8 @@ async function applyBulkFontChange() {
 let _promptList = [];
 let _editingPromptId = null;
 let _availableModels = [];
+let _promptCurrentPage = 1;
+const _promptPageSize = 5;
 
 async function showPromptManageModal() {
     await Promise.all([loadPromptList(), loadAvailableModels()]);
@@ -507,6 +513,7 @@ async function loadPromptList() {
     try {
         const res = await apiGet('/api/admin/prompts');
         _promptList = res.prompts || [];
+        _promptCurrentPage = 1;
         renderPromptList();
     } catch (e) {
         showToast('프롬프트 로드 실패: ' + e.message, 'error');
@@ -528,11 +535,17 @@ function renderPromptList() {
         return;
     }
 
-    _promptList.forEach(function(p) {
+    const totalPages = Math.ceil(_promptList.length / _promptPageSize);
+    if (_promptCurrentPage > totalPages) _promptCurrentPage = totalPages;
+    if (_promptCurrentPage < 1) _promptCurrentPage = 1;
+    const startIdx = (_promptCurrentPage - 1) * _promptPageSize;
+    const pageItems = _promptList.slice(startIdx, startIdx + _promptPageSize);
+
+    pageItems.forEach(function(p) {
         const updatedAt = p.updated_at ? new Date(p.updated_at).toLocaleString('ko-KR') : '';
         const modelName = _getModelDisplayName(p.model);
         container.append(`
-            <div class="prompt-list-item" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #f0f0f0;cursor:pointer;" onclick="editPrompt('${p._id}')">
+            <div class="prompt-list-item" onclick="editPrompt('${p._id}')">
                 <div style="flex:1;min-width:0;">
                     <div style="font-size:14px;font-weight:500;color:#333;">${escapeHtml(p.name)}</div>
                     <div style="font-size:11px;color:#999;margin-top:2px;">${escapeHtml(p.description || '')}</div>
@@ -545,6 +558,33 @@ function renderPromptList() {
             </div>
         `);
     });
+
+    // Pagination
+    if (totalPages > 1) {
+        let paginationHtml = '<div class="prompt-pagination">';
+        paginationHtml += `<button class="prompt-page-btn ${_promptCurrentPage === 1 ? 'disabled' : ''}" onclick="_promptGoPage(${_promptCurrentPage - 1})" ${_promptCurrentPage === 1 ? 'disabled' : ''}>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M7.5 2.5L4 6l3.5 3.5"/></svg>
+        </button>`;
+        for (let i = 1; i <= totalPages; i++) {
+            paginationHtml += `<button class="prompt-page-btn ${i === _promptCurrentPage ? 'active' : ''}" onclick="_promptGoPage(${i})">${i}</button>`;
+        }
+        paginationHtml += `<button class="prompt-page-btn ${_promptCurrentPage === totalPages ? 'disabled' : ''}" onclick="_promptGoPage(${_promptCurrentPage + 1})" ${_promptCurrentPage === totalPages ? 'disabled' : ''}>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+        </button>`;
+        paginationHtml += `<span class="prompt-page-info">${_promptCurrentPage} / ${totalPages}</span>`;
+        paginationHtml += '</div>';
+        container.after().parent().find('.prompt-pagination').remove();
+        container.after(paginationHtml);
+    } else {
+        container.parent().find('.prompt-pagination').remove();
+    }
+}
+
+function _promptGoPage(page) {
+    const totalPages = Math.ceil(_promptList.length / _promptPageSize);
+    if (page < 1 || page > totalPages) return;
+    _promptCurrentPage = page;
+    renderPromptList();
 }
 
 function showPromptList() {
@@ -5239,6 +5279,7 @@ function openChartDataEditor() {
     const cs = state.selectedObject.chart_style;
     const cd = cs.chart_data || {};
 
+    $('#chartTypeSelect').val(cs.chart_type || 'bar');
     $('#chartLabelsInput').val((cd.labels || []).join(', '));
 
     const container = $('#chartDatasetsContainer');
@@ -5247,10 +5288,10 @@ function openChartDataEditor() {
         container.append(`
             <div class="dataset-row" data-idx="${i}" style="border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin-top:8px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                    <input type="text" class="ds-label" value="${ds.label || 'Series ' + (i+1)}" placeholder="시리즈 이름" style="width:60%;">
+                    <input type="text" class="ds-label" value="${ds.label || 'Series ' + (i+1)}" placeholder="시리즈 이름" style="width:60%;padding:6px 8px;border:1px solid #ddd;border-radius:6px;font-size:13px;">
                     <button class="btn btn-danger btn-sm" onclick="removeChartDataset(${i})" style="padding:2px 8px;">삭제</button>
                 </div>
-                <input type="text" class="ds-data" value="${(ds.data || []).join(', ')}" placeholder="값 (쉼표 구분)" style="width:100%;">
+                <input type="text" class="ds-data" value="${(ds.data || []).join(', ')}" placeholder="값 (쉼표 구분)" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:6px;font-size:13px;">
             </div>
         `);
     });
@@ -5268,10 +5309,10 @@ function addChartDataset() {
     container.append(`
         <div class="dataset-row" data-idx="${idx}" style="border:1px solid #e5e7eb;border-radius:6px;padding:8px;margin-top:8px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <input type="text" class="ds-label" value="시리즈 ${idx+1}" placeholder="시리즈 이름" style="width:60%;">
+                <input type="text" class="ds-label" value="시리즈 ${idx+1}" placeholder="시리즈 이름" style="width:60%;padding:6px 8px;border:1px solid #ddd;border-radius:6px;font-size:13px;">
                 <button class="btn btn-danger btn-sm" onclick="$(this).closest('.dataset-row').remove()" style="padding:2px 8px;">삭제</button>
             </div>
-            <input type="text" class="ds-data" value="" placeholder="값 (쉼표 구분)" style="width:100%;">
+            <input type="text" class="ds-data" value="" placeholder="값 (쉼표 구분)" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:6px;font-size:13px;">
         </div>
     `);
 }
@@ -5297,7 +5338,12 @@ function applyChartData() {
         });
     });
 
+    const chartType = $('#chartTypeSelect').val();
+    state.selectedObject.chart_style.chart_type = chartType;
     state.selectedObject.chart_style.chart_data = { labels, datasets };
+
+    // Update chart type dropdown in properties panel
+    $('#propChartType').val(chartType);
 
     const el = $(`[data-obj-id="${state.selectedObject.obj_id}"]`);
     renderChartInElement(el.find('.chart-wrapper')[0], state.selectedObject);
@@ -5316,4 +5362,264 @@ function showToast(message, type) {
     const toast = $(`<div class="toast ${type || ''}">${escapeHtml(message)}</div>`);
     $('body').append(toast);
     setTimeout(() => toast.remove(), 3000);
+}
+
+// ============ 스킬 관리 (HTML 리포트) ============
+
+function switchAdminTab(tab) {
+    state.activeTab = tab;
+
+    // 탭 버튼 활성화
+    $('.sidebar-tab').removeClass('active');
+    $(`.sidebar-tab[data-tab="${tab}"]`).addClass('active');
+
+    if (tab === 'templates') {
+        // 템플릿 탭 활성화
+        $('#tabContentTemplates').addClass('active').show();
+        $('#tabContentSkills').removeClass('active').hide();
+
+        // 캔버스/툴바 영역 복원
+        $('#canvasWrapper').show();
+        $('#toolbar').show();
+        $('#skillEditorWrapper').hide();
+
+        // 템플릿 관련 헤더 버튼 표시
+        $('#btnGridToggle').show();
+        $('#btnBulkFont').css('display', state.currentTemplate ? '' : 'none');
+
+        // 현재 템플릿이 선택되어 있으면 에디터 표시
+        if (state.currentTemplate) {
+            showEditor();
+            $('#propertiesPanel').show();
+            $('#templateNameBar').show();
+            $('#btnDeleteTemplate').show();
+            $('#btnPublishTemplate').show();
+        } else {
+            hideEditor();
+        }
+    } else if (tab === 'skills') {
+        // 스킬 탭 활성화
+        $('#tabContentTemplates').removeClass('active').hide();
+        $('#tabContentSkills').addClass('active').show();
+
+        // 캔버스/툴바/속성패널 숨기기
+        $('#canvasWrapper').hide();
+        $('#toolbar').hide();
+        $('#propertiesPanel').hide();
+        $('#templateNameBar').hide();
+        $('#btnDeleteTemplate').hide();
+        $('#btnPublishTemplate').hide();
+        $('#btnBulkFont').hide();
+        $('#btnGridToggle').hide();
+
+        // 스킬 에디터 표시
+        $('#skillEditorWrapper').show();
+
+        // 스킬 목록 로드
+        loadSkills();
+    }
+}
+
+async function loadSkills() {
+    try {
+        const res = await apiGet('/api/admin/skills');
+        state.skills = res.skills || [];
+        renderSkillList();
+    } catch (e) {
+        showToast('스킬 로드 실패', 'error');
+    }
+}
+
+function renderSkillList() {
+    const list = $('#skillList');
+    list.empty();
+
+    if (state.skills.length === 0) {
+        list.html('<div style="padding:12px;text-align:center;color:#999;font-size:12px;">등록된 스킬이 없습니다</div>');
+        updateSkillComboText();
+        return;
+    }
+
+    state.skills.forEach(s => {
+        const active = state.currentSkill && state.currentSkill._id === s._id ? 'active' : '';
+        const published = s.is_published;
+        const statusBadge = published
+            ? '<span class="skill-status-badge published" title="공개 중">공개</span>'
+            : '<span class="skill-status-badge draft" title="비공개">비공개</span>';
+        list.append(`
+            <div class="template-option ${active}" onclick="selectSkill('${s._id}')">
+                <div class="option-title-row">
+                    <span class="option-title">${escapeHtml(s.title)}</span>
+                    ${statusBadge}
+                </div>
+                <div class="option-meta">${s.description ? escapeHtml(s.description) : ''}</div>
+            </div>
+        `);
+    });
+
+    updateSkillComboText();
+}
+
+function updateSkillComboText() {
+    if (state.currentSkill) {
+        $('#skillComboText').text(state.currentSkill.title);
+    } else {
+        $('#skillComboText').text('스킬을 선택하세요');
+    }
+}
+
+function toggleSkillDropdown() {
+    const dd = $('#skillComboDropdown');
+    dd.toggleClass('open');
+}
+
+// 스킬 콤보박스 외부 클릭 시 닫기
+$(document).on('click', function(e) {
+    if (!$(e.target).closest('#skillCombo').length) {
+        $('#skillComboDropdown').removeClass('open');
+    }
+});
+
+async function selectSkill(skillId) {
+    $('#skillComboDropdown').removeClass('open');
+    try {
+        const res = await apiGet('/api/admin/skills/' + skillId);
+        state.currentSkill = res.skill || res;
+
+        renderSkillList();
+        showSkillEditor(state.currentSkill);
+    } catch (e) {
+        showToast('스킬 로드 실패', 'error');
+    }
+}
+
+function createNewSkill() {
+    state.currentSkill = null;
+    renderSkillList();
+    updateSkillComboText();
+
+    // 에디터 필드 초기화
+    $('#skillTitle').val('');
+    $('#skillDescription').val('');
+    $('#skillPrompt').val('');
+    $('#skillPageCount').val('auto');
+    $('#skillTheme').val('corporate');
+
+    // UI 상태
+    $('#skillEditorTitle').text('새 스킬');
+    $('#btnSkillPublish').hide();
+    $('#btnSkillDelete').hide();
+
+    // 에디터 표시
+    $('#skillEditorEmpty').hide();
+    $('#skillEditorForm').show();
+}
+
+function showSkillEditor(skill) {
+    // 필드 채우기
+    $('#skillTitle').val(skill.title || '');
+    $('#skillDescription').val(skill.description || '');
+    $('#skillPrompt').val(skill.skill_prompt || '');
+    $('#skillPageCount').val(skill.page_count_default || 'auto');
+    $('#skillTheme').val(skill.theme || 'corporate');
+
+    // UI 상태
+    $('#skillEditorTitle').text(escapeHtml(skill.title || '스킬 편집'));
+
+    // 공개/비공개 버튼
+    $('#btnSkillPublish').show();
+    updateSkillPublishButton(skill.is_published);
+
+    // 삭제 버튼
+    $('#btnSkillDelete').show();
+
+    // 에디터 표시
+    $('#skillEditorEmpty').hide();
+    $('#skillEditorForm').show();
+}
+
+function updateSkillPublishButton(isPublished) {
+    const btn = $('#btnSkillPublish');
+    btn.removeClass('btn-publish btn-unpublish');
+    if (isPublished) {
+        btn.addClass('btn-unpublish').text('비공개 전환');
+    } else {
+        btn.addClass('btn-publish').text('공개 전환');
+    }
+}
+
+async function saveSkill() {
+    const title = $('#skillTitle').val().trim();
+    if (!title) {
+        showToast('스킬 제목을 입력하세요', 'error');
+        return;
+    }
+
+    const data = {
+        title: title,
+        description: $('#skillDescription').val().trim(),
+        skill_prompt: $('#skillPrompt').val(),
+        page_count_default: $('#skillPageCount').val(),
+        theme: $('#skillTheme').val(),
+    };
+
+    try {
+        if (state.currentSkill && state.currentSkill._id) {
+            // 수정
+            const res = await apiPut('/api/admin/skills/' + state.currentSkill._id, data);
+            state.currentSkill = res.skill || res;
+            showToast('스킬이 저장되었습니다', 'success');
+        } else {
+            // 새 스킬 생성
+            data.is_published = false;
+            const res = await apiPost('/api/admin/skills', data);
+            state.currentSkill = res.skill || res;
+            showToast('새 스킬이 생성되었습니다', 'success');
+        }
+
+        // 목록 갱신
+        await loadSkills();
+
+        // 에디터 업데이트
+        showSkillEditor(state.currentSkill);
+    } catch (e) {
+        showToast('스킬 저장 실패: ' + (e.message || ''), 'error');
+    }
+}
+
+async function deleteSkill() {
+    if (!state.currentSkill || !state.currentSkill._id) return;
+    if (!confirm(`"${state.currentSkill.title}" 스킬을 삭제하시겠습니까?`)) return;
+
+    try {
+        await apiDelete('/api/admin/skills/' + state.currentSkill._id);
+        state.currentSkill = null;
+        showToast('스킬이 삭제되었습니다', 'success');
+
+        // 에디터 초기화
+        $('#skillEditorForm').hide();
+        $('#skillEditorEmpty').show();
+
+        // 목록 갱신
+        await loadSkills();
+    } catch (e) {
+        showToast('스킬 삭제 실패', 'error');
+    }
+}
+
+async function toggleSkillPublish() {
+    if (!state.currentSkill || !state.currentSkill._id) return;
+
+    try {
+        const res = await apiPut('/api/admin/skills/' + state.currentSkill._id + '/publish', {});
+        state.currentSkill.is_published = res.is_published;
+
+        updateSkillPublishButton(res.is_published);
+        showToast(res.is_published ? '스킬이 공개되었습니다' : '스킬이 비공개로 전환되었습니다', 'success');
+
+        // 목록 갱신
+        await loadSkills();
+    } catch (e) {
+        showToast('공개 상태 변경 실패', 'error');
+    }
 }

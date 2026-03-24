@@ -1508,6 +1508,10 @@ async def _stream_claude_api(system_prompt: str, user_prompt: str, model: str = 
     else:
         payload["max_tokens"] = 4096  # 기본값
 
+    # Extended output requires beta header
+    if payload.get("max_tokens", 0) > 16384:
+        headers["anthropic-beta"] = "interleaved-thinking-2025-05-14,output-128k-2025-02-19"
+
     async with httpx.AsyncClient(timeout=180.0) as client:
         async with client.stream("POST", url, json=payload, headers=headers) as response:
             response.raise_for_status()
@@ -2235,3 +2239,634 @@ async def rewrite_text_stream(
         print(f"[LLM-Rewrite] 호출 실패: {e}")
         traceback.print_exc()
         yield ("result", selected_text)
+
+
+# ============ HTML 리포트 콘텐츠 생성 ============
+
+
+async def _build_html_report_prompts(
+    resources_text: str, instructions: str, skill: dict,
+    lang: str = "", page_count: str = "auto",
+) -> tuple[str, str]:
+    """HTML 리포트 생성용 프롬프트 빌드"""
+    if page_count and page_count != "auto":
+        page_count_instruction = f"\n9. **[필수] 페이지를 정확히 {page_count}개 생성하세요.**"
+    else:
+        page_count_instruction = ""
+
+    output_lang = lang or (settings.SUPPORTED_LANGS[0] if settings.SUPPORTED_LANGS else "ko")
+    lang_instruction = {
+        "ko": "모든 콘텐츠를 한국어로 작성하세요.",
+        "en": "Write all content in English.",
+        "ja": "すべてのコンテンツを日本語で作成してください。",
+        "zh": "请用中文撰写所有内容。",
+    }.get(output_lang, "모든 콘텐츠를 한국어로 작성하세요.")
+
+    skill_prompt = skill.get("skill_prompt", "") or ""
+    theme = skill.get("theme", "corporate") or "corporate"
+
+    system_template = await get_prompt_content("html_report_generation_system")
+    user_template = await get_prompt_content("html_report_generation_user")
+
+    system_prompt = system_template.format(
+        lang_instruction=lang_instruction,
+        page_count_instruction=page_count_instruction,
+        skill_prompt=skill_prompt if skill_prompt else "특별한 스킬 지침 없음",
+        theme=theme,
+    )
+
+    user_prompt = user_template.format(
+        lang_instruction=lang_instruction,
+        instructions=instructions if instructions else "리소스 내용을 분석하여 전문적인 리포트로 정리해주세요.",
+        resources_text=resources_text[:12000],
+        skill_prompt=skill_prompt if skill_prompt else "특별한 스킬 지침 없음",
+    )
+
+    return system_prompt, user_prompt
+
+
+def _parse_html_report_schema(response_text: str) -> dict | None:
+    """LLM 응답에서 HTML 리포트 JSON 스키마를 파싱"""
+    text = response_text.strip()
+
+    # ```json ... ``` 블록 추출
+    if "```json" in text:
+        start = text.index("```json") + 7
+        try:
+            end = text.rindex("```")
+            if end > start:
+                text = text[start:end].strip()
+            else:
+                text = text[start:].strip()
+        except ValueError:
+            text = text[start:].strip()
+    elif "```" in text:
+        start = text.index("```") + 3
+        try:
+            end = text.rindex("```")
+            if end > start:
+                text = text[start:end].strip()
+            else:
+                text = text[start:].strip()
+        except ValueError:
+            text = text[start:].strip()
+
+    parsed = None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        for start_char, end_char in [("{", "}"), ("[", "]")]:
+            if start_char in text:
+                try:
+                    s = text.index(start_char)
+                    e = text.rindex(end_char) + 1
+                    parsed = json.loads(text[s:e])
+                    break
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+    if parsed is None:
+        # 잘린 JSON 복구 시도
+        repaired = _try_repair_truncated_json(text)
+        if repaired is not None and "pages" in repaired:
+            parsed = repaired
+
+    if parsed is None:
+        return None
+
+    if isinstance(parsed, dict):
+        pages = parsed.get("pages", [])
+        if isinstance(pages, list) and pages:
+            return {
+                "meta": parsed.get("meta", {}),
+                "pages": pages,
+            }
+
+    return None
+
+
+async def generate_html_report_stream(
+    resources_text: str,
+    instructions: str,
+    skill: dict,
+    lang: str = "",
+    page_count: str = "auto",
+):
+    """[Legacy] 스트리밍 방식 HTML 리포트 콘텐츠 생성 (전체 한 번에 생성)
+
+    2-phase 방식의 generate_html_report_outline_stream() + generate_html_page_content()로 대체됨.
+
+    Yields:
+        ("delta", str)   - Claude에서 스트리밍된 텍스트 청크
+        ("result", dict) - 최종 파싱 결과: {"pages": [...], "meta": {...}}
+    """
+    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+        yield ("result", _html_report_fallback(resources_text))
+        return
+
+    system_prompt, user_prompt = await _build_html_report_prompts(
+        resources_text, instructions, skill, lang, page_count=page_count,
+    )
+
+    prompt_model = await get_prompt_model("html_report_generation_system")
+    effective_model = prompt_model or settings.ANTHROPIC_MODEL
+
+    # 페이지 수에 따라 max_tokens 동적 조절
+    max_tokens = 16384
+    if page_count and page_count != "auto":
+        try:
+            pages_num = int(page_count)
+            if pages_num >= 15:
+                max_tokens = 32768
+            elif pages_num >= 8:
+                max_tokens = 24576
+        except ValueError:
+            pass
+
+    try:
+        full_text = ""
+        async for delta in _stream_claude_api(system_prompt, user_prompt, model=effective_model, max_tokens=max_tokens):
+            full_text += delta
+            yield ("delta", delta)
+
+        print(f"[LLM-HTML] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {effective_model})")
+        parsed = _parse_html_report_schema(full_text)
+        if parsed:
+            page_count_result = len(parsed.get("pages", []))
+            print(f"[LLM-HTML] 파싱 성공 - pages: {page_count_result}개")
+            yield ("result", parsed)
+        else:
+            print(f"[LLM-HTML] 파싱 실패 → 폴백 사용")
+            yield ("result", _html_report_fallback(resources_text))
+    except Exception as e:
+        import traceback
+        print(f"[LLM-HTML] Streaming 호출 실패: {e}")
+        traceback.print_exc()
+        yield ("result", _html_report_fallback(resources_text))
+
+
+def _html_report_fallback(resources_text: str) -> dict:
+    """AI 호출 실패 시 폴백 HTML 리포트 데이터"""
+    content = resources_text[:500] if resources_text else "데이터가 없습니다."
+    return {
+        "meta": {"title": "리포트", "description": "리소스 내용 정리"},
+        "pages": [
+            {
+                "order": 1,
+                "title": "내용 정리",
+                "html_content": f'<div style="width:960px;height:540px;padding:40px;font-family:Arial,sans-serif;"><h1 style="color:#333;">리포트</h1><p>{content}</p></div>',
+            }
+        ],
+    }
+
+
+# ============ 2-Phase HTML 리포트 생성 ============
+
+
+async def _build_html_report_outline_prompts(
+    resources_text: str, instructions: str, skill_prompt: str,
+    lang: str = "", page_count: str = "auto",
+) -> tuple[str, str]:
+    """HTML 리포트 아웃라인 생성용 프롬프트 빌드"""
+    if page_count and page_count != "auto":
+        page_count_instruction = f"\n9. **[필수] 반드시 pages 배열에 정확히 {page_count}개의 페이지 객체를 생성하세요. 절대 1개로 합치지 마세요.**"
+    else:
+        page_count_instruction = "\n9. **[필수] 반드시 pages 배열에 최소 3개 이상의 페이지 객체를 생성하세요. 절대 1개로 합치지 마세요. 내용이 풍부하면 5~8페이지로 분할합니다.**"
+
+    output_lang = lang or (settings.SUPPORTED_LANGS[0] if settings.SUPPORTED_LANGS else "ko")
+    lang_instruction = {
+        "ko": "모든 콘텐츠를 한국어로 작성하세요.",
+        "en": "Write all content in English.",
+        "ja": "すべてのコンテンツを日本語で作成してください。",
+        "zh": "请用中文撰写所有内容。",
+    }.get(output_lang, "모든 콘텐츠를 한국어로 작성하세요.")
+
+    system_template = await get_prompt_content("html_report_outline_system")
+    user_template = await get_prompt_content("html_report_outline_user")
+
+    system_prompt = system_template.format(
+        lang_instruction=lang_instruction,
+        page_count_instruction=page_count_instruction,
+        skill_prompt=skill_prompt if skill_prompt else "특별한 스킬 지침 없음",
+    )
+
+    user_prompt = user_template.format(
+        lang_instruction=lang_instruction,
+        instructions=instructions if instructions else "리소스 내용을 분석하여 전문적인 리포트 아웃라인을 설계해주세요.",
+        resources_text=resources_text[:12000],
+        skill_prompt=skill_prompt if skill_prompt else "특별한 스킬 지침 없음",
+    )
+
+    return system_prompt, user_prompt
+
+
+async def _build_html_css_prompts(
+    outline_data: dict, skill_prompt: str,
+    lang: str = "", theme: str = "corporate",
+) -> tuple[str, str]:
+    """HTML 리포트 공통 CSS 생성용 프롬프트 빌드"""
+    output_lang = lang or (settings.SUPPORTED_LANGS[0] if settings.SUPPORTED_LANGS else "ko")
+    lang_instruction = {
+        "ko": "모든 콘텐츠를 한국어로 작성하세요.",
+        "en": "Write all content in English.",
+        "ja": "すべてのコンテンツを日本語で作成してください。",
+        "zh": "请用中文撰写所有内容。",
+    }.get(output_lang, "모든 콘텐츠를 한국어로 작성하세요.")
+
+    outline_json = json.dumps(outline_data, ensure_ascii=False, indent=2)
+
+    system_template = await get_prompt_content("html_report_css_system")
+    user_template = await get_prompt_content("html_report_css_user")
+
+    system_prompt = system_template.format(
+        lang_instruction=lang_instruction,
+        skill_prompt=skill_prompt if skill_prompt else "특별한 스킬 지침 없음",
+        theme=theme,
+    )
+
+    user_prompt = user_template.format(
+        outline_json=outline_json,
+        lang_instruction=lang_instruction,
+        skill_prompt=skill_prompt if skill_prompt else "특별한 스킬 지침 없음",
+        theme=theme,
+    )
+
+    return system_prompt, user_prompt
+
+
+async def generate_html_report_css_stream(
+    outline_data: dict,
+    skill_prompt: str,
+    lang: str = "",
+    theme: str = "corporate",
+):
+    """Phase 2: 공통 CSS 생성 (스트리밍)
+
+    아웃라인을 기반으로 전체 리포트에서 사용할 공통 CSS를 생성합니다.
+    빠른 모델(ANTHROPIC_OUTLINE_MODEL)을 사용합니다.
+
+    Yields:
+        ("delta", str)   - CSS 스트리밍 청크
+        ("result", str)  - 최종 CSS 문자열
+    """
+    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+        yield ("result", ".rpt-page { width:100%; padding:40px; font-family:'Malgun Gothic',Arial,sans-serif; box-sizing:border-box; }")
+        return
+
+    system_prompt, user_prompt = await _build_html_css_prompts(
+        outline_data, skill_prompt, lang, theme,
+    )
+
+    prompt_model = await get_prompt_model("html_report_css_system")
+    effective_model = prompt_model or settings.ANTHROPIC_OUTLINE_MODEL
+
+    try:
+        full_text = ""
+        async for delta in _stream_claude_api(system_prompt, user_prompt, model=effective_model, max_tokens=4096):
+            full_text += delta
+            yield ("delta", delta)
+
+        # CSS 코드 블록 래퍼 제거
+        css_text = full_text.strip()
+        if css_text.startswith("```css"):
+            css_text = css_text[6:]
+        elif css_text.startswith("```"):
+            css_text = css_text[3:]
+        if css_text.endswith("```"):
+            css_text = css_text[:-3]
+        css_text = css_text.strip()
+
+        print(f"[LLM-HTML-CSS] CSS 생성 완료 - 길이: {len(css_text)} chars (model: {effective_model})")
+        yield ("result", css_text)
+    except Exception as e:
+        import traceback
+        print(f"[LLM-HTML-CSS] CSS 생성 실패: {e}")
+        traceback.print_exc()
+        yield ("result", ".rpt-page { width:100%; padding:40px; font-family:'Malgun Gothic',Arial,sans-serif; box-sizing:border-box; }")
+
+
+async def _build_html_page_prompts(
+    resources_text: str, instructions: str, skill_prompt: str,
+    page_info: dict, all_pages_outline: dict,
+    lang: str = "", theme: str = "corporate", common_css: str = "",
+) -> tuple[str, str]:
+    """HTML 리포트 단일 페이지 생성용 프롬프트 빌드"""
+    output_lang = lang or (settings.SUPPORTED_LANGS[0] if settings.SUPPORTED_LANGS else "ko")
+    lang_instruction = {
+        "ko": "모든 콘텐츠를 한국어로 작성하세요.",
+        "en": "Write all content in English.",
+        "ja": "すべてのコンテンツを日本語で作成してください。",
+        "zh": "请用中文撰写所有内容。",
+    }.get(output_lang, "모든 콘텐츠를 한국어로 작성하세요.")
+
+    all_pages = all_pages_outline.get("pages", [])
+    meta = all_pages_outline.get("meta", {})
+    page_order = page_info.get("order", 1)
+    total_pages = len(all_pages)
+
+    # 이전 페이지 제목 목록 (현재 페이지 전까지)
+    previous_titles = []
+    for p in all_pages:
+        if p.get("order", 0) < page_order:
+            previous_titles.append(p.get("title", ""))
+    previous_page_titles = ", ".join(previous_titles) if previous_titles else "없음 (첫 번째 페이지)"
+
+    # key_points를 문자열로 변환
+    key_points = page_info.get("key_points", [])
+    key_points_str = "\n".join(f"  - {kp}" for kp in key_points) if key_points else "없음"
+
+    # 리소스 텍스트: 페이지 순서에 따라 다른 구간의 리소스를 전달
+    if total_pages > 1:
+        chunk_size = max(4000, len(resources_text) // total_pages)
+        page_idx = page_order - 1
+        start = page_idx * (len(resources_text) // total_pages)
+        resources_excerpt = resources_text[start:start + chunk_size]
+        if not resources_excerpt.strip():
+            resources_excerpt = resources_text[:chunk_size]
+    else:
+        resources_excerpt = resources_text[:8000]
+
+    # 공통 CSS에서 클래스 목록 추출
+    css_classes_list = re.findall(r'\.(rpt-[\w-]+)', common_css) if common_css else []
+    css_classes_unique = list(dict.fromkeys(css_classes_list))  # 중복 제거 (순서 유지)
+    css_classes_str = ", ".join(f".{c}" for c in css_classes_unique) if css_classes_unique else "없음 (인라인 스타일 사용)"
+
+    system_template = await get_prompt_content("html_page_generation_system")
+    user_template = await get_prompt_content("html_page_generation_user")
+
+    system_prompt = system_template.format(
+        lang_instruction=lang_instruction,
+        skill_prompt=skill_prompt if skill_prompt else "특별한 스킬 지침 없음",
+        theme=theme,
+    )
+
+    user_prompt = user_template.format(
+        lang_instruction=lang_instruction,
+        page_title=page_info.get("title", ""),
+        page_summary=page_info.get("summary", ""),
+        key_points=key_points_str,
+        report_title=meta.get("title", "리포트"),
+        page_order=page_order,
+        total_pages=total_pages,
+        previous_page_titles=previous_page_titles,
+        resources_text=resources_excerpt,
+        instructions=instructions if instructions else "리소스 내용을 바탕으로 전문적인 페이지를 생성해주세요.",
+        css_classes=css_classes_str,
+    )
+
+    return system_prompt, user_prompt
+
+
+def _parse_html_report_outline(response_text: str) -> dict | None:
+    """LLM 응답에서 HTML 리포트 아웃라인 JSON을 파싱"""
+    text = response_text.strip()
+
+    # ```json ... ``` 블록 추출
+    if "```json" in text:
+        start = text.index("```json") + 7
+        try:
+            end = text.rindex("```")
+            if end > start:
+                text = text[start:end].strip()
+            else:
+                text = text[start:].strip()
+        except ValueError:
+            text = text[start:].strip()
+    elif "```" in text:
+        start = text.index("```") + 3
+        try:
+            end = text.rindex("```")
+            if end > start:
+                text = text[start:end].strip()
+            else:
+                text = text[start:].strip()
+        except ValueError:
+            text = text[start:].strip()
+
+    parsed = None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        # 전략 1: { ... } 또는 [ ... ] 경계 찾기
+        for start_char, end_char in [("{", "}"), ("[", "]")]:
+            if start_char in text:
+                try:
+                    s = text.index(start_char)
+                    e = text.rindex(end_char) + 1
+                    parsed = json.loads(text[s:e])
+                    break
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+        # 전략 2: "pages" 키를 찾아 배열 직접 추출
+        if parsed is None and '"pages"' in text:
+            try:
+                # "pages": [...] 패턴 매칭 (중첩 대괄호 처리)
+                pages_idx = text.index('"pages"')
+                bracket_start = text.index('[', pages_idx)
+                depth = 0
+                end_idx = bracket_start
+                for i in range(bracket_start, len(text)):
+                    if text[i] == '[':
+                        depth += 1
+                    elif text[i] == ']':
+                        depth -= 1
+                        if depth == 0:
+                            end_idx = i + 1
+                            break
+                pages_json = text[bracket_start:end_idx]
+                pages_list = json.loads(pages_json)
+                if isinstance(pages_list, list) and pages_list:
+                    # meta도 추출 시도
+                    meta = {}
+                    if '"meta"' in text:
+                        try:
+                            meta_idx = text.index('"meta"')
+                            meta_brace = text.index('{', meta_idx)
+                            d2 = 0
+                            for j in range(meta_brace, len(text)):
+                                if text[j] == '{': d2 += 1
+                                elif text[j] == '}':
+                                    d2 -= 1
+                                    if d2 == 0:
+                                        meta = json.loads(text[meta_brace:j+1])
+                                        break
+                        except Exception:
+                            pass
+                    parsed = {"meta": meta, "pages": pages_list}
+            except Exception as e:
+                print(f"[LLM-HTML-Outline] pages 직접 추출 실패: {e}")
+
+    if parsed is None:
+        print(f"[LLM-HTML-Outline] 파싱 완전 실패 - 원본 텍스트 앞 500자: {text[:500]}")
+        return None
+
+    if isinstance(parsed, dict):
+        pages = parsed.get("pages", [])
+        if isinstance(pages, list) and pages:
+            return {
+                "meta": parsed.get("meta", {}),
+                "pages": pages,
+            }
+
+    # parsed가 list인 경우 (pages 배열만 반환한 경우)
+    if isinstance(parsed, list) and parsed:
+        return {
+            "meta": {},
+            "pages": parsed,
+        }
+
+    print(f"[LLM-HTML-Outline] 파싱 결과에 pages 없음 - parsed type: {type(parsed)}")
+    return None
+
+
+async def generate_html_report_outline_stream(
+    resources_text: str,
+    instructions: str,
+    skill_prompt: str,
+    lang: str = "",
+    page_count: str = "auto",
+):
+    """Phase 1: 스트리밍 방식 HTML 리포트 아웃라인 생성
+
+    아웃라인(페이지 제목 + 요약 + 핵심 포인트)만 생성합니다.
+    빠른 모델(ANTHROPIC_OUTLINE_MODEL)을 사용하여 신속하게 구조를 설계합니다.
+
+    Yields:
+        ("delta", str)   - Claude에서 스트리밍된 텍스트 청크
+        ("result", dict) - 최종 파싱 결과: {"meta": {...}, "pages": [...]}
+    """
+    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+        yield ("result", {
+            "meta": {"title": "리포트", "description": ""},
+            "pages": [
+                {"order": 1, "title": "내용 정리", "summary": "리소스 내용을 정리합니다.", "key_points": ["핵심 내용"]}
+            ],
+        })
+        return
+
+    system_prompt, user_prompt = await _build_html_report_outline_prompts(
+        resources_text, instructions, skill_prompt, lang, page_count=page_count,
+    )
+
+    # 아웃라인용 모델 (빠른 모델 사용)
+    prompt_model = await get_prompt_model("html_report_outline_system")
+    effective_model = prompt_model or settings.ANTHROPIC_OUTLINE_MODEL
+
+    try:
+        full_text = ""
+        async for delta in _stream_claude_api(system_prompt, user_prompt, model=effective_model, max_tokens=4096):
+            full_text += delta
+            yield ("delta", delta)
+
+        print(f"[LLM-HTML-Outline] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {effective_model})")
+        parsed = _parse_html_report_outline(full_text)
+        if parsed:
+            page_count_result = len(parsed.get("pages", []))
+            print(f"[LLM-HTML-Outline] 파싱 성공 - pages: {page_count_result}개")
+
+            # 자동 모드에서 1페이지만 생성된 경우 → 재시도 (명시적 페이지 수 지정)
+            if page_count_result <= 1 and (not page_count or page_count == "auto"):
+                print(f"[LLM-HTML-Outline] 1페이지만 생성됨 → 3페이지로 재시도")
+                yield ("retry", "재시도 중...")
+                retry_system, retry_user = await _build_html_report_outline_prompts(
+                    resources_text, instructions, skill_prompt, lang, page_count="3",
+                )
+                retry_text = ""
+                async for delta2 in _stream_claude_api(retry_system, retry_user, model=effective_model, max_tokens=4096):
+                    retry_text += delta2
+                    yield ("retry_delta", delta2)
+                retry_parsed = _parse_html_report_outline(retry_text)
+                if retry_parsed and len(retry_parsed.get("pages", [])) > 1:
+                    print(f"[LLM-HTML-Outline] 재시도 성공 - pages: {len(retry_parsed['pages'])}개")
+                    parsed = retry_parsed
+                else:
+                    print(f"[LLM-HTML-Outline] 재시도 실패 - 원본 유지 ({page_count_result}페이지)")
+
+            yield ("result", parsed)
+        else:
+            print(f"[LLM-HTML-Outline] 파싱 실패 → 재시도")
+            print(f"[LLM-HTML-Outline] 원본 응답 앞 500자: {full_text[:500]}")
+            # 파싱 실패 시 재시도 (명시적 페이지 수로)
+            yield ("retry", "아웃라인 재구성 중...")
+            retry_system, retry_user = await _build_html_report_outline_prompts(
+                resources_text, instructions, skill_prompt, lang, page_count="3",
+            )
+            retry_text = ""
+            async for delta2 in _stream_claude_api(retry_system, retry_user, model=effective_model, max_tokens=4096):
+                retry_text += delta2
+                yield ("retry_delta", delta2)
+            retry_parsed = _parse_html_report_outline(retry_text)
+            if retry_parsed and retry_parsed.get("pages"):
+                print(f"[LLM-HTML-Outline] 재시도 성공 - pages: {len(retry_parsed['pages'])}개")
+                yield ("result", retry_parsed)
+            else:
+                print(f"[LLM-HTML-Outline] 재시도도 실패 → 폴백 사용")
+                if retry_text:
+                    print(f"[LLM-HTML-Outline] 재시도 응답 앞 500자: {retry_text[:500]}")
+                yield ("result", {
+                    "meta": {"title": "리포트", "description": ""},
+                    "pages": [
+                        {"order": 1, "title": "내용 정리", "summary": "리소스 내용을 정리합니다.", "key_points": ["핵심 내용"]}
+                    ],
+                })
+    except Exception as e:
+        import traceback
+        print(f"[LLM-HTML-Outline] Streaming 호출 실패: {e}")
+        traceback.print_exc()
+        yield ("result", {
+            "meta": {"title": "리포트", "description": ""},
+            "pages": [
+                {"order": 1, "title": "내용 정리", "summary": "리소스 내용을 정리합니다.", "key_points": ["핵심 내용"]}
+            ],
+        })
+
+
+async def generate_html_page_content(
+    resources_text: str,
+    instructions: str,
+    skill_prompt: str,
+    page_info: dict,
+    all_pages_outline: dict,
+    lang: str = "",
+    theme: str = "corporate",
+    common_css: str = "",
+):
+    """Phase 2: 단일 HTML 리포트 페이지 콘텐츠 생성 (스트리밍)
+
+    아웃라인의 각 페이지에 대해 개별적으로 호출하여 HTML 콘텐츠를 생성합니다.
+    스트리밍 방식으로 실시간 진행을 표시합니다.
+
+    Yields:
+        ("delta", str)   - Claude에서 스트리밍된 텍스트 청크
+        ("result", str)  - 최종 HTML 문자열
+    """
+    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+        fallback_html = f'<div style="width:960px;height:540px;padding:40px;font-family:Arial,sans-serif;"><h1>{page_info.get("title", "페이지")}</h1><p>{page_info.get("summary", "")}</p></div>'
+        yield ("result", fallback_html)
+        return
+
+    system_prompt, user_prompt = await _build_html_page_prompts(
+        resources_text, instructions, skill_prompt,
+        page_info, all_pages_outline, lang, theme, common_css=common_css,
+    )
+
+    # 페이지 생성용 모델 (고품질 모델 사용)
+    prompt_model = await get_prompt_model("html_page_generation_system")
+    effective_model = prompt_model or settings.ANTHROPIC_MODEL
+
+    try:
+        full_text = ""
+        async for delta in _stream_claude_api(system_prompt, user_prompt, model=effective_model, max_tokens=8192):
+            full_text += delta
+            yield ("delta", delta)
+
+        page_order = page_info.get("order", "?")
+        print(f"[LLM-HTML-Page] 페이지 {page_order} 스트리밍 완료 - 길이: {len(full_text)} chars (model: {effective_model})")
+        yield ("result", full_text)
+    except Exception as e:
+        import traceback
+        print(f"[LLM-HTML-Page] 페이지 {page_info.get('order', '?')} 생성 실패: {e}")
+        traceback.print_exc()
+        fallback_html = f'<div style="width:960px;height:540px;padding:40px;font-family:Arial,sans-serif;"><h1>{page_info.get("title", "페이지")}</h1><p>{page_info.get("summary", "")}</p></div>'
+        yield ("result", fallback_html)

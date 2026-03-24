@@ -109,3 +109,21 @@ class TemplateUpdate(BaseModel):
 class BulkFontUpdate(BaseModel):
     from_font: Optional[str] = None  # None이면 전체 텍스트 대상
     to_font: str
+
+
+class HtmlSkillCreate(BaseModel):
+    title: str
+    description: str = ""
+    skill_prompt: str = ""
+    is_published: bool = False
+    page_count_default: str = "auto"
+    theme: str = "corporate"
+
+
+class HtmlSkillUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    skill_prompt: Optional[str] = None
+    is_published: Optional[bool] = None
+    page_count_default: Optional[str] = None
+    theme: Optional[str] = None

@@ -3,13 +3,16 @@
 import os
 import uuid
 import logging
+import asyncio
 from datetime import datetime
 
 from pptx import Presentation
 from pptx.util import Pt, Emu
 from pptx.enum.shapes import MSO_SHAPE, MSO_SHAPE_TYPE
 from pptx.enum.text import PP_ALIGN
+from pptx.enum.chart import XL_CHART_TYPE
 from pptx.dml.color import RGBColor
+from pptx.oxml.ns import qn
 
 from services.mongo_service import get_db
 from config import settings
@@ -20,8 +23,16 @@ logger = logging.getLogger(__name__)
 
 SLIDE_W_PX = 960
 SLIDE_H_PX = 540
-SLIDE_W_EMU = 12192000
-SLIDE_H_EMU = 6858000
+# 기본 EMU (16:9 표준): 실제 파싱 시 PPTX 슬라이드 크기로 대체됨
+SLIDE_W_EMU = 9144000
+SLIDE_H_EMU = 5148000
+
+# 슬라이드 사이즈별 상수 (ppt_service.py와 동일)
+SLIDE_SIZES = {
+    "16:9": {"px_w": 960, "px_h": 540, "emu_w": 9144000,  "emu_h": 5148000},
+    "4:3":  {"px_w": 960, "px_h": 720, "emu_w": 9144000,  "emu_h": 6858000},
+    "A4":   {"px_w": 960, "px_h": 665, "emu_w": 9900000,  "emu_h": 6858000},
+}
 
 # ============ 역방향 도형 매핑 (MSO_SHAPE enum → 문자열) ============
 
@@ -111,15 +122,79 @@ _REVERSE_SHAPE_MAP = {v: k for k, v in _FORWARD_SHAPE_MAP.items()}
 _TOC_KEYWORDS = {"목차", "contents", "table of contents", "index"}
 _CLOSING_KEYWORDS = {"감사", "thank", "q&a", "질의", "문의"}
 
+# ============ 차트 타입 매핑 ============
+
+_XL_CHART_TYPE_MAP = {}
+
+def _map_xl_chart_type(xl_type) -> str:
+    """XL_CHART_TYPE enum 값을 내부 문자열 타입으로 매핑"""
+    try:
+        # Bar / Column 계열
+        if xl_type in (
+            XL_CHART_TYPE.BAR_CLUSTERED, XL_CHART_TYPE.BAR_STACKED,
+            XL_CHART_TYPE.BAR_STACKED_100,
+            XL_CHART_TYPE.COLUMN_CLUSTERED, XL_CHART_TYPE.COLUMN_STACKED,
+            XL_CHART_TYPE.COLUMN_STACKED_100,
+            XL_CHART_TYPE.THREE_D_BAR_CLUSTERED, XL_CHART_TYPE.THREE_D_BAR_STACKED,
+            XL_CHART_TYPE.THREE_D_BAR_STACKED_100,
+            XL_CHART_TYPE.THREE_D_COLUMN, XL_CHART_TYPE.THREE_D_COLUMN_CLUSTERED,
+            XL_CHART_TYPE.THREE_D_COLUMN_STACKED, XL_CHART_TYPE.THREE_D_COLUMN_STACKED_100,
+        ):
+            return "bar"
+        # Line 계열
+        if xl_type in (
+            XL_CHART_TYPE.LINE, XL_CHART_TYPE.LINE_MARKERS,
+            XL_CHART_TYPE.LINE_MARKERS_STACKED, XL_CHART_TYPE.LINE_STACKED,
+            XL_CHART_TYPE.LINE_MARKERS_STACKED_100, XL_CHART_TYPE.LINE_STACKED_100,
+            XL_CHART_TYPE.THREE_D_LINE,
+        ):
+            return "line"
+        # Pie 계열
+        if xl_type in (
+            XL_CHART_TYPE.PIE, XL_CHART_TYPE.PIE_EXPLODED,
+            XL_CHART_TYPE.THREE_D_PIE, XL_CHART_TYPE.THREE_D_PIE_EXPLODED,
+            XL_CHART_TYPE.PIE_OF_PIE, XL_CHART_TYPE.BAR_OF_PIE,
+        ):
+            return "pie"
+        # Doughnut 계열
+        if xl_type in (
+            XL_CHART_TYPE.DOUGHNUT, XL_CHART_TYPE.DOUGHNUT_EXPLODED,
+        ):
+            return "doughnut"
+        # Area 계열
+        if xl_type in (
+            XL_CHART_TYPE.AREA, XL_CHART_TYPE.AREA_STACKED,
+            XL_CHART_TYPE.AREA_STACKED_100,
+            XL_CHART_TYPE.THREE_D_AREA, XL_CHART_TYPE.THREE_D_AREA_STACKED,
+            XL_CHART_TYPE.THREE_D_AREA_STACKED_100,
+        ):
+            return "area"
+        # Radar 계열
+        if xl_type in (
+            XL_CHART_TYPE.RADAR, XL_CHART_TYPE.RADAR_FILLED,
+            XL_CHART_TYPE.RADAR_MARKERS,
+        ):
+            return "radar"
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return "bar"  # 기본값
+
 
 # ============ 유틸리티 함수 ============
 
 
+# 파싱 중 실제 슬라이드 크기를 저장하는 컨텍스트 (parse_pptx_to_slides에서 설정)
+_parse_ctx = {"w_emu": SLIDE_W_EMU, "h_emu": SLIDE_H_EMU, "px_h": SLIDE_H_PX}
+
+
 def _emu_to_px(emu_val, is_horizontal=True):
-    """EMU 값을 캔버스 px 좌표로 변환 (ppt_service.py의 역연산)"""
+    """EMU 값을 캔버스 px 좌표로 변환 (ppt_service.py의 역연산)
+
+    실제 슬라이드 크기는 _parse_ctx에서 참조 (parse_pptx_to_slides에서 설정)
+    """
     if is_horizontal:
-        return round(emu_val / SLIDE_W_EMU * SLIDE_W_PX, 1)
-    return round(emu_val / SLIDE_H_EMU * SLIDE_H_PX, 1)
+        return round(emu_val / _parse_ctx["w_emu"] * SLIDE_W_PX, 1)
+    return round(emu_val / _parse_ctx["h_emu"] * _parse_ctx["px_h"], 1)
 
 
 def _gen_obj_id():
@@ -204,7 +279,7 @@ def _save_image_blob(blob: bytes, content_type: str, subfolder: str = "images") 
 
 
 def _extract_text_style(paragraph):
-    """첫 번째 run에서 텍스트 스타일 추출 (기본값 적용)"""
+    """가장 긴 run(dominant)에서 텍스트 스타일 추출 (기본값 적용)"""
     style = {
         "font_family": "Arial",
         "font_size": 16,
@@ -217,7 +292,8 @@ def _extract_text_style(paragraph):
     if not paragraph.runs:
         return style
 
-    run = paragraph.runs[0]
+    # 가장 텍스트가 긴 run을 dominant로 선택 (스타일 대표성)
+    run = max(paragraph.runs, key=lambda r: len(r.text)) if len(paragraph.runs) > 1 else paragraph.runs[0]
     font = run.font
 
     try:
@@ -279,9 +355,17 @@ def _extract_text_shape(shape, z_index: int) -> dict:
     tf = shape.text_frame
     text_content = _extract_text_content(tf)
 
-    # 첫 번째 paragraph에서 스타일 추출
-    first_para = tf.paragraphs[0] if tf.paragraphs else None
-    text_style = _extract_text_style(first_para) if first_para else {
+    # 가장 텍스트가 많은 paragraph에서 스타일 추출 (대표 스타일)
+    best_para = None
+    best_len = 0
+    for para in tf.paragraphs:
+        para_len = len(para.text)
+        if para_len > best_len:
+            best_len = para_len
+            best_para = para
+    if best_para is None:
+        best_para = tf.paragraphs[0] if tf.paragraphs else None
+    text_style = _extract_text_style(best_para) if best_para else {
         "font_family": "Arial",
         "font_size": 16,
         "color": "#000000",
@@ -342,13 +426,26 @@ def _extract_auto_shape(shape, z_index: int) -> dict | None:
         except (AttributeError, TypeError, ValueError):
             pass
 
-        # 채우기 색상 추출
+        # 채우기 색상 / 투명도 추출
         fill_color = "#4A90D9"
+        fill_opacity = 1.0
         try:
             fill = shape.fill
             if fill.type is not None:
-                fore_color = fill.fore_color
-                fill_color = _safe_rgb(fore_color)
+                try:
+                    fore_color = fill.fore_color
+                    fill_color = _safe_rgb(fore_color)
+                except (AttributeError, TypeError, ValueError):
+                    # 그라데이션 채우기 → 첫 번째 그라데이션 스톱 색상 사용
+                    try:
+                        if hasattr(fill, 'gradient_stops') and fill.gradient_stops:
+                            first_stop = fill.gradient_stops[0]
+                            fill_color = _safe_rgb(first_stop.color)
+                    except (AttributeError, TypeError, ValueError, IndexError):
+                        pass
+            else:
+                # fill.type이 None → 투명 채우기
+                fill_opacity = 0.0
         except (AttributeError, TypeError, ValueError):
             pass
 
@@ -377,7 +474,7 @@ def _extract_auto_shape(shape, z_index: int) -> dict | None:
             "shape_style": {
                 "shape_type": shape_type_str,
                 "fill_color": fill_color,
-                "fill_opacity": 1.0,
+                "fill_opacity": fill_opacity,
                 "stroke_color": stroke_color,
                 "stroke_width": stroke_width,
                 "stroke_dash": "solid",
@@ -416,8 +513,8 @@ def _extract_auto_shape(shape, z_index: int) -> dict | None:
         return None
 
 
-def _extract_table_as_text(shape, z_index: int) -> dict | None:
-    """테이블을 텍스트 오브젝트로 변환 (내용만 추출)"""
+def _extract_table_as_text_fallback(shape, z_index: int) -> dict | None:
+    """테이블을 텍스트 오브젝트로 변환 (내용만 추출) - 폴백용"""
     try:
         table = shape.table
         rows_text = []
@@ -456,6 +553,368 @@ def _extract_table_as_text(shape, z_index: int) -> dict | None:
         return None
 
 
+# ============ 차트 도형 추출 ============
+
+
+def _extract_chart_shape(shape, z_index: int) -> dict | None:
+    """차트 도형 오브젝트 추출"""
+    try:
+        chart = shape.chart
+        chart_type_str = "bar"
+        try:
+            plot = chart.plots[0]
+            chart_type_str = _map_xl_chart_type(plot.chart_type)
+        except (IndexError, AttributeError, TypeError):
+            pass
+
+        # 라벨 추출
+        labels = []
+        try:
+            plot = chart.plots[0]
+            cats = plot.categories
+            if cats is not None:
+                labels = list(cats.flattened_labels) if hasattr(cats, 'flattened_labels') else []
+        except (IndexError, AttributeError, TypeError):
+            pass
+
+        # 데이터셋 추출
+        datasets = []
+        color_scheme = []
+        try:
+            for series in chart.series:
+                ds = {
+                    "label": str(series.name) if series.name else "",
+                    "data": [],
+                }
+                try:
+                    ds["data"] = [v for v in series.values]
+                except (AttributeError, TypeError):
+                    pass
+
+                # 시리즈 색상 추출
+                try:
+                    fill = series.format.fill
+                    if fill.type is not None:
+                        c = _safe_rgb(fill.fore_color)
+                        color_scheme.append(c)
+                except (AttributeError, TypeError, ValueError):
+                    pass
+
+                datasets.append(ds)
+        except (AttributeError, TypeError):
+            pass
+
+        # 차트 제목 추출
+        chart_title = ""
+        try:
+            if chart.has_title and chart.chart_title is not None:
+                chart_title = chart.chart_title.text_frame.text if chart.chart_title.has_text_frame else ""
+        except (AttributeError, TypeError):
+            pass
+
+        # show_legend
+        show_legend = True
+        try:
+            show_legend = bool(chart.has_legend)
+        except (AttributeError, TypeError):
+            pass
+
+        if not color_scheme:
+            color_scheme = ["#4472C4", "#ED7D31", "#A5A5A5", "#FFC000", "#5B9BD5", "#70AD47"]
+
+        return {
+            "obj_id": _gen_obj_id(),
+            "obj_type": "chart",
+            "x": _emu_to_px(shape.left, is_horizontal=True),
+            "y": _emu_to_px(shape.top, is_horizontal=False),
+            "width": _emu_to_px(shape.width, is_horizontal=True),
+            "height": _emu_to_px(shape.height, is_horizontal=False),
+            "chart_style": {
+                "chart_type": chart_type_str,
+                "chart_data": {
+                    "labels": labels,
+                    "datasets": datasets,
+                },
+                "title": chart_title,
+                "show_legend": show_legend,
+                "show_grid": True,
+                "color_scheme": color_scheme,
+            },
+            "z_index": z_index,
+            "role": "chart",
+            "placeholder": None,
+        }
+    except Exception as e:
+        logger.warning(f"차트 도형 추출 실패: {e}")
+        return None
+
+
+# ============ 테이블 도형 추출 ============
+
+
+def _extract_table_shape(shape, z_index: int) -> dict | None:
+    """테이블을 table 오브젝트로 추출 (구조화된 데이터 포함)"""
+    try:
+        table = shape.table
+        rows_count = len(table.rows)
+        cols_count = len(table.columns)
+
+        # 2D 데이터 배열 추출
+        data = []
+        cell_styles = {}
+        merged_cells = []
+
+        for r in range(rows_count):
+            row_data = []
+            for c in range(cols_count):
+                cell = table.cell(r, c)
+                row_data.append(cell.text.strip())
+
+                # 셀 스타일 추출
+                cs = {}
+                try:
+                    cell_fill = cell.fill
+                    if cell_fill.type is not None:
+                        cs["bg_color"] = _safe_rgb(cell_fill.fore_color)
+                except (AttributeError, TypeError, ValueError):
+                    pass
+
+                # 텍스트 색상 / 볼드
+                try:
+                    if cell.text_frame and cell.text_frame.paragraphs:
+                        first_para = cell.text_frame.paragraphs[0]
+                        if first_para.runs:
+                            run = first_para.runs[0]
+                            cs["text_color"] = _safe_font_color(run.font)
+                            try:
+                                cs["bold"] = bool(run.font.bold)
+                            except (AttributeError, TypeError):
+                                pass
+                except (AttributeError, TypeError):
+                    pass
+
+                if cs:
+                    cell_styles[f"{r}_{c}"] = cs
+
+                # 병합 셀 감지
+                try:
+                    if cell.is_merge_origin:
+                        merged_cells.append({
+                            "start_row": r,
+                            "start_col": c,
+                            "end_row": r + cell.span_height - 1,
+                            "end_col": c + cell.span_width - 1,
+                        })
+                except (AttributeError, TypeError):
+                    pass
+
+            data.append(row_data)
+
+        if not data:
+            return _extract_table_as_text_fallback(shape, z_index)
+
+        # 헤더 감지 (첫 번째 행의 볼드 또는 배경색)
+        header_row = False
+        header_bg_color = "#4472C4"
+        header_text_color = "#FFFFFF"
+        if rows_count > 1:
+            # 첫 번째 행의 셀 스타일 확인
+            first_row_styles = [cell_styles.get(f"0_{c}", {}) for c in range(cols_count)]
+            has_bg = any(s.get("bg_color") for s in first_row_styles)
+            has_bold = any(s.get("bold") for s in first_row_styles)
+            if has_bg or has_bold:
+                header_row = True
+                for s in first_row_styles:
+                    if s.get("bg_color"):
+                        header_bg_color = s["bg_color"]
+                        break
+                for s in first_row_styles:
+                    if s.get("text_color"):
+                        header_text_color = s["text_color"]
+                        break
+
+        # 테두리 색상 추출 (XML에서)
+        border_color = "#BFBFBF"
+        try:
+            tbl_elem = shape._element
+            tc_elems = tbl_elem.findall(f".//{qn('a:tcPr')}")
+            if tc_elems:
+                for border_tag in ['a:lnL', 'a:lnR', 'a:lnT', 'a:lnB']:
+                    border = tc_elems[0].find(f"{qn(border_tag)}")
+                    if border is not None:
+                        srgb = border.find(f".//{qn('a:srgbClr')}")
+                        if srgb is not None:
+                            val = srgb.get("val")
+                            if val:
+                                border_color = f"#{val}"
+                                break
+        except (AttributeError, TypeError):
+            pass
+
+        # 폰트 정보 추출 (샘플 셀에서)
+        font_family = "Arial"
+        font_size = 11
+        try:
+            for r in range(min(rows_count, 3)):
+                for c in range(min(cols_count, 3)):
+                    cell = table.cell(r, c)
+                    if cell.text_frame and cell.text_frame.paragraphs:
+                        for para in cell.text_frame.paragraphs:
+                            for run in para.runs:
+                                if run.font.name:
+                                    font_family = run.font.name
+                                if run.font.size is not None:
+                                    font_size = max(1, round(run.font.size / 12700))
+                                break
+                            if font_family != "Arial":
+                                break
+                    if font_family != "Arial":
+                        break
+                if font_family != "Arial":
+                    break
+        except (AttributeError, TypeError):
+            pass
+
+        return {
+            "obj_id": _gen_obj_id(),
+            "obj_type": "table",
+            "x": _emu_to_px(shape.left, is_horizontal=True),
+            "y": _emu_to_px(shape.top, is_horizontal=False),
+            "width": _emu_to_px(shape.width, is_horizontal=True),
+            "height": _emu_to_px(shape.height, is_horizontal=False),
+            "table_style": {
+                "rows": rows_count,
+                "cols": cols_count,
+                "data": data,
+                "header_row": header_row,
+                "banded_rows": False,
+                "banded_cols": False,
+                "cell_styles": cell_styles,
+                "border_color": border_color,
+                "border_width": 1,
+                "header_bg_color": header_bg_color,
+                "header_text_color": header_text_color,
+                "font_family": font_family,
+                "font_size": font_size,
+                "merged_cells": merged_cells,
+            },
+            "z_index": z_index,
+            "role": "table",
+            "placeholder": None,
+        }
+    except Exception as e:
+        logger.warning(f"테이블 도형 구조화 추출 실패, 폴백: {e}")
+        return _extract_table_as_text_fallback(shape, z_index)
+
+
+# ============ 그룹 도형 추출 ============
+
+
+def _extract_group_shape(shape, z_index: int) -> list[dict]:
+    """그룹 도형 내부의 자식 도형들을 재귀적으로 추출
+
+    그룹 좌표를 절대 좌표로 변환하여 반환합니다.
+    Returns: list[dict] - 추출된 오브젝트 리스트
+    """
+    results = []
+    try:
+        group_left = shape.left
+        group_top = shape.top
+        group_width = shape.width
+        group_height = shape.height
+
+        # 그룹 내부 좌표계 (chOff / chExt) 추출
+        grpSpPr = shape._element.find(qn('p:grpSpPr'))
+        if grpSpPr is None:
+            grpSpPr = shape._element
+
+        xfrm = grpSpPr.find(qn('a:xfrm'))
+        if xfrm is None:
+            # grpSp 자체의 xfrm
+            xfrm = shape._element.find(f".//{qn('a:xfrm')}")
+
+        ch_off_x = 0
+        ch_off_y = 0
+        ch_ext_cx = group_width
+        ch_ext_cy = group_height
+
+        if xfrm is not None:
+            ch_off = xfrm.find(qn('a:chOff'))
+            ch_ext = xfrm.find(qn('a:chExt'))
+            if ch_off is not None:
+                ch_off_x = int(ch_off.get('x', '0'))
+                ch_off_y = int(ch_off.get('y', '0'))
+            if ch_ext is not None:
+                ch_ext_cx = int(ch_ext.get('cx', str(group_width)))
+                ch_ext_cy = int(ch_ext.get('cy', str(group_height)))
+
+        # 스케일 팩터 계산 (0 나누기 방지)
+        scale_x = group_width / ch_ext_cx if ch_ext_cx > 0 else 1.0
+        scale_y = group_height / ch_ext_cy if ch_ext_cy > 0 else 1.0
+
+        child_z = z_index
+        for child_shape in shape.shapes:
+            try:
+                # 재귀 처리: 자식이 그룹이면 재귀 호출
+                is_group = False
+                try:
+                    if child_shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+                        is_group = True
+                except (AttributeError, TypeError):
+                    pass
+
+                if is_group:
+                    # 그룹 내부 좌표 → 절대 좌표 변환 후 재귀
+                    child_results = _extract_group_shape(child_shape, child_z)
+                    # 좌표 변환 (자식 그룹의 좌표는 자식 좌표계 기준)
+                    for obj in child_results:
+                        # 자식 결과의 좌표는 이미 px 단위이므로 EMU로 역변환 → 그룹 변환 → px 변환이 필요
+                        # 하지만 자식 그룹이 재귀적으로 처리되므로 그대로 추가
+                        results.append(obj)
+                        child_z += 1
+                    continue
+
+                result = _extract_shape(child_shape, child_z)
+                if result is None:
+                    continue
+
+                # 결과가 리스트인 경우 (중첩 그룹)
+                objs = result if isinstance(result, list) else [result]
+                for obj in objs:
+                    # 자식 도형의 좌표를 절대 좌표로 변환
+                    # child 좌표는 _extract_shape에서 이미 px로 변환됨
+                    # 원래 EMU 좌표를 다시 가져와서 변환해야 함
+                    try:
+                        child_left = child_shape.left
+                        child_top = child_shape.top
+                        child_w = child_shape.width
+                        child_h = child_shape.height
+
+                        abs_x = group_left + int((child_left - ch_off_x) * scale_x)
+                        abs_y = group_top + int((child_top - ch_off_y) * scale_y)
+                        abs_w = int(child_w * scale_x)
+                        abs_h = int(child_h * scale_y)
+
+                        obj["x"] = _emu_to_px(abs_x, is_horizontal=True)
+                        obj["y"] = _emu_to_px(abs_y, is_horizontal=False)
+                        obj["width"] = _emu_to_px(abs_w, is_horizontal=True)
+                        obj["height"] = _emu_to_px(abs_h, is_horizontal=False)
+                    except (AttributeError, TypeError):
+                        pass
+
+                    results.append(obj)
+                    child_z += 1
+
+            except Exception as e:
+                logger.warning(f"그룹 자식 도형 추출 실패: {e}")
+                continue
+
+    except Exception as e:
+        logger.warning(f"그룹 도형 추출 실패: {e}")
+
+    return results
+
+
 # ============ 배경 이미지 추출 ============
 
 
@@ -469,7 +928,6 @@ def _extract_slide_background(slide) -> str | None:
         if fill.type is not None:
             try:
                 # XML에서 직접 blipFill 확인
-                from pptx.oxml.ns import qn
                 bg_elem = bg._element
                 blip_fills = bg_elem.findall(f".//{qn('a:blip')}")
                 if blip_fills:
@@ -695,7 +1153,11 @@ def _classify_slide(slide_index: int, total_slides: int, objects: list[dict]) ->
             return {"content_type": "closing", "layout": "closing"}
 
     # 5. 텍스트 박스 적고 (1-2개) 큰 폰트 (>24pt) → section_divider
-    if 1 <= len(text_objs) <= 2 and max_font_size > 24:
+    #    단, 테이블이나 차트가 있는 슬라이드는 section_divider가 아닌 body로 분류
+    has_data_objects = any(
+        obj.get("obj_type") in ("table", "chart") for obj in objects
+    )
+    if 1 <= len(text_objs) <= 2 and max_font_size > 24 and not has_data_objects:
         return {"content_type": "section_divider", "layout": "divider"}
 
     # 6. 기본값 → body / single_column
@@ -707,15 +1169,22 @@ def _build_slide_meta(classification: dict, objects: list[dict]) -> dict:
     has_title = False
     has_governance = False
     description_count = 0
+    table_count = 0
+    chart_count = 0
 
     for obj in objects:
         role = obj.get("role")
+        obj_type = obj.get("obj_type")
         if role == "title":
             has_title = True
         elif role == "governance":
             has_governance = True
         elif role == "description":
             description_count += 1
+        if obj_type == "table":
+            table_count += 1
+        elif obj_type == "chart":
+            chart_count += 1
 
     return {
         "content_type": classification["content_type"],
@@ -723,6 +1192,8 @@ def _build_slide_meta(classification: dict, objects: list[dict]) -> dict:
         "has_title": has_title,
         "has_governance": has_governance,
         "description_count": description_count,
+        "table_count": table_count,
+        "chart_count": chart_count,
     }
 
 
@@ -750,10 +1221,15 @@ def _parse_slide(pptx_slide, slide_index: int, total_slides: int) -> dict:
 
     for shape in shapes_list[start_idx:]:
         try:
-            obj = _extract_shape(shape, z_index)
-            if obj is not None:
-                objects.append(obj)
-                z_index += 1
+            result = _extract_shape(shape, z_index)
+            if result is not None:
+                if isinstance(result, list):
+                    for obj in result:
+                        objects.append(obj)
+                        z_index += 1
+                else:
+                    objects.append(result)
+                    z_index += 1
         except Exception as e:
             logger.warning(f"슬라이드 {slide_index + 1} 도형 추출 실패: {e}")
             continue
@@ -788,13 +1264,19 @@ def _parse_slide(pptx_slide, slide_index: int, total_slides: int) -> dict:
     }
 
 
-def _extract_shape(shape, z_index: int) -> dict | None:
-    """도형 타입을 판별하여 적절한 추출 함수 호출"""
-    # 그룹 도형 → 건너뛰기
+def _extract_shape(shape, z_index: int) -> dict | list | None:
+    """도형 타입을 판별하여 적절한 추출 함수 호출
+
+    Returns:
+        dict - 단일 오브젝트
+        list[dict] - 그룹 도형에서 추출된 여러 오브젝트
+        None - 건너뛰기
+    """
+    # 그룹 도형 → 재귀적으로 추출하여 리스트 반환
     try:
         if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
-            logger.debug("그룹 도형 건너뜀")
-            return None
+            group_objects = _extract_group_shape(shape, z_index)
+            return group_objects if group_objects else None
     except (AttributeError, TypeError):
         pass
 
@@ -815,10 +1297,17 @@ def _extract_shape(shape, z_index: int) -> dict | None:
     if is_picture:
         return _extract_image_shape(shape, z_index)
 
-    # 테이블
+    # 차트 (테이블보다 먼저 확인)
+    try:
+        if shape.has_chart:
+            return _extract_chart_shape(shape, z_index)
+    except (AttributeError, TypeError):
+        pass
+
+    # 테이블 (구조화된 추출)
     try:
         if shape.has_table:
-            return _extract_table_as_text(shape, z_index)
+            return _extract_table_shape(shape, z_index)
     except (AttributeError, TypeError):
         pass
 
@@ -864,6 +1353,80 @@ def _extract_shape(shape, z_index: int) -> dict | None:
 # ============ 메인 함수 ============
 
 
+def parse_pptx_to_slides(file_path: str) -> dict:
+    """PPTX 파일을 파싱하여 슬라이드 데이터를 반환 (DB 저장 없음)
+
+    Args:
+        file_path: PPTX 파일 경로
+
+    Returns:
+        {
+            "slides": [{"objects": [...], "classification": {...}, "slide_meta": {...}, "background_image": str|None}],
+            "slide_size": "16:9",
+            "background_image": str|None,
+            "total_slides": int
+        }
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"PPTX 파일을 찾을 수 없습니다: {file_path}")
+
+    prs = Presentation(file_path)
+    slides = list(prs.slides)
+    total_slides = len(slides)
+
+    if total_slides == 0:
+        raise ValueError("슬라이드가 없는 PPTX 파일입니다")
+
+    # 슬라이드 사이즈 감지
+    slide_width = prs.slide_width
+    slide_height = prs.slide_height
+    ratio = slide_width / slide_height if slide_height > 0 else 1.78
+    if ratio > 1.6:
+        slide_size = "16:9"
+    elif ratio > 1.2:
+        slide_size = "4:3"
+    else:
+        slide_size = "A4"
+
+    # 실제 슬라이드 크기로 EMU 변환 컨텍스트 설정
+    sz = SLIDE_SIZES.get(slide_size, SLIDE_SIZES["16:9"])
+    _parse_ctx["w_emu"] = int(slide_width) if slide_width else sz["emu_w"]
+    _parse_ctx["h_emu"] = int(slide_height) if slide_height else sz["emu_h"]
+    _parse_ctx["px_h"] = sz["px_h"]
+
+    # 슬라이드 파싱
+    parsed_slides = []
+    for idx, pptx_slide in enumerate(slides):
+        try:
+            parsed = _parse_slide(pptx_slide, idx, total_slides)
+            parsed_slides.append(parsed)
+        except Exception as e:
+            logger.error(f"슬라이드 {idx + 1} 파싱 실패: {e}")
+            parsed_slides.append({
+                "objects": [],
+                "classification": {"content_type": "body", "layout": "single_column"},
+                "slide_meta": {
+                    "content_type": "body",
+                    "layout": "single_column",
+                    "has_title": False,
+                    "has_governance": False,
+                    "description_count": 0,
+                    "table_count": 0,
+                    "chart_count": 0,
+                },
+                "background_image": None,
+            })
+
+    template_bg = parsed_slides[0]["background_image"] if parsed_slides else None
+
+    return {
+        "slides": parsed_slides,
+        "slide_size": slide_size,
+        "background_image": template_bg,
+        "total_slides": total_slides,
+    }
+
+
 async def import_pptx_as_template(file_path: str, template_name: str, user_key: str) -> dict:
     """PPTX 파일을 분석하여 템플릿 + 슬라이드를 자동 생성
 
@@ -875,58 +1438,24 @@ async def import_pptx_as_template(file_path: str, template_name: str, user_key: 
     Returns:
         {"template_id": str, "slides_count": int, "classification": [...]}
     """
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"PPTX 파일을 찾을 수 없습니다: {file_path}")
-
-    # PPTX 파일 열기
-    prs = Presentation(file_path)
-    slides = list(prs.slides)
-    total_slides = len(slides)
-
-    if total_slides == 0:
-        raise ValueError("슬라이드가 없는 PPTX 파일입니다")
+    # PPTX 파싱 (DB 저장 없음) - 동기 함수를 스레드풀에서 실행
+    parse_result = await asyncio.to_thread(parse_pptx_to_slides, file_path)
+    parsed_slides = parse_result["slides"]
+    total_slides = parse_result["total_slides"]
+    template_bg = parse_result["background_image"]
 
     db = get_db()
     now = datetime.utcnow()
 
-    # 슬라이드 파싱
-    parsed_slides = []
+    # 분류 정보 수집
     classifications = []
-
-    for idx, pptx_slide in enumerate(slides):
-        try:
-            parsed = _parse_slide(pptx_slide, idx, total_slides)
-            parsed_slides.append(parsed)
-            classifications.append({
-                "slide_order": idx + 1,
-                "content_type": parsed["classification"]["content_type"],
-                "layout": parsed["classification"]["layout"],
-                "objects_count": len(parsed["objects"]),
-            })
-        except Exception as e:
-            logger.error(f"슬라이드 {idx + 1} 파싱 실패: {e}")
-            # 실패한 슬라이드는 빈 body 슬라이드로 추가
-            parsed_slides.append({
-                "objects": [],
-                "classification": {"content_type": "body", "layout": "single_column"},
-                "slide_meta": {
-                    "content_type": "body",
-                    "layout": "single_column",
-                    "has_title": False,
-                    "has_governance": False,
-                    "description_count": 0,
-                },
-                "background_image": None,
-            })
-            classifications.append({
-                "slide_order": idx + 1,
-                "content_type": "body",
-                "layout": "single_column",
-                "objects_count": 0,
-            })
-
-    # 첫 번째 슬라이드 배경을 템플릿 기본 배경으로 사용
-    template_bg = parsed_slides[0]["background_image"] if parsed_slides else None
+    for idx, parsed in enumerate(parsed_slides):
+        classifications.append({
+            "slide_order": idx + 1,
+            "content_type": parsed["classification"]["content_type"],
+            "layout": parsed["classification"]["layout"],
+            "objects_count": len(parsed["objects"]),
+        })
 
     # 1. 템플릿 생성 (MongoDB)
     template_doc = {

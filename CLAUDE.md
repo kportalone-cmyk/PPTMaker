@@ -121,28 +121,77 @@ d:/PPTMaker/
 - `generated_slides`: 생성된 PPT 슬라이드 데이터
 - `fonts`: 등록된 폰트 정보
 
-## 개발 작업 방식 (병렬 Agent)
+## 개발 작업 방식 (Agent Teams)
 
-대규모 기능 개발 시 마스터 Agent가 작업을 분석하고, 독립적인 단위로 분할하여 서브 Agent를 병렬 실행한다.
+대규모 기능 개발 시 agent-teams 구조를 사용한다. 리드 세션이 작업을 분석하고, teammate를 생성하여 병렬로 작업을 수행한다. 각 teammate는 독립된 context window를 가지며, 공유 task list와 메시징으로 협업한다.
 
-### 규칙
-1. **마스터 Agent**: 요구사항 분석 → 작업 분할 → 서브 Agent 배정 → 결과 통합
-2. **서브 Agent 수**: 마스터가 작업 특성에 따라 최적 개수를 판단 (1~3개)
-   - 파일 충돌이 없는 독립 작업 → 최대 병렬
-   - 의존성이 있는 작업 → 순차 또는 단계별 병렬
-3. **병렬 분할 기준**:
-   - 백엔드 / 프론트엔드 / 테스트 분리
-   - 서로 다른 파일을 수정하는 작업끼리 묶기
-   - 리서치/탐색 작업은 항상 병렬 가능
-4. **충돌 방지**: 같은 파일을 여러 Agent가 수정하지 않도록 마스터가 조율
+### Teammate 구성
 
-### 예시
+프로젝트 특성에 맞는 4개 역할의 teammate를 정의한다. 작업 규모에 따라 리드가 필요한 teammate만 선택적으로 생성한다.
+
+#### 1. backend (백엔드 개발)
+- **담당 영역**: `server/` 폴더 전체
+  - `server/models/` — 데이터 모델 (Pydantic)
+  - `server/services/` — 비즈니스 로직, DB 연동, 외부 API
+  - `server/routers/` — FastAPI 라우터, API 엔드포인트
+  - `server/utils/` — 유틸리티
+  - `server/config.py` — 환경설정
+- **기술 스택**: Python, FastAPI, Motor(MongoDB async), python-pptx, openpyxl, python-docx
+- **규칙**: `.env` 환경변수 사용, MongoDB 인덱스 자동 등록, requirements.txt 자동 업데이트
+
+#### 2. admin-frontend (관리자 프론트엔드)
+- **담당 영역**: `admin/` 폴더 전체
+  - `admin/index.html` — 관리자 메인 페이지
+  - `admin/css/admin.css` — 관리자 스타일
+  - `admin/js/admin.js` — 관리자 로직
+- **기술 스택**: HTML, CSS, JS, jQuery 3.7.1, Tailwind CSS CDN
+- **규칙**: 프레임워크 금지, localStorage 사용 금지, API 호출 시 JWT 경로 포함
+
+#### 3. user-frontend (사용자 프론트엔드)
+- **담당 영역**: `front/` 폴더 전체
+  - `front/index.html` — 사용자 메인 페이지
+  - `front/css/app.css` — 사용자 스타일
+  - `front/js/app.js` — 사용자 로직
+- **기술 스택**: HTML, CSS, JS, jQuery 3.7.1, Tailwind CSS CDN, Chart.js
+- **규칙**: 프레임워크 금지, localStorage 사용 금지, API 호출 시 JWT 경로 포함
+
+#### 4. test (테스트 및 검증)
+- **담당 영역**: 테스트 작성 및 실행, 서버 기동 확인, API 동작 검증
+- **기술 스택**: pytest, httpx (async test client)
+- **규칙**: 다른 teammate가 작업 완료한 후 검증, 실제 MongoDB 연결 필요 시 통합 테스트
+
+### 팀 운영 규칙
+
+1. **리드 역할**: 요구사항 분석 → 작업 분할 → task list 생성 → teammate 생성 → 결과 통합
+2. **teammate 수**: 작업 특성에 따라 리드가 판단 (2~4개)
+   - 백엔드만 변경 → backend 1명
+   - 백엔드 + 프론트엔드 → backend + frontend 2~3명
+   - 전체 기능 개발 → 4명 전원
+3. **파일 충돌 방지**: 각 teammate는 자신의 담당 영역 파일만 수정. 같은 파일을 두 teammate가 동시에 수정하지 않도록 리드가 조율
+4. **의존성 관리**: backend가 API를 먼저 완성 → frontend가 해당 API 연동. task 의존성 설정 활용
+5. **plan approval**: 복잡한 작업은 teammate에게 plan approval을 요구하여 구현 전 리드가 계획 검토
+
+### 팀 생성 프롬프트 예시
+
 ```
-마스터: 요구사항 분석 + 계획 수립
- ├── Agent 1: server/ 백엔드 (모델, 서비스, 라우터)
- ├── Agent 2: front/ 프론트엔드 (HTML, CSS, JS)
- └── Agent 3: 테스트 실행 및 검증
+새 기능 "XXX"를 개발합니다. agent team을 생성해주세요:
+- backend: server/ 백엔드 API 및 서비스 구현
+- user-frontend: front/ 사용자 UI 구현
+- admin-frontend: admin/ 관리자 UI 구현
+- test: API 테스트 작성 및 검증
+
+backend → frontend 순서로 의존성을 설정하고,
+plan approval을 요구해주세요.
 ```
+
+### 작업 규모별 가이드
+
+| 규모 | teammate 수 | 구성 예시 |
+|------|-------------|-----------|
+| 소규모 (단일 영역) | 1~2명 | backend만, 또는 backend + frontend |
+| 중규모 (복수 영역) | 2~3명 | backend + user-frontend + test |
+| 대규모 (전체 기능) | 3~4명 | backend + admin-frontend + user-frontend + test |
+| 리서치/조사 | 2~3명 | 주제별 병렬 탐색 (역할 자유) |
 
 ## 빌드 & 실행
 ```bash

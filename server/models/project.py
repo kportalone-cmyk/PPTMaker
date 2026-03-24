@@ -18,10 +18,11 @@ class ProjectUpdate(BaseModel):
 
 class GenerateRequest(BaseModel):
     project_id: str
-    template_id: str
+    template_id: Optional[str] = ""  # 관리자 템플릿 ID (커스텀 템플릿 사용 시 빈 값 허용)
     instructions: str = ""
     lang: str = ""  # 출력 언어 (ko/en/ja/zh), 빈 값이면 서버 기본 언어
     slide_count: str = "auto"  # 슬라이드 수: "auto" 또는 "5","10","15","20","25","30"
+    custom_template_id: Optional[str] = ""  # 사용자 커스텀 PPTX 템플릿 ID
 
 
 class SlideUpdateRequest(BaseModel):
@@ -100,3 +101,11 @@ class RewriteRequest(BaseModel):
 class TranslateProjectRequest(BaseModel):
     project_id: str
     target_lang: str  # "ko", "en", "ja", "zh"
+
+
+class HtmlReportGenerateRequest(BaseModel):
+    project_id: str
+    skill_id: str
+    instructions: str = ""
+    lang: str = ""
+    page_count: str = "auto"

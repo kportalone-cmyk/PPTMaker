@@ -1,8 +1,8 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from bson import ObjectId
 from datetime import datetime
-from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest, DocxModifyRequest, DocxPrepareRequest, RewriteRequest, TranslateProjectRequest
+from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest, DocxModifyRequest, DocxPrepareRequest, RewriteRequest, TranslateProjectRequest, HtmlReportGenerateRequest
 from services.mongo_service import get_db
 from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible, get_user_by_key
 from services import redis_service
@@ -11,7 +11,7 @@ from services.template_service import recommend_slide, get_template_slides
 from services.ppt_service import generate_pptx
 from services.excel_service import generate_xlsx, auto_generate_chart_definition
 from services.word_service import generate_docx, create_empty_docx, extract_docx_template_structure
-from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content, generate_excel_content_stream, modify_excel_content_stream, generate_docx_content_stream, rewrite_text_stream
+from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content, generate_excel_content_stream, modify_excel_content_stream, generate_docx_content_stream, rewrite_text_stream, generate_html_report_stream, generate_html_report_outline_stream, generate_html_report_css_stream, generate_html_page_content
 from services.search_service import search_web
 from services.onlyoffice_service import create_onlyoffice_document
 from services.file_service import extract_excel_structure
@@ -19,6 +19,7 @@ from config import settings
 import os
 import uuid
 import json
+import asyncio
 import aiofiles
 
 router = APIRouter(tags=["generate"])
@@ -76,20 +77,33 @@ async def prepare_generation(jwt_token: str, data: GenerateRequest):
     if not resources:
         raise HTTPException(status_code=400, detail="리소스가 없습니다. 먼저 자료를 등록하세요.")
 
-    # 템플릿 슬라이드 조회
-    slides = await get_template_slides(data.template_id)
-    if not slides:
-        raise HTTPException(status_code=400, detail="템플릿에 슬라이드가 없습니다.")
+    # 커스텀 템플릿 또는 일반 템플릿 슬라이드 조회
+    if data.custom_template_id:
+        custom_tmpl = await db.custom_templates.find_one({"_id": ObjectId(data.custom_template_id)})
+        if not custom_tmpl:
+            custom_tmpl = await db.custom_templates.find_one({"project_id": data.project_id})
+        slides = custom_tmpl.get("slides", []) if custom_tmpl else []
+        if not slides:
+            raise HTTPException(status_code=400, detail="커스텀 템플릿에 슬라이드가 없습니다.")
+    else:
+        if not data.template_id:
+            raise HTTPException(status_code=400, detail="템플릿을 선택하세요.")
+        slides = await get_template_slides(data.template_id)
+        if not slides:
+            raise HTTPException(status_code=400, detail="템플릿에 슬라이드가 없습니다.")
 
     # 프로젝트에 템플릿/지침 저장
+    update_doc = {
+        "template_id": data.template_id,
+        "instructions": data.instructions,
+        "status": "preparing",
+        "updated_at": datetime.utcnow(),
+    }
+    if data.custom_template_id:
+        update_doc["custom_template_id"] = data.custom_template_id
     await db.projects.update_one(
         {"_id": ObjectId(data.project_id)},
-        {"$set": {
-            "template_id": data.template_id,
-            "instructions": data.instructions,
-            "status": "preparing",
-            "updated_at": datetime.utcnow(),
-        }}
+        {"$set": update_doc}
     )
 
     return {
@@ -389,16 +403,46 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
     if not combined_text.strip():
         raise HTTPException(status_code=400, detail="리소스에 텍스트 내용이 없습니다.")
 
-    # 템플릿 슬라이드 조회
-    slides = await get_template_slides(data.template_id)
+    # 커스텀 템플릿 또는 일반 템플릿 슬라이드 조회
+    custom_template_doc = None
+    if data.custom_template_id:
+        try:
+            custom_template_doc = await db.custom_templates.find_one({"_id": ObjectId(data.custom_template_id)})
+        except Exception:
+            pass
+        if not custom_template_doc:
+            custom_template_doc = await db.custom_templates.find_one({"project_id": data.project_id})
+
+    if custom_template_doc:
+        # 커스텀 템플릿의 슬라이드 사용
+        slides = custom_template_doc.get("slides", [])
+        # slides는 parse_pptx_to_slides 결과의 slides 배열 (각 항목에 objects/classification/slide_meta/background_image)
+        # get_template_slides 형식과 호환되도록 변환
+        converted_slides = []
+        for idx, s in enumerate(slides):
+            converted_slides.append({
+                "_id": f"custom_{idx}",
+                "template_id": f"custom_{data.custom_template_id}",
+                "order": idx + 1,
+                "objects": s.get("objects", []),
+                "slide_meta": s.get("slide_meta", {}),
+                "background_image": s.get("background_image"),
+            })
+        slides = converted_slides
+        bg_image = custom_template_doc.get("background_image")
+    else:
+        if not data.template_id:
+            raise HTTPException(status_code=400, detail="템플릿을 선택하세요.")
+        slides = await get_template_slides(data.template_id)
+        template = await db.templates.find_one({"_id": ObjectId(data.template_id)})
+        bg_image = template.get("background_image") if template else None
+
     if not slides:
         raise HTTPException(status_code=400, detail="템플릿에 슬라이드가 없습니다.")
 
-    template = await db.templates.find_one({"_id": ObjectId(data.template_id)})
-    bg_image = template.get("background_image") if template else None
-
     # 템플릿 슬라이드 분석 (Redis 캐시)
-    slides_meta = await _analyze_template_slides_cached(data.template_id, slides)
+    cache_key = data.custom_template_id if data.custom_template_id else data.template_id
+    slides_meta = await _analyze_template_slides_cached(cache_key, slides)
 
     # 생성 ID (중복 생성 방지 및 취소 체크용)
     generation_id = str(uuid.uuid4())
@@ -407,15 +451,18 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
     await redis_service.clear_generation_cancel(data.project_id)
 
     # 프로젝트 상태 업데이트
+    update_fields = {
+        "template_id": data.template_id,
+        "instructions": data.instructions,
+        "status": "generating",
+        "generation_id": generation_id,
+        "updated_at": datetime.utcnow(),
+    }
+    if data.custom_template_id:
+        update_fields["custom_template_id"] = data.custom_template_id
     await db.projects.update_one(
         {"_id": ObjectId(data.project_id)},
-        {"$set": {
-            "template_id": data.template_id,
-            "instructions": data.instructions,
-            "status": "generating",
-            "generation_id": generation_id,
-            "updated_at": datetime.utcnow(),
-        }}
+        {"$set": update_fields}
     )
 
     def _sse(event: str, payload: dict) -> str:
@@ -2962,6 +3009,591 @@ async def get_shared_docx(share_token: str):
     return {
         "project_name": project.get("name"),
         "docx": doc,
+    }
+
+
+# ============ 커스텀 템플릿 (사용자 PPTX) ============
+
+
+@router.post("/{jwt_token}/api/custom-templates/upload")
+async def upload_custom_template(
+    jwt_token: str,
+    file: UploadFile = File(...),
+    project_id: str = Form(...),
+):
+    """사용자 PPTX 파일을 커스텀 템플릿으로 업로드"""
+    user_key_val = await get_user_key(jwt_token)
+    db = get_db()
+
+    if not file.filename or not file.filename.lower().endswith(".pptx"):
+        raise HTTPException(status_code=400, detail=".pptx 파일만 지원합니다")
+
+    # 파일 저장
+    save_dir = os.path.join(settings.UPLOAD_DIR, "custom_templates")
+    os.makedirs(save_dir, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.pptx"
+    save_path = os.path.join(save_dir, filename)
+
+    try:
+        async with aiofiles.open(save_path, "wb") as f:
+            content = await file.read()
+            await f.write(content)
+
+        from services.pptx_import_service import parse_pptx_to_slides
+        parse_result = await asyncio.to_thread(parse_pptx_to_slides, save_path)
+
+        file_url = f"/uploads/custom_templates/{filename}"
+
+        # DB에 저장 (upsert by project_id)
+        now = datetime.utcnow()
+        custom_doc = {
+            "project_id": project_id,
+            "user_key": user_key_val,
+            "file_path": file_url,
+            "original_filename": file.filename,
+            "slides": parse_result["slides"],
+            "slide_size": parse_result["slide_size"],
+            "background_image": parse_result["background_image"],
+            "total_slides": parse_result["total_slides"],
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        result = await db.custom_templates.update_one(
+            {"project_id": project_id},
+            {"$set": custom_doc},
+            upsert=True,
+        )
+
+        # upsert 후 _id 가져오기
+        doc = await db.custom_templates.find_one({"project_id": project_id})
+        custom_template_id = str(doc["_id"]) if doc else ""
+
+        return {
+            "custom_template_id": custom_template_id,
+            "slides_count": parse_result["total_slides"],
+            "slide_size": parse_result["slide_size"],
+            "filename": file.filename,
+        }
+
+    except Exception as e:
+        # 파일 저장 실패 시 삭제
+        if os.path.exists(save_path):
+            try:
+                os.remove(save_path)
+            except OSError:
+                pass
+        raise HTTPException(status_code=500, detail=f"커스텀 템플릿 업로드 실패: {str(e)}")
+
+
+@router.get("/{jwt_token}/api/custom-templates/{project_id}")
+async def get_custom_template(jwt_token: str, project_id: str):
+    """커스텀 템플릿 정보 조회"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    doc = await db.custom_templates.find_one({"project_id": project_id})
+    if not doc:
+        return {"custom_template": None}
+    doc["_id"] = str(doc["_id"])
+    return {"custom_template": doc}
+
+
+@router.delete("/{jwt_token}/api/custom-templates/{project_id}")
+async def delete_custom_template(jwt_token: str, project_id: str):
+    """커스텀 템플릿 삭제"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    doc = await db.custom_templates.find_one({"project_id": project_id})
+    if doc:
+        # 파일 삭제
+        file_path = doc.get("file_path", "")
+        if file_path:
+            abs_path = os.path.join(".", file_path.lstrip("/"))
+            if os.path.exists(abs_path):
+                try:
+                    os.remove(abs_path)
+                except OSError:
+                    pass
+        await db.custom_templates.delete_one({"project_id": project_id})
+
+    return {"success": True}
+
+
+# ============ HTML 리포트 생성 ============
+
+
+def _clean_html_content(html: str) -> str:
+    """Remove markdown code block wrappers from HTML content"""
+    html = html.strip()
+    if html.startswith("```html"):
+        html = html[7:]
+    elif html.startswith("```"):
+        html = html[3:]
+    if html.endswith("```"):
+        html = html[:-3]
+    return html.strip()
+
+
+@router.post("/{jwt_token}/api/generate/html-report/stream")
+async def generate_html_report_stream_endpoint(jwt_token: str, data: HtmlReportGenerateRequest):
+    """SSE 스트리밍으로 HTML 리포트 생성 - 2-Phase 방식 (아웃라인 → 페이지별 생성)
+
+    Phase 1: 아웃라인 생성 (빠른 모델로 페이지 구조 설계)
+        start → delta (outline JSON streaming) → outline event
+
+    Phase 2: 페이지별 HTML 생성 (고품질 모델로 개별 페이지 생성)
+        For each page: page_start → page_delta (streaming HTML) → page_content
+
+    complete event
+    """
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    # 기존 생성 데이터 삭제
+    await db.generated_html.delete_many({"project_id": data.project_id})
+
+    # 리소스 텍스트 수집 (이미지 리소스 제외)
+    cursor = db.resources.find({"project_id": data.project_id})
+    all_content = []
+    async for r in cursor:
+        if r.get("resource_type") == "image":
+            img_desc = r.get("content", "")
+            if img_desc:
+                img_title = r.get("title") or r.get("original_filename") or "이미지"
+                all_content.append(f"[이미지: {img_title}]\n{img_desc}")
+            continue
+        if r.get("content"):
+            all_content.append(r["content"])
+        elif r.get("title"):
+            all_content.append(f"[{r['title']}]")
+    combined_text = "\n\n".join(all_content)
+
+    # 리소스가 없으면 instructions 필수
+    needs_web_search = not combined_text.strip()
+    if needs_web_search and not data.instructions.strip():
+        raise HTTPException(status_code=400, detail="리소스가 없으면 지침을 입력해야 합니다.")
+
+    # 스킬 조회
+    skill = await db.html_skills.find_one({"_id": ObjectId(data.skill_id)})
+    if not skill:
+        raise HTTPException(status_code=404, detail="스킬을 찾을 수 없습니다")
+
+    generation_id = str(uuid.uuid4())
+    await redis_service.clear_generation_cancel(data.project_id)
+
+    # 프로젝트 상태 업데이트
+    await db.projects.update_one(
+        {"_id": ObjectId(data.project_id)},
+        {"$set": {
+            "instructions": data.instructions,
+            "status": "generating",
+            "generation_id": generation_id,
+            "updated_at": datetime.utcnow(),
+        }}
+    )
+
+    def _sse(event: str, payload: dict) -> str:
+        return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False, default=str)}\n\n"
+
+    async def event_stream():
+        nonlocal combined_text, needs_web_search
+        try:
+            # 리소스가 없으면 인터넷 검색으로 자료 수집
+            if needs_web_search:
+                yield _sse("searching", {"message": "인터넷에서 자료를 검색하고 있습니다..."})
+                search_result = await search_web(data.instructions)
+                pages = search_result.get("pages", [])
+                if pages:
+                    search_contents = []
+                    for page in pages:
+                        title = page.get("title", "")
+                        content = page.get("content", "")
+                        url = page.get("url", "")
+                        search_contents.append(f"[{title}]\n{content}\n(출처: {url})")
+                    combined_text = "\n\n".join(search_contents)
+                else:
+                    combined_text = data.instructions
+                yield _sse("search_done", {"message": "검색 완료!", "result_count": len(pages)})
+
+            # === Phase 1: 아웃라인 생성 ===
+            yield _sse("start", {"message": "리포트 구조를 설계하고 있습니다..."})
+
+            if await _check_cancelled(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            skill_prompt = skill.get("skill_prompt", "") or ""
+            outline_data = None
+            chunk_count = 0
+            cancelled = False
+
+            async for event_type, event_data in generate_html_report_outline_stream(
+                resources_text=combined_text,
+                instructions=data.instructions,
+                skill_prompt=skill_prompt,
+                lang=data.lang,
+                page_count=data.page_count,
+            ):
+                if event_type == "delta":
+                    yield _sse("delta", {"text": event_data})
+                    chunk_count += 1
+                    if chunk_count % 50 == 0:
+                        if await _check_cancelled(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
+                elif event_type == "retry":
+                    # 아웃라인 재시도 - 프론트에 알림 (기존 delta 표시 리셋)
+                    yield _sse("outline_retry", {"message": "아웃라인을 재구성하고 있습니다..."})
+                elif event_type == "retry_delta":
+                    # 재시도 중 delta는 프론트에 새로운 아웃라인으로 스트리밍
+                    yield _sse("delta", {"text": event_data, "retry": True})
+                elif event_type == "result":
+                    outline_data = event_data
+
+            if cancelled:
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            if not outline_data or not outline_data.get("pages"):
+                yield _sse("error", {"message": "아웃라인 생성 실패"})
+                return
+
+            # 아웃라인 이벤트 전송 (프론트엔드에 구조 전달)
+            outline_pages = []
+            for p in outline_data["pages"]:
+                outline_pages.append({
+                    "title": p.get("title", ""),
+                    "summary": p.get("summary", ""),
+                    "key_points": p.get("key_points", []),
+                    "order": p.get("order", 0),
+                })
+
+            yield _sse("outline", {
+                "meta": outline_data.get("meta", {}),
+                "pages": outline_pages,
+                "total": len(outline_pages),
+            })
+
+            # === Phase 2: 공통 CSS 생성 ===
+            yield _sse("css_start", {"message": "디자인 스타일을 생성하고 있습니다..."})
+
+            theme = skill.get("theme", "corporate") or "corporate"
+            common_css = ""
+
+            async for css_evt_type, css_evt_data in generate_html_report_css_stream(
+                outline_data=outline_data,
+                skill_prompt=skill_prompt,
+                lang=data.lang,
+                theme=theme,
+            ):
+                if css_evt_type == "delta":
+                    yield _sse("css_delta", {"text": css_evt_data})
+                elif css_evt_type == "result":
+                    common_css = css_evt_data
+
+            yield _sse("css_complete", {"css": common_css})
+
+            # === Phase 3: 페이지별 HTML 생성 ===
+            yield _sse("generating_pages", {
+                "message": "페이지를 생성하고 있습니다...",
+                "total": len(outline_pages),
+            })
+
+            generated_pages = []
+
+            for idx, page_outline in enumerate(outline_data["pages"]):
+                # 중단 확인
+                if await _check_cancelled(db, data.project_id, generation_id):
+                    yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                    await _set_stopped(db, data.project_id)
+                    return
+
+                yield _sse("page_start", {
+                    "index": idx,
+                    "total": len(outline_pages),
+                    "title": page_outline.get("title", f"페이지 {idx + 1}"),
+                })
+
+                # 단일 페이지 HTML 생성 (스트리밍)
+                page_html = ""
+                async for evt_type, evt_payload in generate_html_page_content(
+                    resources_text=combined_text,
+                    instructions=data.instructions,
+                    skill_prompt=skill_prompt,
+                    page_info=page_outline,
+                    all_pages_outline=outline_data,
+                    lang=data.lang,
+                    theme=theme,
+                    common_css=common_css,
+                ):
+                    if evt_type == "delta":
+                        yield _sse("page_delta", {"text": evt_payload, "index": idx})
+                        page_html += evt_payload
+                    elif evt_type == "result":
+                        page_html = evt_payload
+
+                # HTML 정리 (마크다운 코드 블록 래퍼 제거)
+                page_html = _clean_html_content(page_html)
+
+                page_data = {
+                    "order": idx + 1,
+                    "title": page_outline.get("title", f"페이지 {idx + 1}"),
+                    "html_content": page_html,
+                }
+                generated_pages.append(page_data)
+
+                yield _sse("page_content", {
+                    "index": idx,
+                    "total": len(outline_pages),
+                    "page": page_data,
+                })
+
+            # MongoDB에 저장
+            html_doc = {
+                "project_id": data.project_id,
+                "meta": outline_data.get("meta", {}),
+                "pages": generated_pages,
+                "common_css": common_css,
+                "skill_id": data.skill_id,
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }
+            await db.generated_html.insert_one(html_doc)
+            html_doc["_id"] = str(html_doc["_id"])
+
+            # 프로젝트 업데이트
+            update_fields = {
+                "status": "generated",
+                "updated_at": datetime.utcnow(),
+            }
+            meta = outline_data.get("meta", {})
+            if meta:
+                update_fields["presentation_meta"] = meta
+            await db.projects.update_one(
+                {"_id": ObjectId(data.project_id)},
+                {"$set": update_fields}
+            )
+
+            yield _sse("html_data", {"html": html_doc})
+            yield _sse("complete", {"total_pages": len(generated_pages)})
+
+        except Exception as e:
+            print(f"[SSE-HTML] Stream error: {e}")
+            import traceback
+            traceback.print_exc()
+            project = await db.projects.find_one(
+                {"_id": ObjectId(data.project_id)}, {"status": 1}
+            )
+            if project and project.get("status") in ("stop_requested", "stopped"):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+            else:
+                yield _sse("error", {"message": str(e)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@router.get("/{jwt_token}/api/generate/{project_id}/html")
+async def get_generated_html(jwt_token: str, project_id: str):
+    """생성된 HTML 리포트 조회"""
+    await get_user_key(jwt_token)
+    db = get_db()
+    doc = await db.generated_html.find_one({"project_id": project_id})
+    if not doc:
+        return {"html": None}
+    doc["_id"] = str(doc["_id"])
+    return {"html": doc}
+
+
+@router.get("/{jwt_token}/api/generate/{project_id}/html-report/full")
+async def get_html_report_full(jwt_token: str, project_id: str):
+    """HTML 리포트를 하나의 HTML로 결합하여 반환"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    doc = await db.generated_html.find_one({"project_id": project_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="생성된 HTML 리포트가 없습니다")
+
+    project = await db.projects.find_one({"_id": ObjectId(project_id)})
+    project_name = project.get("name", "report") if project else "report"
+    meta = doc.get("meta", {})
+    title = meta.get("title", project_name)
+    pages = doc.get("pages", [])
+
+    # 페이지 HTML 결합 (단일 스크롤 문서)
+    pages_html = ""
+    for idx, page in enumerate(pages):
+        html_content = page.get("html_content", "")
+        pages_html += f'''
+        <section class="report-page" data-page="{idx + 1}">
+            {html_content}
+        </section>
+'''
+
+    full_html = f"""<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', Arial, sans-serif; background: #fff; }}
+        .report-page {{
+            max-width: 960px; margin: 0 auto; padding: 40px 60px;
+            border-bottom: 1px solid #e5e7eb;
+        }}
+        .report-page:last-child {{ border-bottom: none; }}
+        img, svg {{ max-width: 100%; height: auto; }}
+        table {{ max-width: 100%; border-collapse: collapse; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background: #4472C4; color: white; }}
+        {doc.get("common_css", "")}
+    </style>
+</head>
+<body>
+    {pages_html}
+</body>
+</html>"""
+
+    return HTMLResponse(content=full_html, media_type="text/html")
+
+
+@router.get("/{jwt_token}/api/generate/{project_id}/download/html")
+async def download_html_report(jwt_token: str, project_id: str):
+    """HTML 리포트 파일 다운로드"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    doc = await db.generated_html.find_one({"project_id": project_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="생성된 HTML 리포트가 없습니다")
+
+    project = await db.projects.find_one({"_id": ObjectId(project_id)})
+    project_name = project.get("name", "report") if project else "report"
+    meta = doc.get("meta", {})
+    title = meta.get("title", project_name)
+    pages = doc.get("pages", [])
+
+    # 페이지 HTML 결합
+    pages_html = ""
+    for idx, page in enumerate(pages):
+        page_title = page.get("title", "")
+        html_content = page.get("html_content", "")
+        pages_html += f"""
+        <section class="report-page" data-page="{idx + 1}">
+            {html_content}
+        </section>
+"""
+
+    # 스탠드얼론 HTML 생성
+    full_html = f"""<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', Arial, sans-serif; background: #f5f5f5; }}
+        .report-page {{
+            width: 960px; min-height: 540px; margin: 20px auto;
+            background: white; padding: 40px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            page-break-after: always; overflow: hidden;
+        }}
+        @media print {{
+            body {{ background: white; }}
+            .report-page {{ box-shadow: none; margin: 0; page-break-after: always; }}
+            .nav-controls {{ display: none !important; }}
+        }}
+        .nav-controls {{
+            position: fixed; bottom: 20px; right: 20px; z-index: 1000;
+            display: flex; gap: 8px;
+        }}
+        .nav-controls button {{
+            padding: 8px 16px; border: none; border-radius: 4px;
+            background: #4472C4; color: white; cursor: pointer; font-size: 14px;
+        }}
+        .nav-controls button:hover {{ background: #3562B4; }}
+        .nav-controls span {{ padding: 8px 12px; background: white; border-radius: 4px; font-size: 14px; }}
+        table {{ border-collapse: collapse; width: 100%; margin: 10px 0; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background: #4472C4; color: white; }}
+        {doc.get("common_css", "")}
+    </style>
+</head>
+<body>
+    {pages_html}
+    <div class="nav-controls">
+        <button onclick="prevPage()">&larr; Prev</button>
+        <span id="pageInfo">1 / {len(pages)}</span>
+        <button onclick="nextPage()">Next &rarr;</button>
+    </div>
+    <script>
+        let currentPage = 0;
+        const pages = document.querySelectorAll('.report-page');
+        const totalPages = pages.length;
+        function showPage(idx) {{
+            pages.forEach((p, i) => p.style.display = i === idx ? 'block' : 'none');
+            currentPage = idx;
+            document.getElementById('pageInfo').textContent = (idx + 1) + ' / ' + totalPages;
+        }}
+        function prevPage() {{ if (currentPage > 0) showPage(currentPage - 1); }}
+        function nextPage() {{ if (currentPage < totalPages - 1) showPage(currentPage + 1); }}
+        document.addEventListener('keydown', (e) => {{
+            if (e.key === 'ArrowLeft') prevPage();
+            if (e.key === 'ArrowRight') nextPage();
+        }});
+        if (totalPages > 0) showPage(0);
+    </script>
+</body>
+</html>"""
+
+    # 임시 파일 저장
+    output_dir = os.path.join(settings.UPLOAD_DIR, "generated")
+    os.makedirs(output_dir, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.html"
+    output_path = os.path.join(output_dir, filename)
+
+    async with aiofiles.open(output_path, "w", encoding="utf-8") as f:
+        await f.write(full_html)
+
+    return FileResponse(
+        path=output_path,
+        filename=f"{project_name}.html",
+        media_type="text/html",
+    )
+
+
+@router.get("/api/shared/{share_token}/html")
+async def get_shared_html(share_token: str):
+    """공유 링크로 HTML 리포트 조회 (인증 불필요)"""
+    db = get_db()
+    project = await db.projects.find_one({"share_token": share_token})
+    if not project:
+        raise HTTPException(status_code=404, detail="공유 링크를 찾을 수 없습니다")
+
+    project_id = str(project["_id"])
+    doc = await db.generated_html.find_one({"project_id": project_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="생성된 HTML 리포트가 없습니다")
+    doc["_id"] = str(doc["_id"])
+
+    return {
+        "project_name": project.get("name"),
+        "html": doc,
     }
 
 

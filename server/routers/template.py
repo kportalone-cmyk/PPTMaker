@@ -3,7 +3,8 @@ from bson import ObjectId
 from datetime import datetime, timedelta
 from models.template import (
     TemplateCreate, TemplateUpdate,
-    SlideCreate, SlideUpdate, BulkFontUpdate
+    SlideCreate, SlideUpdate, BulkFontUpdate,
+    HtmlSkillCreate, HtmlSkillUpdate,
 )
 from services.mongo_service import get_db, get_org_db
 from services.auth_service import decode_jwt_token, get_user_flexible, is_admin
@@ -654,3 +655,94 @@ async def dashboard_user_detail(jwt_token: str, user_key: str):
         "daily_trend": daily_trend,
         "recent_projects": recent_projects,
     }
+
+
+# ============ HTML 스킬 CRUD ============
+
+
+@router.get("/{jwt_token}/api/admin/skills")
+async def list_html_skills(jwt_token: str):
+    """HTML 스킬 목록 조회"""
+    await verify_admin(jwt_token)
+    db = get_db()
+    cursor = db.html_skills.find().sort("created_at", -1)
+    skills = []
+    async for s in cursor:
+        s["_id"] = str(s["_id"])
+        skills.append(s)
+    return {"skills": skills}
+
+
+@router.post("/{jwt_token}/api/admin/skills")
+async def create_html_skill(jwt_token: str, data: HtmlSkillCreate):
+    """HTML 스킬 생성"""
+    user = await verify_admin(jwt_token)
+    db = get_db()
+    doc = {
+        "title": data.title,
+        "description": data.description,
+        "skill_prompt": data.skill_prompt,
+        "is_published": data.is_published,
+        "page_count_default": data.page_count_default,
+        "theme": data.theme,
+        "created_by": user.get("ky"),
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+    }
+    result = await db.html_skills.insert_one(doc)
+    doc["_id"] = str(result.inserted_id)
+    return {"skill": doc}
+
+
+@router.get("/{jwt_token}/api/admin/skills/{skill_id}")
+async def get_html_skill(jwt_token: str, skill_id: str):
+    """HTML 스킬 상세 조회"""
+    await verify_admin(jwt_token)
+    db = get_db()
+    skill = await db.html_skills.find_one({"_id": ObjectId(skill_id)})
+    if not skill:
+        raise HTTPException(status_code=404, detail="스킬을 찾을 수 없습니다")
+    skill["_id"] = str(skill["_id"])
+    return {"skill": skill}
+
+
+@router.put("/{jwt_token}/api/admin/skills/{skill_id}")
+async def update_html_skill(jwt_token: str, skill_id: str, data: HtmlSkillUpdate):
+    """HTML 스킬 수정"""
+    await verify_admin(jwt_token)
+    db = get_db()
+    update_data = data.dict(exclude_unset=True)
+    update_data["updated_at"] = datetime.utcnow()
+    result = await db.html_skills.update_one(
+        {"_id": ObjectId(skill_id)},
+        {"$set": update_data}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="스킬을 찾을 수 없습니다")
+    return {"success": True}
+
+
+@router.delete("/{jwt_token}/api/admin/skills/{skill_id}")
+async def delete_html_skill(jwt_token: str, skill_id: str):
+    """HTML 스킬 삭제"""
+    await verify_admin(jwt_token)
+    db = get_db()
+    await db.html_skills.delete_one({"_id": ObjectId(skill_id)})
+    return {"success": True}
+
+
+@router.put("/{jwt_token}/api/admin/skills/{skill_id}/publish")
+async def toggle_skill_publish(jwt_token: str, skill_id: str):
+    """HTML 스킬 게시/비게시 토글"""
+    await verify_admin(jwt_token)
+    db = get_db()
+    skill = await db.html_skills.find_one({"_id": ObjectId(skill_id)})
+    if not skill:
+        raise HTTPException(status_code=404, detail="스킬을 찾을 수 없습니다")
+
+    new_status = not skill.get("is_published", False)
+    await db.html_skills.update_one(
+        {"_id": ObjectId(skill_id)},
+        {"$set": {"is_published": new_status, "updated_at": datetime.utcnow()}}
+    )
+    return {"success": True, "is_published": new_status}
