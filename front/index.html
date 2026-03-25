@@ -187,6 +187,54 @@
                         <span id="wsProjectStatus" class="ws-status"></span>
                     </div>
                     <div class="ws-header-actions">
+                        <!-- 엑셀 도구 버튼들 (헤더 내 배치) -->
+                        <div id="wsExcelTools" class="ws-doc-tools" style="display:none;">
+                            <span class="ws-doc-title" id="excelTitle">스프레드시트</span>
+                            <div class="ws-doc-progress" id="excelProgressOverlay" style="display:none;">
+                                <div class="ws-doc-spinner"></div>
+                                <span id="excelProgressMsg" class="ws-doc-progress-msg">준비 중...</span>
+                                <span id="excelProgressDetail" class="ws-doc-progress-detail"></span>
+                            </div>
+                            <div class="ws-doc-divider"></div>
+                            <button class="ws-doc-btn" onclick="saveExcelData()" id="btnSaveExcel" style="display:none;">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v8h8V5l-2-2H3z"/><path d="M5 3v2h3V3"/><path d="M5 8h3"/></svg>
+                                <span class="i18n-save">저장</span>
+                            </button>
+                            <button class="ws-doc-btn" onclick="document.getElementById('excelUploadInput').click()" id="btnUploadExcel">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 10v2h8v-2M7 9V3M5 5l2-2 2 2"/></svg>
+                                XLSX
+                            </button>
+                            <button class="ws-doc-btn" onclick="downloadXLSX()" id="btnDownloadXlsx" style="display:none;">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 10v2h8v-2M7 3v6M5 7l2 2 2-2"/></svg>
+                                XLSX
+                            </button>
+                            <button class="ws-doc-btn" onclick="copyShareLink()" id="btnShareExcel" style="display:none;">
+                                <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 7a2.5 2.5 0 003.5.38l1.15-1.15a2.5 2.5 0 00-3.54-3.54L5.15 3.38"/><path d="M7 5a2.5 2.5 0 00-3.5-.38L2.35 5.77a2.5 2.5 0 003.54 3.54l.96-.96"/></svg>
+                                <span class="i18n-copyShareLink">공유</span>
+                            </button>
+                        </div>
+                        <!-- 워드 도구 버튼들 (헤더 내 배치) -->
+                        <div id="wsWordTools" class="ws-doc-tools" style="display:none;">
+                            <span class="ws-doc-title" id="wordTitle">문서</span>
+                            <div class="ws-doc-progress" id="wordProgressOverlay" style="display:none;">
+                                <div class="ws-doc-spinner"></div>
+                                <span id="wordProgressMsg" class="ws-doc-progress-msg">준비 중...</span>
+                                <span id="wordProgressDetail" class="ws-doc-progress-detail"></span>
+                            </div>
+                            <div class="ws-doc-divider"></div>
+                            <button class="ws-doc-btn" onclick="saveWordData()" id="btnSaveWord" style="display:none;">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v8h8V5l-2-2H3z"/><path d="M5 3v2h3V3"/><path d="M5 8h3"/></svg>
+                                <span class="i18n-save">저장</span>
+                            </button>
+                            <button class="ws-doc-btn" onclick="copyShareLink()" id="btnShareWord" style="display:none;">
+                                <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 7a2.5 2.5 0 003.5.38l1.15-1.15a2.5 2.5 0 00-3.54-3.54L5.15 3.38"/><path d="M7 5a2.5 2.5 0 00-3.5-.38L2.35 5.77a2.5 2.5 0 003.54 3.54l.96-.96"/></svg>
+                                <span class="i18n-copyShareLink">공유</span>
+                            </button>
+                            <button class="ws-doc-btn" onclick="downloadDOCX()" id="btnDownloadDocx" style="display:none;">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 10v2h8v-2M7 3v6M5 7l2 2 2-2"/></svg>
+                                DOCX
+                            </button>
+                        </div>
                         <!-- 슬라이드 도구 버튼들 (생성 후 표시) -->
                         <div id="wsSlideTools" class="ws-slide-tools" style="display:none;">
                             <button class="slide-tool-btn" onclick="startPresentation()" title="Presentation">
@@ -278,7 +326,7 @@
                             <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M6.5 3.5h-2a2 2 0 000 4h2M7.5 3.5h2a2 2 0 010 4h-2M5 5.5h4"/></svg>
                             <span class="i18n-addUrl">URL</span>
                         </button>
-                        <button class="chip-btn" onclick="triggerImageResourceUpload()" title="이미지 추가">
+                        <button class="chip-btn" id="btnAddImageResource" onclick="triggerImageResourceUpload()" title="이미지 추가">
                             <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="1" width="12" height="12" rx="1"/><path d="M1 10l3-4 2 2.5L9 5l4 5"/><circle cx="4.5" cy="4.5" r="1"/></svg>
                             <span class="i18n-addImage">이미지</span>
                         </button>
@@ -468,39 +516,7 @@
                     </div>
                     <!-- 엑셀 워크스페이스 (Univer) -->
                     <div id="excelWorkspace" style="display:none;" class="excel-workspace">
-                        <div class="excel-toolbar">
-                            <div class="excel-toolbar-left">
-                                <span class="excel-title" id="excelTitle">스프레드시트</span>
-                            </div>
-                            <div class="excel-toolbar-right">
-                                <button class="excel-tool-btn" onclick="document.getElementById('excelUploadInput').click()" id="btnUploadExcel">
-                                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12v2h10v-2M8 11V3M5 6l3-3 3 3"/></svg>
-                                    XLSX
-                                </button>
-                                <button class="excel-tool-btn" onclick="downloadXLSX()" id="btnDownloadXlsx" style="display:none;">
-                                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12v2h10v-2M8 3v8M5 8l3 3 3-3"/></svg>
-                                    XLSX
-                                </button>
-                                <button class="excel-tool-btn" onclick="copyShareLink()" id="btnShareExcel" style="display:none;">
-                                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a3 3 0 004.25.46l1.38-1.38a3 3 0 00-4.24-4.24L6.18 4.06"/><path d="M8 6a3 3 0 00-4.25-.46L2.37 6.92a3 3 0 004.24 4.24l1.22-1.22"/></svg>
-                                    <span class="i18n-copyShareLink">공유</span>
-                                </button>
-                            </div>
-                        </div>
                         <input type="file" id="excelUploadInput" style="display:none;" accept=".xlsx,.xls" onchange="uploadExcelFile(event)">
-                        <!-- 엑셀 생성 진행 상태 오버레이 -->
-                        <div id="excelProgressOverlay" class="excel-progress-overlay" style="display:none;">
-                            <div class="excel-progress-inner">
-                                <div class="excel-progress-spinner"></div>
-                                <div class="excel-progress-text">
-                                    <span id="excelProgressMsg" class="excel-progress-msg">준비 중...</span>
-                                    <span id="excelProgressDetail" class="excel-progress-detail"></span>
-                                </div>
-                            </div>
-                            <div class="excel-progress-bar-wrap">
-                                <div class="excel-progress-bar" id="excelProgressBar"></div>
-                            </div>
-                        </div>
                         <div id="univerContainer" class="univer-container"></div>
                         <!-- 엑셀/차트 리사이저 -->
                         <div id="excelResizer" class="excel-resizer" style="display:none;">
@@ -519,34 +535,6 @@
                     </div>
                     <!-- 워드 워크스페이스 (CKEditor 5) -->
                     <div id="wordWorkspace" style="display:none;" class="word-workspace">
-                        <div class="word-toolbar">
-                            <div class="word-toolbar-left">
-                                <span class="word-title" id="wordTitle">문서</span>
-                            </div>
-                            <div class="word-toolbar-right">
-                                <button class="word-tool-btn" onclick="copyShareLink()" id="btnShareWord" style="display:none;">
-                                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a3 3 0 004.25.46l1.38-1.38a3 3 0 00-4.24-4.24L6.18 4.06"/><path d="M8 6a3 3 0 00-4.25-.46L2.37 6.92a3 3 0 004.24 4.24l1.22-1.22"/></svg>
-                                    <span class="i18n-copyShareLink">공유</span>
-                                </button>
-                                <button class="word-tool-btn" onclick="downloadDOCX()" id="btnDownloadDocx" style="display:none;">
-                                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12v2h10v-2M8 3v8M5 8l3 3 3-3"/></svg>
-                                    DOCX
-                                </button>
-                            </div>
-                        </div>
-                        <!-- 워드 생성 진행 상태 오버레이 -->
-                        <div id="wordProgressOverlay" class="word-progress-overlay" style="display:none;">
-                            <div class="word-progress-inner">
-                                <div class="word-progress-spinner"></div>
-                                <div class="word-progress-text">
-                                    <span id="wordProgressMsg" class="word-progress-msg">준비 중...</span>
-                                    <span id="wordProgressDetail" class="word-progress-detail"></span>
-                                </div>
-                            </div>
-                            <div class="word-progress-bar-wrap">
-                                <div class="word-progress-bar" id="wordProgressBar"></div>
-                            </div>
-                        </div>
                         <!-- 실시간 스트리밍 프리뷰 -->
                         <div id="wordStreamingPreview" class="word-streaming-preview" style="display:none;">
                             <div class="word-streaming-content" id="wordStreamingContent"></div>
@@ -562,8 +550,8 @@
                     </div>
                     <!-- OnlyOffice 워크스페이스 -->
                     <div id="onlyofficeWorkspace" style="display:none;" class="onlyoffice-workspace">
-                        <!-- OnlyOffice 생성 진행 상태 -->
-                        <div id="onlyofficeProgressOverlay" class="oo-gen-overlay" style="display:none;">
+                        <!-- OnlyOffice 생성 진행 사이드 패널 -->
+                        <div id="onlyofficeProgressOverlay" class="oo-gen-panel" style="display:none;">
                             <!-- 단계 표시 -->
                             <div class="oo-gen-steps">
                                 <div class="oo-gen-step" data-step="search">
@@ -609,8 +597,8 @@
                             </div>
                             <!-- AI 스트리밍 콘텐츠 -->
                             <div id="ooGenContent" class="oo-gen-content"></div>
-                        <!-- 항목별 진행 상태 -->
-                        <div id="ooGenItems" class="oo-gen-items" style="display:none;"></div>
+                            <!-- 항목별 진행 상태 -->
+                            <div id="ooGenItems" class="oo-gen-items" style="display:none;"></div>
                             <!-- 프로그레스 바 -->
                             <div class="oo-gen-bar-wrap">
                                 <div class="oo-gen-bar" id="onlyofficeProgressBar"></div>
@@ -1004,6 +992,26 @@
             <div class="modal-footer">
                 <button class="btn-secondary" onclick="cancelImageUpload()">취소</button>
                 <button class="btn-primary" onclick="confirmImageUpload()">업로드</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 범용 확인 다이얼로그 -->
+    <div class="modal-overlay" id="confirmDialogModal" style="display:none;">
+        <div class="confirm-dialog">
+            <div class="confirm-icon-area">
+                <div class="confirm-icon-circle" id="confirmDialogIcon">
+                    <svg width="32" height="32" fill="none" stroke="#dc3545" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M16 8v8M16 20h.01"/>
+                        <circle cx="16" cy="16" r="13"/>
+                    </svg>
+                </div>
+            </div>
+            <h3 class="confirm-title" id="confirmDialogTitle">확인</h3>
+            <p class="confirm-message" id="confirmDialogMessage">진행하시겠습니까?</p>
+            <div class="confirm-actions">
+                <button class="confirm-btn-cancel" id="confirmDialogCancel">취소</button>
+                <button class="confirm-btn-danger" id="confirmDialogOk">확인</button>
             </div>
         </div>
     </div>

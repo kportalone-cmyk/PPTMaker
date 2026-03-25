@@ -980,7 +980,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 24px;
+    padding: 10px 24px;
     background: var(--surface);
     border-bottom: 1px solid var(--border-light);
     flex-shrink: 0;
@@ -1037,6 +1037,83 @@ body {
 .ws-status.stop_requested, .ws-status.stopped { background: #fee2e2; color: #dc2626; }
 
 .ws-header-actions { display: flex; align-items: center; gap: 6px; }
+
+/* 엑셀/워드 도구 (헤더 내 인라인) */
+.ws-doc-tools {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-right: 8px;
+}
+
+.ws-doc-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+}
+
+.ws-doc-progress {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 6px;
+    padding-left: 8px;
+    border-left: 1px solid var(--border);
+}
+
+.ws-doc-spinner {
+    width: 13px;
+    height: 13px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+}
+
+.ws-doc-progress-msg {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.ws-doc-progress-detail {
+    font-size: 12px;
+    color: var(--accent);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.ws-doc-divider {
+    width: 1px;
+    height: 16px;
+    background: var(--border);
+    margin: 0 4px;
+}
+
+.ws-doc-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    color: var(--text-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all var(--transition);
+}
+
+.ws-doc-btn:hover {
+    background: var(--surface-3);
+    border-color: var(--accent);
+    color: var(--accent);
+}
 
 .ws-slide-tools {
     display: flex;
@@ -1107,13 +1184,15 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 10px 24px;
+    padding: 6px 24px;
     background: var(--surface);
     border-bottom: 1px solid var(--border-light);
     flex-shrink: 0;
     overflow: visible;
     position: relative;
 }
+
+/* 리소스 힌트는 항상 표시 */
 
 /* 리소스 개수 요약 버튼 */
 .resource-summary {
@@ -2076,7 +2155,7 @@ body {
 
 /* ============ 입력 바 ============ */
 .input-bar {
-    padding: 0 24px 20px;
+    padding: 0 24px 12px;
     flex-shrink: 0;
     background: var(--surface-2);
 }
@@ -2085,7 +2164,7 @@ body {
     background: var(--surface);
     border: 1.5px solid var(--border);
     border-radius: var(--radius-lg);
-    padding: 12px 16px;
+    padding: 8px 12px;
     box-shadow: var(--shadow-sm);
     transition: border-color var(--transition), box-shadow var(--transition);
 }
@@ -2095,7 +2174,7 @@ body {
     box-shadow: 0 0 0 3px rgba(99,102,241,0.1);
 }
 
-.input-row { margin-bottom: 10px; }
+.input-row { margin-bottom: 6px; }
 
 .prompt-input {
     width: 100%;
@@ -3432,6 +3511,10 @@ body {
 }
 
 /* ============ 확인 다이얼로그 ============ */
+#confirmDialogModal {
+    z-index: 3000;
+}
+
 .confirm-dialog {
     background: var(--surface);
     border-radius: 16px;
@@ -3521,6 +3604,23 @@ body {
 
 .confirm-btn-danger:hover {
     background: #c82333;
+}
+
+.confirm-btn-primary {
+    flex: 1;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 10px;
+    background: var(--accent);
+    color: white;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.confirm-btn-primary:hover {
+    background: #4f46e5;
 }
 
 /* ============ Slide Editor Mode ============ */
@@ -4397,7 +4497,7 @@ body {
 
 .onlyoffice-workspace {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     width: 100%;
     height: 100%;
     min-height: 0;
@@ -4407,7 +4507,7 @@ body {
 .onlyoffice-container {
     flex: 1;
     width: 100%;
-    min-height: 600px;
+    min-height: 0;
     border-radius: 8px;
     overflow: hidden;
     position: relative;
@@ -4586,24 +4686,29 @@ body {
     align-items: stretch;
 }
 
-/* ============ OnlyOffice 생성 진행 UI ============ */
+/* ============ OnlyOffice 생성 진행 UI (사이드 패널) ============ */
 
-.oo-gen-overlay {
+.oo-gen-panel {
     display: flex;
     flex-direction: column;
-    flex: 1;
-    min-height: 0;
+    width: 320px;
+    min-width: 280px;
+    max-width: 360px;
+    flex-shrink: 0;
     background: var(--surface);
+    border-right: 1px solid var(--border);
+    overflow: hidden;
     border-radius: var(--radius);
     border: 1px solid var(--border);
     overflow: hidden;
 }
 
-/* 단계 표시기 */
+/* 단계 표시기 (사이드 패널 - 가로) */
 .oo-gen-steps {
     display: flex;
     align-items: center;
     justify-content: center;
+    flex-wrap: wrap;
     gap: 0;
     padding: 16px 20px 12px;
     flex-shrink: 0;
@@ -4661,7 +4766,7 @@ body {
 }
 
 .oo-gen-step-line {
-    width: 24px;
+    width: 16px;
     height: 2px;
     background: var(--border);
     margin: 0 4px;
@@ -4678,7 +4783,7 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 0 20px 10px;
+    padding: 0 12px 8px;
     flex-shrink: 0;
 }
 
@@ -4694,7 +4799,7 @@ body {
 @keyframes ooGenSpin { to { transform: rotate(360deg); } }
 
 .oo-gen-status #onlyofficeProgressMsg {
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 500;
     color: var(--text-primary);
     flex: 1;
@@ -4719,18 +4824,16 @@ body {
 .oo-gen-content {
     flex: 1;
     min-height: 0;
-    margin: 0 16px 12px;
-    padding: 12px 14px;
+    margin: 0 8px 8px;
+    padding: 10px;
     background: var(--surface-3, #f8fafc);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm, 6px);
     overflow-y: auto;
-    font-family: 'Pretendard', monospace;
-    font-size: 11.5px;
-    line-height: 1.6;
+    font-family: 'Pretendard', sans-serif;
+    font-size: 12px;
+    line-height: 1.5;
     color: var(--text-secondary);
-    white-space: pre-wrap;
-    word-break: break-word;
 }
 .oo-gen-content:empty {
     display: flex;
@@ -4744,11 +4847,181 @@ body {
     font-size: 12px;
 }
 
+/* 구조화된 실시간 요약 */
+.oo-smart-header {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.oo-smart-badge {
+    background: var(--accent);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 10px;
+}
+.oo-smart-bytes {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    font-weight: 400;
+    margin-left: auto;
+}
+.oo-smart-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.oo-smart-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border-radius: 5px;
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    transition: background 0.2s;
+}
+.oo-smart-item.active {
+    background: rgba(99,102,241,0.08);
+    color: var(--accent);
+    font-weight: 500;
+}
+.oo-smart-num {
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--surface-3, #f1f5f9);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+}
+.oo-smart-item.active .oo-smart-num {
+    background: var(--accent);
+    color: #fff;
+}
+.oo-smart-type {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: var(--surface-3, #f1f5f9);
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+    font-weight: 500;
+}
+.oo-smart-item.active .oo-smart-type {
+    background: rgba(99,102,241,0.15);
+    color: var(--accent);
+}
+.oo-smart-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.oo-smart-meta {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+}
+.oo-smart-cols {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    padding: 2px 8px 4px 32px;
+}
+.oo-smart-col {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: var(--surface-3, #f1f5f9);
+    color: var(--text-tertiary);
+    white-space: nowrap;
+}
+.oo-smart-empty {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    font-style: italic;
+    padding: 12px 0;
+    text-align: center;
+}
+
+/* PPT: governance + items 상세 */
+.oo-smart-detail {
+    padding: 2px 8px 4px 32px;
+    font-size: 11px;
+}
+.oo-smart-gov {
+    color: var(--text-tertiary);
+    font-size: 10px;
+    margin-bottom: 2px;
+    font-style: italic;
+}
+.oo-smart-sub {
+    color: var(--text-secondary);
+    font-size: 10.5px;
+    line-height: 1.6;
+}
+.oo-smart-feats {
+    display: flex;
+    gap: 4px;
+    margin-top: 2px;
+}
+.oo-smart-feat {
+    font-size: 9px;
+    padding: 0 5px;
+    border-radius: 3px;
+    background: rgba(99,102,241,0.1);
+    color: var(--accent);
+    font-weight: 500;
+}
+
+/* XLSX: 데이터 미리보기 */
+.oo-smart-preview {
+    margin: 2px 8px 4px 32px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    font-size: 10px;
+}
+.oo-smart-row {
+    display: flex;
+    border-bottom: 1px solid var(--border-light, #f0f0f0);
+}
+.oo-smart-row:last-child { border-bottom: none; }
+.oo-smart-cell {
+    flex: 1;
+    padding: 2px 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    min-width: 0;
+    border-right: 1px solid var(--border-light, #f0f0f0);
+}
+.oo-smart-cell:last-child { border-right: none; }
+.oo-smart-row-more {
+    text-align: center;
+    font-size: 9px;
+    color: var(--text-tertiary);
+    padding: 2px 0;
+    background: var(--surface-3, #f8fafc);
+}
+
 /* 항목별 진행 상태 */
 .oo-gen-items {
-    max-height: 180px;
+    max-height: 200px;
     overflow-y: auto;
-    margin: 0 16px 12px;
+    margin: 0 12px 8px;
     padding: 10px 14px;
     background: var(--surface-3, #f8fafc);
     border: 1px solid var(--border, #e2e8f0);
@@ -4830,21 +5103,7 @@ body {
     overflow: hidden;
 }
 
-.excel-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 6px 12px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg);
-    min-height: 36px;
-}
-
-.excel-toolbar-left {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
+/* excel-toolbar 제거됨 — 헤더 .ws-doc-tools로 통합 */
 
 .excel-toolbar-right {
     display: flex;
@@ -4977,80 +5236,7 @@ body {
 }
 
 
-/* ============ 엑셀 생성 진행 상태 ============ */
-
-.excel-progress-overlay {
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    padding: 12px 16px 8px;
-    flex-shrink: 0;
-}
-
-.excel-progress-inner {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.excel-progress-spinner {
-    width: 18px;
-    height: 18px;
-    border: 2.5px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: excelSpin 0.8s linear infinite;
-    flex-shrink: 0;
-}
-
-@keyframes excelSpin {
-    to { transform: rotate(360deg); }
-}
-
-.excel-progress-text {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-}
-
-.excel-progress-msg {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-primary);
-}
-
-.excel-progress-detail {
-    font-size: 11px;
-    color: var(--text-tertiary, #999);
-}
-
-.excel-progress-bar-wrap {
-    margin-top: 8px;
-    height: 3px;
-    background: var(--border);
-    border-radius: 2px;
-    overflow: hidden;
-}
-
-.excel-progress-bar {
-    height: 100%;
-    width: 30%;
-    background: var(--accent);
-    border-radius: 2px;
-    animation: excelProgressPulse 2s ease-in-out infinite;
-}
-
-@keyframes excelProgressPulse {
-    0% { width: 10%; margin-left: 0; }
-    50% { width: 40%; margin-left: 30%; }
-    100% { width: 10%; margin-left: 90%; }
-}
-
-.excel-progress-bar.determinate {
-    animation: none;
-    transition: width 0.3s ease;
-    margin-left: 0;
-}
+/* Excel 진행 상태 스타일은 .ws-doc-progress-* 로 통합됨 */
 
 
 /* 엑셀 로딩 애니메이션 */
@@ -5155,26 +5341,7 @@ body {
     position: relative;
 }
 
-.word-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 6px 12px;
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-}
-
-.word-toolbar-left {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.word-toolbar-right {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
+/* word-toolbar 제거됨 — 헤더 .ws-doc-tools로 통합 */
 
 .word-title {
     font-size: 13px;
@@ -5231,7 +5398,7 @@ body {
     font-size: 14.5px;
     line-height: 1.8;
     color: #1a1a2e;
-    padding: 40px 48px;
+    padding: 24px 48px;
     max-width: 800px;
     margin: 0 auto;
 }
@@ -5242,62 +5409,7 @@ body {
     border-top: none !important;
 }
 
-/* Word 진행 오버레이 */
-.word-progress-overlay {
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    padding: 12px 16px 8px;
-    flex-shrink: 0;
-}
-
-.word-progress-inner {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.word-progress-spinner {
-    width: 18px;
-    height: 18px;
-    border: 2.5px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-}
-
-.word-progress-text {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
-.word-progress-msg {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text);
-}
-
-.word-progress-detail {
-    font-size: 11px;
-    color: var(--text-muted);
-}
-
-.word-progress-bar-wrap {
-    margin-top: 8px;
-    height: 3px;
-    background: var(--border);
-    border-radius: 2px;
-    overflow: hidden;
-}
-
-.word-progress-bar {
-    height: 100%;
-    background: linear-gradient(90deg, var(--accent), #a78bfa);
-    border-radius: 2px;
-    width: 0%;
-    transition: width 0.3s ease;
-    animation: progressPulse 2s ease-in-out infinite;
-}
+/* Word/Excel 진행 상태 스타일은 .ws-doc-progress-* 로 통합됨 */
 
 /* 프로젝트 타입 배지: Word */
 .rc-type-badge.word {
@@ -5322,7 +5434,7 @@ body {
     min-height: 0;
     overflow-y: auto;
     background: #fff;
-    padding: 40px 48px;
+    padding: 24px 48px;
     scroll-behavior: smooth;
 }
 

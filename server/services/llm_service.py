@@ -947,17 +947,22 @@ def _map_slide_content_to_placeholders(slide: dict, template_meta: dict) -> dict
 
         items = slide.get("items", [])
 
-        # number placeholder에 순서 번호 자동 매핑 (01, 02, 03, ...)
+        # number placeholder에 순서 번호 자동 매핑 (1, 2, 3, ...)
         for i in range(len(items)):
             if i < len(number_placeholders):
-                contents[number_placeholders[i]] = str(i + 1).zfill(2)
+                contents[number_placeholders[i]] = str(i + 1)
 
         # 부제목/설명을 순서대로 1:1 매핑
         # items[i].heading → subtitle_placeholders[i]
         # items[i].detail  → desc_placeholders[i]
+        _SUBTITLE_MAX_LEN = 35
         for i, item in enumerate(items):
             heading = item.get("heading", "")
             detail = item.get("detail", item.get("body", ""))
+
+            # 부제목 35자 초과 시 절삭
+            if heading and len(heading) > _SUBTITLE_MAX_LEN:
+                heading = heading[:_SUBTITLE_MAX_LEN].rstrip() + "…"
 
             # 부제목 placeholder에 heading 매핑
             if i < len(subtitle_placeholders) and heading:
@@ -1978,15 +1983,14 @@ async def generate_docx_content_stream(
     prompt_model = await get_prompt_model("docx_generation_system")
     effective_model = prompt_model or settings.ANTHROPIC_MODEL
 
-    # 페이지 수에 따라 max_tokens 동적 조절
+    # 페이지 수에 따라 max_tokens 동적 조절 (1페이지 ≈ 1500토큰 기준, 표/차트 포함)
     max_tokens = 16384
     if section_count and section_count != "auto":
         try:
             pages = int(section_count)
-            if pages >= 20:
-                max_tokens = 32768
-            elif pages >= 10:
-                max_tokens = 24576
+            # 페이지 수 × 1500토큰 + 메타/JSON구조 오버헤드 2000토큰
+            max_tokens = min(max(pages * 1500 + 2000, 4096), 32768)
+            print(f"[LLM-Docx] 요청 페이지: {pages}, max_tokens: {max_tokens}")
         except ValueError:
             pass
 
@@ -2001,6 +2005,11 @@ async def generate_docx_content_stream(
         if parsed:
             section_count_result = len(parsed.get("sections", []))
             print(f"[LLM-Docx] 파싱 성공 - sections: {section_count_result}개")
+
+            # 페이지 수 제한: 생성된 콘텐츠가 요청 페이지 대비 과도하면 트리밍
+            if section_count and section_count != "auto":
+                parsed = _trim_docx_to_page_limit(parsed, int(section_count))
+
             yield ("result", parsed)
         else:
             print(f"[LLM-Docx] 파싱 실패 → 폴백 사용")
@@ -2012,6 +2021,81 @@ async def generate_docx_content_stream(
         yield ("result", _docx_fallback(resources_text))
 
 
+def _estimate_docx_pages(sections: list) -> float:
+    """섹션 리스트의 예상 A4 페이지 수 추정"""
+    import re
+    total_chars = 0
+    table_count = 0
+    chart_count = 0
+    for sec in sections:
+        content = sec.get("content", "")
+        title = sec.get("title", "")
+        total_chars += len(title)
+        # 차트 블록 카운트
+        chart_count += len(re.findall(r'```chart', content))
+        # 표 카운트 (마크다운 표: | 로 시작하는 연속 행)
+        table_lines = re.findall(r'(?:^\|.+\|$\n?){3,}', content, re.MULTILINE)
+        table_count += len(table_lines)
+        # 순수 텍스트 (차트/표 구분선 제거)
+        clean = re.sub(r'```chart[\s\S]*?```', '', content)
+        clean = re.sub(r'\|[-:|\s]+\|', '', clean)
+        clean = re.sub(r'[#*>`|_~\[\]()-]', '', clean)
+        total_chars += len(clean.strip())
+    # 페이지 추정: 텍스트 500자/페이지 + 표 0.5페이지 + 차트 0.5페이지
+    text_pages = total_chars / 500
+    extra_pages = table_count * 0.5 + chart_count * 0.5
+    return text_pages + extra_pages
+
+
+def _trim_docx_to_page_limit(parsed: dict, target_pages: int) -> dict:
+    """생성된 문서가 목표 페이지 수를 크게 초과하면 섹션/콘텐츠 트리밍"""
+    import re
+    sections = parsed.get("sections", [])
+    if not sections:
+        return parsed
+
+    estimated = _estimate_docx_pages(sections)
+    # 목표의 1.5배 이내면 트리밍 불필요
+    if estimated <= target_pages * 1.5:
+        print(f"[LLM-Docx] 페이지 추정: {estimated:.1f}p (목표: {target_pages}p) → 트리밍 불필요")
+        return parsed
+
+    print(f"[LLM-Docx] 페이지 추정: {estimated:.1f}p (목표: {target_pages}p) → 트리밍 시작")
+
+    # 1단계: 차트 제거 (페이지 초과 시 차트부터 제거)
+    if estimated > target_pages * 1.5:
+        for sec in sections:
+            content = sec.get("content", "")
+            if '```chart' in content:
+                sec["content"] = re.sub(r'```chart[\s\S]*?```', '', content).strip()
+        estimated = _estimate_docx_pages(sections)
+        print(f"[LLM-Docx] 차트 제거 후: {estimated:.1f}p")
+
+    # 2단계: 각 섹션의 content 길이를 비례 축소
+    if estimated > target_pages * 1.5:
+        ratio = (target_pages * 1.3) / estimated  # 약간 여유 있게
+        for sec in sections:
+            content = sec.get("content", "")
+            if len(content) > 200:
+                # 문단 단위로 자르기
+                paragraphs = content.split("\n\n")
+                keep_count = max(1, int(len(paragraphs) * ratio))
+                sec["content"] = "\n\n".join(paragraphs[:keep_count])
+        estimated = _estimate_docx_pages(sections)
+        print(f"[LLM-Docx] 콘텐츠 축소 후: {estimated:.1f}p")
+
+    # 3단계: 그래도 초과하면 섹션 수 자체를 줄임
+    if estimated > target_pages * 1.5 and len(sections) > 2:
+        # 목표 페이지 수에 맞게 섹션 수 제한
+        while _estimate_docx_pages(sections) > target_pages * 1.3 and len(sections) > 2:
+            sections.pop()  # 뒤에서부터 제거
+        parsed["sections"] = sections
+        estimated = _estimate_docx_pages(sections)
+        print(f"[LLM-Docx] 섹션 축소 후: {estimated:.1f}p (남은 섹션: {len(sections)}개)")
+
+    return parsed
+
+
 async def _build_docx_generation_prompts(
     resources_text: str, instructions: str, lang: str = "",
     section_count: str = "auto",
@@ -2019,7 +2103,7 @@ async def _build_docx_generation_prompts(
 ) -> tuple[str, str]:
     """Word 문서 생성용 프롬프트 빌드"""
     if section_count and section_count != "auto":
-        section_count_instruction = f"\n9. **[필수] 약 {section_count}페이지 분량의 문서를 생성하세요. A4 기준 1페이지는 약 500~600자입니다. 총 분량이 약 {section_count}페이지가 되도록 섹션 수와 각 섹션의 내용 길이를 충분히 조절하세요.**"
+        section_count_instruction = f"\n11. **[필수] 최종 Word 문서(.docx)가 A4 기준 약 {section_count}페이지가 되도록 하세요.**\n    - 표(table) 1개 ≈ 0.3~1페이지, 차트 1개 ≈ 0.5페이지를 차지합니다.\n    - 표·차트·불릿 리스트가 많으면 텍스트 분량을 대폭 줄여야 합니다.\n    - {section_count}페이지 요청 시 표는 최대 2개, 차트는 최대 1개로 제한하세요.\n    - 텍스트만으로는 1페이지 ≈ 약 500자이지만, 시각 요소 포함 시 텍스트는 1페이지당 200~300자로 계산하세요.\n    - **페이지 수 준수가 최우선입니다. 내용의 풍부함보다 페이지 수 제한을 먼저 지키세요.**"
     else:
         section_count_instruction = ""
 
@@ -2088,10 +2172,28 @@ async def _build_docx_generation_prompts(
     system_template = await get_prompt_content("docx_generation_system")
     user_template = await get_prompt_content("docx_generation_user")
 
-    system_prompt = system_template.format(
-        lang_instruction=lang_instruction,
-        section_count_instruction=section_count_instruction,
-    )
+    # DB 프롬프트에 {section_count_instruction} 변수가 있으면 치환, 없으면 무시
+    try:
+        system_prompt = system_template.format(
+            lang_instruction=lang_instruction,
+            section_count_instruction=section_count_instruction,
+        )
+    except KeyError:
+        system_prompt = system_template.format(
+            lang_instruction=lang_instruction,
+        )
+
+    # 페이지 수 제한을 시스템 프롬프트 끝에 강제 추가 (DB 프롬프트와 무관하게 항상 적용)
+    if section_count and section_count != "auto":
+        system_prompt += f"""
+
+## [최우선] 페이지 수 제한
+**반드시 최종 Word 문서(.docx) A4 기준 약 {section_count}페이지 이내로 작성하세요.**
+- 표(table) 1개 ≈ 0.3~1페이지, 차트 1개 ≈ 0.5페이지를 차지합니다.
+- {section_count}페이지 이하 요청 시: 표 최대 2개, 차트 최대 1개로 제한하세요.
+- 각 섹션의 content는 간결하게 작성하세요. 핵심만 담으세요.
+- 전체 텍스트 분량: 약 {int(section_count) * 400}자 이내 (표/차트 공간 고려)
+- **이 페이지 수 제한은 다른 모든 지침보다 우선합니다.**"""
 
     # 템플릿 지침을 시스템 프롬프트 끝에 추가
     if template_instruction:

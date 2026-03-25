@@ -214,7 +214,7 @@ async def generate_slides(jwt_token: str, data: GenerateRequest):
 
         template_slide = template_lookup[template_idx]
         contents = item.get("contents", {})
-        gen_objects = _build_gen_objects(template_slide, contents)
+        gen_objects = _build_gen_objects(template_slide, contents, lang=data.lang)
 
         # 배경이미지: 슬라이드별 배경 > 템플릿 전체 배경
         slide_bg = template_slide.get("background_image") or bg_image
@@ -554,7 +554,7 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
 
                 template_slide = template_lookup[template_idx]
                 contents = item.get("contents", {})
-                skeleton_objects = _build_skeleton_objects(template_slide, contents)
+                skeleton_objects = _build_skeleton_objects(template_slide, contents, lang=data.lang)
 
                 slide_bg = template_slide.get("background_image") or bg_image
 
@@ -581,7 +581,7 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
 
                 template_slide = template_lookup[template_idx]
                 contents = item.get("contents", {})
-                gen_objects = _build_gen_objects(template_slide, contents)
+                gen_objects = _build_gen_objects(template_slide, contents, lang=data.lang)
 
                 slide_bg = template_slide.get("background_image") or bg_image
 
@@ -1764,7 +1764,7 @@ async def generate_onlyoffice_pptx_stream(jwt_token: str, data: GenerateRequest)
 
                 template_slide = template_lookup[template_idx]
                 contents = item.get("contents", {})
-                gen_objects = _build_gen_objects(template_slide, contents)
+                gen_objects = _build_gen_objects(template_slide, contents, lang=data.lang)
 
                 slide_bg = template_slide.get("background_image", "")
 
@@ -2740,12 +2740,21 @@ async def translate_project_stream(jwt_token: str, data: TranslateProjectRequest
                 # items 텍스트도 수집
                 orig_items = orig_slide.get("items", [])
 
-                # 번역할 텍스트가 없으면 그대로 복사
+                # 번역할 텍스트가 없으면 그대로 복사 (영어 시 폰트 축소만 적용)
                 if not text_objects and not orig_items:
+                    _EN_REDUCE_COPY = {"title": 5, "subtitle": 3, "description": 2, "body": 2, "governance": 2}
+                    is_en_copy = (data.target_lang == "en")
                     new_objects = []
                     for obj in orig_slide.get("objects", []):
                         new_obj = obj.copy()
                         new_obj.pop("_id", None)
+                        if is_en_copy and obj.get("obj_type") == "text" and "text_style" in new_obj:
+                            role = obj.get("role", "") or obj.get("_auto_role", "")
+                            reduce = _EN_REDUCE_COPY.get(role, 0)
+                            if reduce:
+                                orig_size = new_obj["text_style"].get("font_size")
+                                if orig_size and orig_size > reduce:
+                                    new_obj["text_style"] = {**new_obj["text_style"], "font_size": orig_size - reduce}
                         new_objects.append(new_obj)
 
                     new_slide = {
@@ -2817,16 +2826,26 @@ Rules:
                 translated_parts = full_response.split("---SEPARATOR---")
                 translated_parts = [p.strip() for p in translated_parts]
 
-                # 텍스트 오브젝트에 번역 적용
+                # 텍스트 오브젝트에 번역 적용 + 영어 폰트 크기 축소
+                _EN_FONT_REDUCE = {"title": 5, "subtitle": 3, "description": 2, "body": 2, "governance": 2}
+                is_en = (data.target_lang == "en")
                 part_idx = 0
                 new_objects = []
                 for obj_idx, obj in enumerate(orig_slide.get("objects", [])):
                     new_obj = obj.copy()
                     new_obj.pop("_id", None)
 
-                    if obj.get("obj_type") == "text" and obj.get("generated_text"):
-                        role = obj.get("role", "")
-                        if role not in ("number", "date"):
+                    if obj.get("obj_type") == "text":
+                        role = obj.get("role", "") or obj.get("_auto_role", "")
+                        # 영어 번역 시 폰트 크기 축소
+                        if is_en:
+                            reduce = _EN_FONT_REDUCE.get(role, 0)
+                            if reduce and "text_style" in new_obj:
+                                orig_size = new_obj["text_style"].get("font_size")
+                                if orig_size and orig_size > reduce:
+                                    new_obj["text_style"] = {**new_obj["text_style"], "font_size": orig_size - reduce}
+
+                        if obj.get("generated_text") and role not in ("number", "date"):
                             # 이 오브젝트의 번역 결과 적용
                             if part_idx < len(translated_parts):
                                 new_obj["generated_text"] = translated_parts[part_idx]
@@ -3743,7 +3762,7 @@ def _analyze_template_slides(slides: list) -> list[dict]:
     return slides_meta
 
 
-def _build_gen_objects(template_slide: dict, contents: dict) -> list:
+def _build_gen_objects(template_slide: dict, contents: dict, lang: str = "") -> list:
     """템플릿 슬라이드에서 generated objects 생성"""
     gen_objects = []
     all_objects = template_slide.get("objects", [])
@@ -3790,14 +3809,14 @@ def _build_gen_objects(template_slide: dict, contents: dict) -> list:
             role = role_for_check
 
             # number role: contents에 매핑된 값 우선 사용 (간지의 section_num 등)
-            # 매핑 없으면 위치 순서(위→아래, 좌→우)로 01, 02, 03... 부여
+            # 매핑 없으면 위치 순서(위→아래, 좌→우)로 1, 2, 3... 부여
             if role == "number":
                 placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
                 if placeholder_name and placeholder_name in contents:
                     gen_obj["generated_text"] = contents[placeholder_name]
                 else:
                     pos_num = number_order_map.get(id(obj), 1)
-                    gen_obj["generated_text"] = str(pos_num).zfill(2)
+                    gen_obj["generated_text"] = str(pos_num)
             elif role == "date":
                 # date role: 오늘 날짜를 YYYY.MM.DD 형식으로 자동 입력
                 gen_obj["generated_text"] = datetime.now().strftime("%Y.%m.%d")
@@ -3860,10 +3879,24 @@ def _build_gen_objects(template_slide: dict, contents: dict) -> list:
 
         gen_objects.append(gen_obj)
     _ensure_number_above_shapes(gen_objects)
+
+    # 영어: 폰트 크기 축소 (영문은 한글보다 글자 폭이 넓어 크기 조정 필요)
+    if lang == "en":
+        _EN_FONT_REDUCE = {"title": 5, "subtitle": 3, "description": 2, "body": 2, "governance": 2}
+        for obj in gen_objects:
+            if obj.get("obj_type") != "text":
+                continue
+            role = obj.get("role") or obj.get("_auto_role", "")
+            reduce = _EN_FONT_REDUCE.get(role, 0)
+            if reduce and "text_style" in obj:
+                orig = obj["text_style"].get("font_size")
+                if orig and orig > reduce:
+                    obj["text_style"] = {**obj["text_style"], "font_size": orig - reduce}
+
     return gen_objects
 
 
-def _build_skeleton_objects(template_slide: dict, contents: dict) -> list:
+def _build_skeleton_objects(template_slide: dict, contents: dict, lang: str = "") -> list:
     """스켈레톤 오브젝트 생성 - 텍스트는 빈값, 이미지/위치/스타일은 유지"""
     gen_objects = []
     all_objects = template_slide.get("objects", [])
@@ -3909,14 +3942,14 @@ def _build_skeleton_objects(template_slide: dict, contents: dict) -> list:
             role = role_for_check
 
             # number role: contents에 매핑된 값 우선 사용 (간지의 section_num 등)
-            # 매핑 없으면 위치 순서(위→아래, 좌→우)로 01, 02, 03... 부여
+            # 매핑 없으면 위치 순서(위→아래, 좌→우)로 1, 2, 3... 부여
             if role == "number":
                 placeholder_name = obj.get("placeholder") or obj.get("_auto_placeholder", "")
                 if placeholder_name and placeholder_name in contents:
                     gen_obj["generated_text"] = contents[placeholder_name]
                 else:
                     pos_num = number_order_map.get(id(obj), 1)
-                    gen_obj["generated_text"] = str(pos_num).zfill(2)
+                    gen_obj["generated_text"] = str(pos_num)
             elif role == "date":
                 # date role: 스켈레톤에서도 오늘 날짜 표시
                 gen_obj["generated_text"] = datetime.now().strftime("%Y.%m.%d")
@@ -3938,6 +3971,20 @@ def _build_skeleton_objects(template_slide: dict, contents: dict) -> list:
             gen_obj.pop("_auto_role", None)
         gen_objects.append(gen_obj)
     _ensure_number_above_shapes(gen_objects)
+
+    # 영어: 폰트 크기 축소
+    if lang == "en":
+        _EN_FONT_REDUCE = {"title": 5, "subtitle": 3, "description": 2, "body": 2, "governance": 2}
+        for obj in gen_objects:
+            if obj.get("obj_type") != "text":
+                continue
+            role = obj.get("role") or obj.get("_auto_role", "")
+            reduce = _EN_FONT_REDUCE.get(role, 0)
+            if reduce and "text_style" in obj:
+                orig = obj["text_style"].get("font_size")
+                if orig and orig > reduce:
+                    obj["text_style"] = {**obj["text_style"], "font_size": orig - reduce}
+
     return gen_objects
 
 
