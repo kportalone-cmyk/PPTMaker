@@ -99,7 +99,15 @@
                 <span class="i18n-newProject">새 프로젝트 생성</span>
             </button>
 
-            <div class="sidebar-section-label i18n-myProjects">내 프로젝트</div>
+            <div class="sidebar-tabs" id="sidebarTabs">
+                <button class="sidebar-tab active" data-tab="mine" onclick="switchSidebarTab('mine')">
+                    <span class="i18n-myProjects">내 프로젝트</span>
+                </button>
+                <button class="sidebar-tab" data-tab="shared" onclick="switchSidebarTab('shared')">
+                    <span class="i18n-sharedLabel">공유됨</span>
+                    <span class="sidebar-tab-count" id="sidebarSharedCount" style="display:none;">0</span>
+                </button>
+            </div>
             <div class="project-list" id="projectList">
                 <!-- 프로젝트 목록 동적 생성 -->
             </div>
@@ -806,6 +814,7 @@
                                 <span class="i18n-typeWord">워드</span>
                             </button>
                         </div>
+                        <!-- TODO: HTML 리포트 - 추후 적용 예정
                         <div class="type-group-label">리포트</div>
                         <div class="type-options-row">
                             <button class="type-option" data-type="html_report" onclick="selectProjectType('html_report')">
@@ -813,6 +822,7 @@
                                 <span>HTML 리포트</span>
                             </button>
                         </div>
+                        -->
                         <div class="type-group-label">OnlyOffice</div>
                         <div class="type-options-row">
                             <button class="type-option" data-type="onlyoffice_pptx" onclick="selectProjectType('onlyoffice_pptx')">
@@ -1030,7 +1040,7 @@
                 <button class="modal-close" onclick="closeModal('templatePickerModal')">&times;</button>
             </div>
             <div class="modal-body">
-                <!-- 커스텀 PPTX 업로드 영역 -->
+                <!-- 커스텀 PPTX 업로드 영역 (비활성화)
                 <div class="custom-pptx-upload-section" id="customPptxSection">
                     <div class="custom-pptx-dropzone" id="customPptxDropzone"
                          onclick="document.getElementById('customPptxFileInput').click()">
@@ -1054,10 +1064,10 @@
                     </div>
                     <input type="file" id="customPptxFileInput" style="display:none;" accept=".pptx" onchange="handleCustomPptxUpload(event)">
                 </div>
-                <!-- 구분선 -->
                 <div class="template-picker-divider" id="templatePickerDivider">
                     <span>또는 관리자 템플릿 선택</span>
                 </div>
+                -->
                 <!-- 스킬 그리드 (html_report 전용) -->
                 <div id="skillPickerGrid" class="template-picker-grid" style="display:none;"></div>
                 <!-- 템플릿 그리드 -->

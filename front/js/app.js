@@ -47,6 +47,7 @@ const state = {
     editAutoSaveInterval: null,
     projectPage: 0,         // 프로젝트 목록 현재 페이지 (0-based)
     projectPageSize: 10,    // 페이지당 프로젝트 수
+    sidebarTab: 'mine',     // 사이드바 탭: 'mine' | 'shared'
     // 엑셀 상태
     selectedProjectType: 'slide',
     generatedExcel: null,
@@ -127,6 +128,7 @@ const I18N = {
         passwordPlaceholder: '비밀번호를 입력하세요',
         noSearchResult: '검색 결과가 없습니다',
         myProjects: '내 프로젝트',
+        sharedLabel: '공유됨',
         newProject: '새 프로젝트 생성',
         newProjectTitle: '새 프로젝트',
         projectName: '프로젝트 이름',
@@ -306,6 +308,7 @@ const I18N = {
         passwordPlaceholder: 'Enter password',
         noSearchResult: 'No results found',
         myProjects: 'My Projects',
+        sharedLabel: 'Shared',
         newProject: 'New Project',
         newProjectTitle: 'New Project',
         projectName: 'Project Name',
@@ -485,6 +488,7 @@ const I18N = {
         passwordPlaceholder: 'パスワードを入力',
         noSearchResult: '結果なし',
         myProjects: 'プロジェクト',
+        sharedLabel: '共有',
         newProject: '新規作成',
         newProjectTitle: '新規プロジェクト',
         projectName: 'プロジェクト名',
@@ -655,6 +659,7 @@ const I18N = {
         passwordPlaceholder: '输入密码',
         noSearchResult: '未找到结果',
         myProjects: '我的项目',
+        sharedLabel: '共享',
         newProject: '新建项目',
         newProjectTitle: '新项目',
         projectName: '项目名称',
@@ -853,6 +858,7 @@ function applyI18n() {
     // 사이드바
     $('.i18n-newProject').text(t('newProject'));
     $('.i18n-myProjects').text(t('myProjects'));
+    $('.i18n-sharedLabel').text(t('sharedLabel'));
 
     // 관리자
     $('.i18n-adminPage').text(t('adminPage'));
@@ -1275,6 +1281,14 @@ function toggleSidebar() {
     $('#sidebarOpenBtn').toggle(state.sidebarCollapsed);
 }
 
+function switchSidebarTab(tab) {
+    state.sidebarTab = tab;
+    state.projectPage = 0;
+    $('#sidebarTabs .sidebar-tab').removeClass('active');
+    $(`#sidebarTabs .sidebar-tab[data-tab="${tab}"]`).addClass('active');
+    renderProjectList();
+}
+
 function showEmptyState() {
     $('#emptyState').show();
     $('#projectWorkspace').hide();
@@ -1433,14 +1447,25 @@ function renderProjectList(skipAutoNav) {
     const list = $('#projectList');
     list.empty();
 
-    // 내 프로젝트 + 공유 프로젝트를 하나로 합침
-    const allProjects = [
-        ...state.projects.map(p => ({ ...p, _isShared: false })),
-        ...state.sharedProjects.map(p => ({ ...p, _isShared: true })),
-    ];
+    // 공유 탭 카운트 업데이트
+    const sharedCnt = state.sharedProjects.length;
+    if (sharedCnt > 0) {
+        $('#sidebarSharedCount').text(sharedCnt).show();
+    } else {
+        $('#sidebarSharedCount').hide();
+    }
+
+    // 탭에 따라 프로젝트 필터링
+    const isSharedTab = state.sidebarTab === 'shared';
+    const allProjects = isSharedTab
+        ? state.sharedProjects.map(p => ({ ...p, _isShared: true }))
+        : state.projects.map(p => ({ ...p, _isShared: false }));
 
     if (allProjects.length === 0) {
-        list.html(`<div style="padding:16px 12px;text-align:center;color:var(--sidebar-text);font-size:12px;opacity:0.6;">${t('noResources')}</div>`);
+        const emptyMsg = isSharedTab
+            ? t('noSharedProjects', '공유받은 파일이 없습니다')
+            : t('noResources');
+        list.html(`<div style="padding:16px 12px;text-align:center;color:var(--sidebar-text);font-size:12px;opacity:0.6;">${emptyMsg}</div>`);
         return;
     }
 
@@ -1467,14 +1492,7 @@ function renderProjectList(skipAutoNav) {
         }
     }
 
-    let lastWasShared = false;
-
     pageItems.forEach(p => {
-        // 공유 프로젝트 섹션 라벨 (첫 번째 공유 프로젝트 앞에 한 번만)
-        if (p._isShared && !lastWasShared) {
-            list.append(`<div class="sidebar-section-label" style="margin-top:12px;padding:0 12px;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--sidebar-text);opacity:0.5;">공유됨</div>`);
-            lastWasShared = true;
-        }
 
         const isActive = state.currentProject && state.currentProject._id === p._id;
         const date = p.created_at ? new Date(p.created_at).toLocaleDateString() : '';
@@ -1607,6 +1625,15 @@ async function openProject(projectId) {
         state.collabRole = res.project._collab_role || 'owner';
 
         hideLoading();
+
+        // 프로젝트가 속한 탭으로 자동 전환
+        const isShared = state.sharedProjects.some(p => p._id === projectId);
+        if (isShared && state.sidebarTab !== 'shared') {
+            switchSidebarTab('shared');
+        } else if (!isShared && state.sidebarTab !== 'mine') {
+            switchSidebarTab('mine');
+        }
+
         renderProjectWorkspace();
         renderProjectList();
 
@@ -11928,26 +11955,29 @@ async function renderExcelCharts(excelData) {
 /* ============ 엑셀/차트 리사이저 드래그 ============ */
 function _initExcelResizer() {
     const resizer = document.getElementById('excelResizer');
-    const univerEl = document.getElementById('univerContainer');
-    const chartsEl = document.getElementById('excelChartsContainer');
-    if (!resizer || !univerEl || !chartsEl || resizer._resizerInit) return;
+    if (!resizer || resizer._resizerInit) return;
     resizer._resizerInit = true;
 
     let startY = 0, startUH = 0, startCH = 0, dragging = false;
+    let _univerEl = null, _chartsEl = null;
 
     function onMouseDown(e) {
+        // 매번 최신 DOM 참조를 가져옴 (initUniver가 cloneNode로 교체하므로)
+        _univerEl = document.getElementById('univerContainer');
+        _chartsEl = document.getElementById('excelChartsContainer');
+        if (!_univerEl || !_chartsEl) return;
         e.preventDefault();
         dragging = true;
         startY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
-        startUH = univerEl.getBoundingClientRect().height;
-        startCH = chartsEl.getBoundingClientRect().height;
+        startUH = _univerEl.getBoundingClientRect().height;
+        startCH = _chartsEl.getBoundingClientRect().height;
         resizer.classList.add('active');
         document.body.style.cursor = 'row-resize';
         document.body.style.userSelect = 'none';
     }
 
     function onMouseMove(e) {
-        if (!dragging) return;
+        if (!dragging || !_univerEl || !_chartsEl) return;
         const clientY = e.clientY || (e.touches && e.touches[0].clientY) || 0;
         const delta = clientY - startY;
         const minU = 120, minC = 120;
@@ -11955,11 +11985,11 @@ function _initExcelResizer() {
         let newCH = startCH - delta;
         if (newUH < minU) { newUH = minU; newCH = startUH + startCH - minU; }
         if (newCH < minC) { newCH = minC; newUH = startUH + startCH - minC; }
-        univerEl.style.flex = 'none';
-        univerEl.style.height = newUH + 'px';
-        chartsEl.style.height = newCH + 'px';
-        chartsEl.style.minHeight = '0';
-        chartsEl.style.maxHeight = 'none';
+        _univerEl.style.flex = 'none';
+        _univerEl.style.height = newUH + 'px';
+        _chartsEl.style.height = newCH + 'px';
+        _chartsEl.style.minHeight = '0';
+        _chartsEl.style.maxHeight = 'none';
     }
 
     function onMouseUp() {
@@ -14019,8 +14049,28 @@ function _renderHtmlPresPage(index, slideEl) {
     shadowHost.className = 'html-shadow-host';
     shadowHost.style.width = '100%';
     shadowHost.style.height = '100%';
+    shadowHost.style.overflow = 'hidden';
     slideEl.appendChild(shadowHost);
-    _renderHtmlWithShadow(shadowHost, page.html_content || '', { overflow: 'auto' });
+    _renderHtmlWithShadow(shadowHost, page.html_content || '', { overflow: 'hidden' });
+
+    // Scale down content to fit within slide if it overflows
+    requestAnimationFrame(() => {
+        const shadow = shadowHost.shadowRoot;
+        if (!shadow) return;
+        const wrap = shadow.querySelector('.rpt-shadow-wrap');
+        if (!wrap) return;
+        // Wait for rendering to complete
+        setTimeout(() => {
+            const hostH = shadowHost.clientHeight;
+            const contentH = wrap.scrollHeight;
+            if (contentH > hostH && hostH > 0) {
+                const scale = hostH / contentH;
+                wrap.style.transformOrigin = 'top left';
+                wrap.style.transform = `scale(${scale})`;
+                wrap.style.width = (100 / scale) + '%';
+            }
+        }, 50);
+    });
 }
 
 function _buildHtmlPresCarousel() {
