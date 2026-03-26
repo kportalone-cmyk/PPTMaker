@@ -100,8 +100,8 @@ async def _build_image_prompt(
 ) -> str:
     """파워포인트 슬라이드 이미지 생성을 위한 프롬프트 구성"""
 
-    # 콘텐츠 요약 (너무 길면 자르기)
-    content_summary = content[:1500] if content else ""
+    # 콘텐츠 요약 (이미지 생성에 적합한 분량으로 제한)
+    content_summary = content[:600] if content else ""
 
     # 첫 번째 슬라이드: 배경/장식용 인포그래픽 이미지 (텍스트 없음, 타이틀은 별도 오브젝트로 오버레이)
     if slide_number == 1:
