@@ -27,17 +27,10 @@
             <p class="login-subtitle subtitle">기업용 파워포인트 자동 생성 솔루션</p>
 
             <div class="login-form">
-                <div class="form-field user-search-wrapper">
-                    <label for="loginUserSearch">사용자 검색</label>
-                    <input type="text" id="loginUserSearch" placeholder="이름을 입력하세요" autocomplete="off">
-                    <div id="userSearchDropdown" class="search-dropdown" style="display:none;"></div>
-                    <input type="hidden" id="loginUserKey" value="">
-                </div>
-                <div class="form-field" id="selectedUserInfo" style="display:none;">
-                    <div class="selected-user-chip">
-                        <span id="selectedUserName"></span>
-                        <span id="selectedUserDept" class="dept-label"></span>
-                    </div>
+                <div class="form-field">
+                    <label for="loginUserName">이름</label>
+                    <input type="text" id="loginUserName" placeholder="이름을 입력하세요" autocomplete="off" value="demo"
+                           onkeydown="if(event.key==='Enter')document.getElementById('loginPassword').focus()">
                 </div>
                 <div class="form-field">
                     <label for="loginPassword">비밀번호</label>

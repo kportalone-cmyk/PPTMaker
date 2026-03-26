@@ -37,6 +37,10 @@ async def init_indexes():
     # accounts 컬렉션
     await db.accounts.create_index("user_key", unique=True)
 
+    # demo_accounts 컬렉션 (데모/체험 계정 - 조직도 외 별도 관리)
+    await db.demo_accounts.create_index("user_key", unique=True)
+    await db.demo_accounts.create_index("nm")
+
     # projects 컬렉션
     await db.projects.create_index("user_key")
     await db.projects.create_index("created_at")
@@ -127,6 +131,36 @@ async def init_indexes():
     await org_col.create_index("ky", unique=True)
     await org_col.create_index("em")
     await org_col.create_index("dp")
+
+
+async def seed_demo_accounts():
+    """데모 계정 시드 (demo_accounts 컬렉션에 없으면 생성)"""
+    from services.auth_service import hash_password
+    db = get_db()
+
+    demo_user = await db.demo_accounts.find_one({"user_key": "demo"})
+    new_hash = hash_password("kmslab1234")
+    if not demo_user:
+        await db.demo_accounts.insert_one({
+            "user_key": "demo",
+            "nm": "Demo",
+            "dp": "Demo",
+            "em": "demo@example.com",
+            "ky": "demo",
+            "role": "",
+            "password": new_hash,
+        })
+    else:
+        # 패스워드 갱신
+        await db.demo_accounts.update_one(
+            {"user_key": "demo"},
+            {"$set": {"password": new_hash}},
+        )
+
+    # 기존 accounts 컬렉션에서 Demo 계정 정리 (마이그레이션)
+    old_account = await db.accounts.find_one({"user_key": "demo"})
+    if old_account:
+        await db.accounts.delete_one({"user_key": "demo"})
 
 
 async def close_connection():

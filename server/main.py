@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
-from services.mongo_service import init_indexes, close_connection, close_connection_sync
+from services.mongo_service import init_indexes, seed_demo_accounts, close_connection, close_connection_sync
 from services.redis_service import init_redis, close_redis, close_redis_sync
 from routers import auth, template, project, resource, generate, font, prompt, collaboration, onlyoffice
 from utils.versioning import get_file_version
@@ -54,6 +54,7 @@ async def lifespan(app: FastAPI):
 
     # 시작 시 인덱스 초기화
     await init_indexes()
+    await seed_demo_accounts()
     print("MongoDB 인덱스 초기화 완료")
 
     # Redis 초기화

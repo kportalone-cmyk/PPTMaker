@@ -123,7 +123,7 @@ const I18N = {
         appSubtitle: '기업용 파워포인트 자동 생성 솔루션',
         login: '로그인',
         logout: '로그아웃',
-        userSearch: '사용자 검색',
+        userSearch: '이름',
         userSearchPlaceholder: '이름을 입력하세요',
         password: '비밀번호',
         passwordPlaceholder: '비밀번호를 입력하세요',
@@ -247,7 +247,7 @@ const I18N = {
         typeWeb: '웹 검색',
         welcomeTitle: '무엇을 만들어볼까요?',
         welcomeDesc: '프로젝트를 선택하거나 새로 만들어 AI 문서 작업을 시작하세요',
-        msgSelectUser: '사용자를 선택하세요',
+        msgSelectUser: '이름을 입력하세요',
         msgEnterPassword: '비밀번호를 입력하세요',
         msgSelectTemplate: '템플릿을 선택하세요',
         msgAddResources: '먼저 리소스를 추가하세요',
@@ -314,7 +314,7 @@ const I18N = {
         appSubtitle: 'Enterprise PowerPoint Auto-Generation',
         login: 'Login',
         logout: 'Logout',
-        userSearch: 'User Search',
+        userSearch: 'Name',
         userSearchPlaceholder: 'Enter name',
         password: 'Password',
         passwordPlaceholder: 'Enter password',
@@ -438,7 +438,7 @@ const I18N = {
         typeWeb: 'Web',
         welcomeTitle: 'What would you like to create?',
         welcomeDesc: 'Select a project or create a new one to start AI document creation',
-        msgSelectUser: 'Please select a user',
+        msgSelectUser: 'Please enter your name',
         msgEnterPassword: 'Please enter password',
         msgSelectTemplate: 'Please select a template',
         msgAddResources: 'Please add resources first',
@@ -505,7 +505,7 @@ const I18N = {
         appSubtitle: '企業向けPPT自動生成',
         login: 'ログイン',
         logout: 'ログアウト',
-        userSearch: 'ユーザー検索',
+        userSearch: '名前',
         userSearchPlaceholder: '名前を入力',
         password: 'パスワード',
         passwordPlaceholder: 'パスワードを入力',
@@ -620,7 +620,7 @@ const I18N = {
         typeWeb: 'ウェブ',
         welcomeTitle: '何を作りますか？',
         welcomeDesc: 'プロジェクトを選択または新規作成してAIドキュメント作成を開始',
-        msgSelectUser: 'ユーザーを選択してください',
+        msgSelectUser: '名前を入力してください',
         msgEnterPassword: 'パスワードを入力してください',
         msgSelectTemplate: 'テンプレートを選択してください',
         msgAddResources: 'リソースを追加してください',
@@ -687,7 +687,7 @@ const I18N = {
         appSubtitle: '企业级PPT自动生成',
         login: '登录',
         logout: '退出',
-        userSearch: '搜索用户',
+        userSearch: '姓名',
         userSearchPlaceholder: '输入姓名',
         password: '密码',
         passwordPlaceholder: '输入密码',
@@ -802,7 +802,7 @@ const I18N = {
         typeWeb: '网页',
         welcomeTitle: '想要创建什么？',
         welcomeDesc: '选择项目或新建以开始AI文档创作',
-        msgSelectUser: '请选择用户',
+        msgSelectUser: '请输入姓名',
         msgEnterPassword: '请输入密码',
         msgSelectTemplate: '请选择模板',
         msgAddResources: '请先添加资源',
@@ -888,8 +888,8 @@ function applyI18n() {
     // 로그인
     $('.login-logo h1').text(t('appTitle'));
     $('.login-subtitle').text(t('appSubtitle'));
-    $('label[for="loginUserSearch"]').text(t('userSearch'));
-    $('#loginUserSearch').attr('placeholder', t('userSearchPlaceholder'));
+    $('label[for="loginUserName"]').text(t('userSearch'));
+    $('#loginUserName').attr('placeholder', t('userSearchPlaceholder'));
     $('label[for="loginPassword"]').text(t('password'));
     $('#loginPassword').attr('placeholder', t('passwordPlaceholder'));
     $('.btn-login').text(t('login'));
@@ -985,12 +985,8 @@ $(document).ready(function () {
         loadSharedPresentation(pathParts[1]);
     } else {
         showLogin();
-        if (jwtSegment === 'app') {
-            fillDemoCredentials();
-        }
     }
 
-    initUserSearch();
 });
 
 function hideAllViews() {
@@ -1003,6 +999,7 @@ function hideAllViews() {
 function showLogin() {
     hideAllViews();
     $('#loginView').css('display', 'flex');
+    setTimeout(() => $('#loginPassword').focus(), 100);
 }
 
 function showApp() {
@@ -1020,146 +1017,19 @@ function showAuthError() {
     $('#authErrorView').css('display', 'flex');
 }
 
-// ============ 사용자 검색 ============
-function initUserSearch() {
-    let debounceTimer = null;
-
-    $('#loginUserSearch').on('input', function () {
-        const query = $(this).val().trim();
-        if (query.length < 1) {
-            $('#userSearchDropdown').hide();
-            state.searchResults = [];
-            return;
-        }
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => searchUsers(query), 300);
-    });
-
-    $('#loginUserSearch').on('keydown', function (e) {
-        const dropdown = $('#userSearchDropdown');
-        if (!dropdown.is(':visible')) return;
-        const items = dropdown.find('.user-search-item');
-        const maxIdx = items.length - 1;
-
-        if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            state.searchHighlightIndex = Math.min(state.searchHighlightIndex + 1, maxIdx);
-            highlightSearchItem(items);
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            state.searchHighlightIndex = Math.max(state.searchHighlightIndex - 1, 0);
-            highlightSearchItem(items);
-        } else if (e.key === 'Enter') {
-            e.preventDefault();
-            if (state.searchHighlightIndex >= 0 && state.searchHighlightIndex <= maxIdx) {
-                selectSearchUser(state.searchHighlightIndex);
-            }
-        } else if (e.key === 'Escape') {
-            dropdown.hide();
-        }
-    });
-
-    $(document).on('click', function (e) {
-        if (!$(e.target).closest('.user-search-wrapper').length) {
-            $('#userSearchDropdown').hide();
-        }
-    });
-}
-
-async function searchUsers(query) {
-    try {
-        const res = await fetch('/api/auth/search-users', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: query }),
-        });
-        const data = await res.json();
-        state.searchResults = data.users || [];
-        state.searchHighlightIndex = -1;
-        renderSearchDropdown();
-    } catch (e) {
-        console.error('Search failed:', e);
-    }
-}
-
-function renderSearchDropdown() {
-    const dropdown = $('#userSearchDropdown');
-    dropdown.empty();
-    if (state.searchResults.length === 0) {
-        dropdown.html(`<div style="padding:12px;text-align:center;color:#9ca3af;font-size:13px;">${t('noSearchResult')}</div>`);
-        dropdown.show();
-        return;
-    }
-    state.searchResults.forEach((user, idx) => {
-        dropdown.append(`
-            <div class="user-search-item" data-index="${idx}" onclick="selectSearchUser(${idx})">
-                <div class="name">${escapeHtml(user.nm)}</div>
-                <div class="dept">${escapeHtml(user.dp || '')} · ${escapeHtml(user.em || '')}</div>
-            </div>
-        `);
-    });
-    dropdown.show();
-}
-
-function highlightSearchItem(items) {
-    items.removeClass('highlighted');
-    if (state.searchHighlightIndex >= 0) {
-        $(items[state.searchHighlightIndex]).addClass('highlighted');
-        items[state.searchHighlightIndex].scrollIntoView({ block: 'nearest' });
-    }
-}
-
-function selectSearchUser(index) {
-    const user = state.searchResults[index];
-    if (!user) return;
-    $('#loginUserSearch').val(user.nm);
-    $('#loginUserKey').val(user.ky);
-    $('#selectedUserName').text(user.nm);
-    $('#selectedUserDept').text(user.dp || '');
-    $('#selectedUserInfo').show();
-    $('#userSearchDropdown').hide();
-}
-
-// ============ 데모 계정 자동입력 ============
-async function fillDemoCredentials() {
-    $('#loginUserSearch').val('Demo');
-    $('#loginPassword').val('demo1234');
-    // 사용자 검색 후 첫 번째 결과 자동 선택
-    try {
-        const res = await fetch('/api/auth/search-users', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: 'Demo' }),
-        });
-        const data = await res.json();
-        const users = data.users || [];
-        if (users.length > 0) {
-            const user = users[0];
-            $('#loginUserKey').val(user.ky);
-            $('#loginUserSearch').val(user.nm);
-            $('#selectedUserName').text(user.nm);
-            $('#selectedUserDept').text(user.dp || '');
-            $('#selectedUserInfo').show();
-            showToast('데모 계정이 입력되었습니다. 로그인 버튼을 클릭하세요.', 'success');
-        }
-    } catch (e) {
-        console.error('Demo user search failed:', e);
-    }
-}
-
 // ============ 로그인/인증 ============
 async function doLogin() {
-    const userKey = $('#loginUserKey').val();
+    const userName = $('#loginUserName').val().trim();
     const password = $('#loginPassword').val();
 
-    if (!userKey) { showToast(t('msgSelectUser'), 'error'); return; }
+    if (!userName) { showToast(t('msgSelectUser'), 'error'); return; }
     if (!password) { showToast(t('msgEnterPassword'), 'error'); return; }
 
     try {
         const res = await fetch('/api/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_key: userKey, password: password }),
+            body: JSON.stringify({ user_name: userName, password: password }),
         });
         if (!res.ok) {
             const err = await res.json();
@@ -3215,6 +3085,7 @@ async function generateImageSlides(templateId) {
         $('#canvasLoadingOverlay').remove();
         _showGenerateOrRestartButton();
         _setSlideToolsDisabled(false);
+        updateCollabUI();
     }
 }
 
@@ -6300,6 +6171,12 @@ async function saveCurrentSlide() {
 
     // 저장 완료 후 조회 모드로 전환
     _exitEditModeClean();
+
+    // 히스토리 버튼 표시 및 이력 패널 갱신
+    updateCollabUI();
+    if ($('#historyPanel').is(':visible')) {
+        showHistoryPanel();
+    }
 }
 
 function _exitEditModeClean() {
@@ -7533,8 +7410,9 @@ async function initCollaboration(projectId) {
                 }
             });
             startCollabPolling(projectId);
-            updateCollabUI();
         }
+        // 히스토리 버튼 등 UI 업데이트 (협업 여부 무관)
+        updateCollabUI();
     } catch (e) {
         state.isCollabProject = false;
     }
