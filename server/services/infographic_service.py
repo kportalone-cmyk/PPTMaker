@@ -39,34 +39,36 @@ async def generate_infographic_image(
     total_slides: int = 1,
     presentation_title: str = "",
     infographic_ratio: int = 40,
-) -> str | None:
+    reference_image: bytes | None = None,
+) -> tuple[str | None, bytes | None]:
     """
     Google Gemini API를 사용하여 인포그래픽 이미지를 생성합니다.
 
     Returns:
-        생성된 이미지의 URL 경로 (실패 시 None)
+        (생성된 이미지의 URL 경로, 원본 이미지 바이트) 튜플. 실패 시 (None, None)
     """
     if not settings.GOOGLE_API_KEY:
         print("[Infographic] GOOGLE_API_KEY가 설정되지 않았습니다.")
-        return None
+        return None, None
 
     prompt = await _build_image_prompt(
         slide_title, slide_content, slide_type, style_hint, aspect_ratio,
         slide_number=slide_number, total_slides=total_slides,
         presentation_title=presentation_title,
         infographic_pct=infographic_ratio,
+        has_reference=reference_image is not None,
     )
 
     print(f"\n{'='*60}")
-    print(f"[Infographic] 슬라이드 이미지 생성 프롬프트")
+    print(f"[Infographic] 슬라이드 이미지 생성 프롬프트 (참조이미지: {'있음' if reference_image else '없음'})")
     print(f"{'='*60}")
     print(prompt)
     print(f"{'='*60}\n")
 
     try:
-        image_bytes, file_ext = await _call_gemini_image_api(prompt)
+        image_bytes, file_ext = await _call_gemini_image_api(prompt, reference_image=reference_image)
         if not image_bytes:
-            return None
+            return None, None
 
         # 이미지 파일 저장
         ext = file_ext or ".png"
@@ -75,13 +77,13 @@ async def generate_infographic_image(
         filepath.write_bytes(image_bytes)
 
         print(f"[Infographic] 이미지 저장 완료: {filepath}")
-        return f"/uploads/infographics/{filename}"
+        return f"/uploads/infographics/{filename}", image_bytes
 
     except Exception as e:
         print(f"[Infographic] 이미지 생성 실패: {e}")
         import traceback
         traceback.print_exc()
-        return None
+        return None, None
 
 
 async def _build_image_prompt(
@@ -94,6 +96,7 @@ async def _build_image_prompt(
     total_slides: int = 1,
     presentation_title: str = "",
     infographic_pct: int = 40,
+    has_reference: bool = False,
 ) -> str:
     """파워포인트 슬라이드 이미지 생성을 위한 프롬프트 구성"""
 
@@ -155,23 +158,49 @@ async def _build_image_prompt(
         style_template = await get_prompt_content("infographic_style_override")
         prompt += style_template.format(style_hint=style_hint)
 
+    # 참조 이미지가 있을 경우 스타일 일관성 지시 추가
+    if has_reference:
+        prompt += (
+            "\n\n⚠️ CRITICAL — STYLE REFERENCE IMAGE PROVIDED:\n"
+            "A reference slide image from this same presentation is attached. "
+            "You MUST match its visual style EXACTLY:\n"
+            "- Same background color/gradient\n"
+            "- Same header bar design and color\n"
+            "- Same font styles, sizes, and colors\n"
+            "- Same icon style (line weight, color)\n"
+            "- Same card/box design (border, radius, shadow)\n"
+            "- Same color palette throughout\n"
+            "- Same overall layout structure and spacing\n"
+            "Only the CONTENT (text, data, icons) should differ — the DESIGN TEMPLATE must be identical."
+        )
+
     return prompt
 
 
-async def _call_gemini_image_api(prompt: str) -> tuple[bytes | None, str | None]:
+async def _call_gemini_image_api(prompt: str, reference_image: bytes | None = None) -> tuple[bytes | None, str | None]:
     """
     Google Gemini API (google-genai SDK)를 호출하여 이미지를 생성합니다.
     gemini-3.1-flash-image-preview 모델을 사용합니다.
+
+    Args:
+        prompt: 이미지 생성 프롬프트
+        reference_image: 스타일 참조용 이미지 바이트 (있을 경우 프롬프트와 함께 전달)
 
     Returns:
         (image_bytes, file_extension) 또는 (None, None)
     """
     client = _get_client()
 
+    # 프롬프트 파트 구성 (참조 이미지가 있으면 함께 전달)
+    parts = []
+    if reference_image:
+        parts.append(types.Part.from_bytes(data=reference_image, mime_type="image/png"))
+    parts.append(types.Part.from_text(text=prompt))
+
     contents = [
         types.Content(
             role="user",
-            parts=[types.Part.from_text(text=prompt)],
+            parts=parts,
         ),
     ]
 
@@ -257,14 +286,14 @@ def _build_slide_content_text(slide: dict) -> str:
     return "\n".join(content_parts)
 
 
-async def _generate_single_slide(idx, slide, style_hint, aspect_ratio, total_slides, presentation_title, infographic_ratio=40):
+async def _generate_single_slide(idx, slide, style_hint, aspect_ratio, total_slides, presentation_title, infographic_ratio=40, reference_image: bytes | None = None):
     """단일 슬라이드 이미지를 생성"""
     title = slide.get("title", "") or slide.get("section_title", "") or f"슬라이드 {idx + 1}"
     slide_type = slide.get("type", "content")
     content_text = _build_slide_content_text(slide)
 
     print(f"[Infographic] 슬라이드 {idx + 1}/{total_slides} 생성 시작: {title}")
-    image_url = await generate_infographic_image(
+    image_url, image_bytes = await generate_infographic_image(
         slide_title=title,
         slide_content=content_text,
         slide_type=slide_type,
@@ -274,6 +303,7 @@ async def _generate_single_slide(idx, slide, style_hint, aspect_ratio, total_sli
         total_slides=total_slides,
         presentation_title=presentation_title,
         infographic_ratio=infographic_ratio,
+        reference_image=reference_image,
     )
 
     # 첫 번째 슬라이드의 subtitle 추출
@@ -288,6 +318,7 @@ async def _generate_single_slide(idx, slide, style_hint, aspect_ratio, total_sli
     return {
         "index": idx,
         "image_url": image_url,
+        "image_bytes": image_bytes,
         "title": title,
         "slide_type": slide_type,
         "subtitle": subtitle,
@@ -301,7 +332,13 @@ async def generate_infographic_batch(
     infographic_ratio: int = 40,
 ):
     """
-    전체 슬라이드를 한번에 병렬 생성 → 완료되는 순서대로 yield (인덱스 순서 보장).
+    스타일 일관성을 위해 첫 콘텐츠 슬라이드를 먼저 생성하고,
+    그 이미지를 참조로 나머지 슬라이드를 병렬 생성합니다.
+
+    생성 순서:
+      1) 커버 슬라이드 (idx=0) — 독립 생성
+      2) 첫 콘텐츠 슬라이드 (idx=1) — 독립 생성, 이미지를 참조용으로 보관
+      3) 나머지 콘텐츠 슬라이드 (idx=2+) — 2번 이미지를 참조로 병렬 생성
 
     Yields:
         {"index": int, "image_url": str|None, "title": str}
@@ -314,27 +351,68 @@ async def generate_infographic_batch(
         first = outline_slides[0]
         presentation_title = first.get("title", "") or first.get("section_title", "") or ""
 
-    print(f"[Infographic] 총 {total}장 전체 병렬 생성 시작 (주제: {presentation_title})")
+    print(f"[Infographic] 총 {total}장 생성 시작 — 스타일 참조 방식 (주제: {presentation_title})")
 
-    # 모든 슬라이드를 동시에 시작
-    tasks = []
-    for idx, slide in enumerate(outline_slides):
+    reference_image_bytes = None
+
+    # ── Phase 1: 커버(0번) + 첫 콘텐츠(1번) 병렬 생성 ──
+    phase1_indices = list(range(min(2, total)))
+    phase1_tasks = []
+    for idx in phase1_indices:
         task = asyncio.create_task(
-            _generate_single_slide(idx, slide, style_hint, aspect_ratio, total, presentation_title, infographic_ratio)
+            _generate_single_slide(
+                idx, outline_slides[idx], style_hint, aspect_ratio,
+                total, presentation_title, infographic_ratio,
+            )
+        )
+        phase1_tasks.append(task)
+
+    phase1_results = {}
+    for coro in asyncio.as_completed(phase1_tasks):
+        result = await coro
+        idx = result["index"]
+        phase1_results[idx] = result
+        print(f"[Infographic] 슬라이드 {idx + 1}/{total} 완료 (Phase 1)")
+
+    # 첫 콘텐츠 슬라이드(idx=1)의 이미지를 참조로 저장
+    if 1 in phase1_results and phase1_results[1].get("image_bytes"):
+        reference_image_bytes = phase1_results[1]["image_bytes"]
+        print(f"[Infographic] 스타일 참조 이미지 확보 (슬라이드 2, {len(reference_image_bytes)} bytes)")
+
+    # Phase 1 결과를 인덱스 순서대로 yield
+    for idx in sorted(phase1_results.keys()):
+        yield phase1_results[idx]
+
+    # ── Phase 2: 나머지 슬라이드 병렬 생성 (참조 이미지 포함) ──
+    if total <= 2:
+        print(f"[Infographic] 전체 {total}장 생성 완료")
+        return
+
+    remaining_indices = list(range(2, total))
+    print(f"[Infographic] 나머지 {len(remaining_indices)}장 병렬 생성 시작 (참조 이미지 {'있음' if reference_image_bytes else '없음'})")
+
+    tasks = []
+    for idx in remaining_indices:
+        task = asyncio.create_task(
+            _generate_single_slide(
+                idx, outline_slides[idx], style_hint, aspect_ratio,
+                total, presentation_title, infographic_ratio,
+                reference_image=reference_image_bytes,
+            )
         )
         tasks.append(task)
 
     # 완료되는 대로 수집하되, 인덱스 순서대로 yield
-    results = [None] * total
-    next_yield = 0
+    results = {}
+    next_yield = 2
 
     for coro in asyncio.as_completed(tasks):
         result = await coro
         idx = result["index"]
         results[idx] = result
-        print(f"[Infographic] 슬라이드 {idx + 1}/{total} 완료")
+        print(f"[Infographic] 슬라이드 {idx + 1}/{total} 완료 (Phase 2)")
 
-        while next_yield < total and results[next_yield] is not None:
+        while next_yield < total and next_yield in results:
             yield results[next_yield]
             next_yield += 1
 
