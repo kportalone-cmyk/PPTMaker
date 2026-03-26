@@ -865,14 +865,14 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
 
                     gen_objects.append({
                         "obj_type": "text",
-                        "x": 60, "y": 170,
-                        "width": 840, "height": 80,
+                        "x": 80, "y": 195,
+                        "width": 800, "height": 80,
                         "text_content": title,
                         "generated_text": title,
                         "role": "title",
                         "z_index": 10,
                         "text_style": {
-                            "font_size": 36,
+                            "font_size": 40,
                             "bold": True,
                             "color": "#FFFFFF",
                             "align": "center",
@@ -882,8 +882,8 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
                     if subtitle:
                         gen_objects.append({
                             "obj_type": "text",
-                            "x": 120, "y": 260,
-                            "width": 720, "height": 50,
+                            "x": 130, "y": 290,
+                            "width": 700, "height": 50,
                             "text_content": subtitle,
                             "generated_text": subtitle,
                             "role": "subtitle",

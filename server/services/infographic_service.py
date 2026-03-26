@@ -127,7 +127,43 @@ def _build_image_prompt(
 
     pres_context = f' for a presentation about "{presentation_title}"' if presentation_title else ""
 
-    prompt = f"""Generate a presentation slide image{pres_context}.
+    # 첫 번째 슬라이드는 완전히 다른 프롬프트 사용 (순수 배경 이미지)
+    if slide_number == 1:
+        prompt = f"""Generate a PURE ABSTRACT BACKGROUND IMAGE for a presentation cover slide{pres_context}.
+
+The topic of this presentation is: {title}
+
+{infographic_ratio}
+
+===== COVER SLIDE BACKGROUND DESIGN =====
+
+THIS IMAGE MUST CONTAIN ABSOLUTELY ZERO TEXT — no letters, no numbers, no labels, no words in any language.
+
+DESIGN:
+- Full widescreen {aspect_ratio} abstract background image
+- Dark professional base: deep navy (#0F1B2D) to dark blue-gray (#1B2A4A) gradient
+- Abstract decorative elements scattered across the image:
+  - Soft glowing geometric shapes (circles, hexagons, thin lines) in blue tones (#2563EB, #3B82F6)
+  - Subtle flowing particle trails or light streaks
+  - Faint circuit-like or network node patterns
+  - Gentle bokeh or lens flare effects in blue/white
+  - Abstract data visualization shapes (no actual data, just decorative curves/dots)
+- The CENTER area (middle 40% of height) should be the DARKEST and CLEANEST zone
+  with minimal visual noise — this is where text will be overlaid
+- The TOP and BOTTOM edges can have more visual density and decorative elements
+- Overall mood: premium tech keynote, elegant, futuristic, professional
+- Think Apple/Google keynote dark backgrounds — sophisticated and clean
+
+FORBIDDEN:
+- ANY text, letters, numbers, words, labels, captions whatsoever
+- Bright white areas or light backgrounds
+- Header bars, content boxes, cards, or any UI elements
+- Any recognizable objects, photos, or realistic imagery
+- Red, orange, green, purple, pink, yellow colors
+
+=========================================================================="""
+    else:
+        prompt = f"""Generate a presentation slide image{pres_context}.
 
 Slide Title: {title}
 

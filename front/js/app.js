@@ -4013,13 +4013,17 @@ function renderSlideToContainer(container, slide, thumbW, thumbH, slideSize, sli
             imgDiv.append(`<img src="${imgObj.image_url}" style="width:100%;height:100%;object-fit:cover;">`);
             container.append(imgDiv);
         }
-        // 중앙 반투명 오버레이
-        const overlayDiv = $('<div>').css({
-            position: 'absolute', left: 0,
-            top: (thumbH * 0.2) + 'px',
-            width: thumbW + 'px',
-            height: (thumbH * 0.6) + 'px',
-            background: 'rgba(0,0,0,0.35)',
+        // 전체 어두운 오버레이
+        container.append($('<div>').css({
+            position: 'absolute', left: 0, top: 0,
+            width: thumbW + 'px', height: thumbH + 'px',
+            background: 'linear-gradient(180deg, rgba(15,27,45,0.6) 0%, rgba(15,27,45,0.4) 40%, rgba(15,27,45,0.4) 60%, rgba(15,27,45,0.6) 100%)',
+            pointerEvents: 'none',
+        }));
+        // 중앙 텍스트
+        const textDiv = $('<div>').css({
+            position: 'absolute', left: 0, top: 0,
+            width: thumbW + 'px', height: thumbH + 'px',
             display: 'flex', flexDirection: 'column',
             alignItems: 'center', justifyContent: 'center',
             boxSizing: 'border-box', padding: '4px',
@@ -4030,22 +4034,24 @@ function renderSlideToContainer(container, slide, thumbW, thumbH, slideSize, sli
             || ((slide.objects || []).find(o => o.role === 'title') || {}).text_content || '';
         if (titleText) {
             const scaledFont = Math.max(4, 36 * Math.min(scaleX, scaleY));
-            overlayDiv.append($('<div>').css({
-                color: '#fff', fontSize: scaledFont + 'px', fontWeight: 'bold',
-                textAlign: 'center', lineHeight: '1.3', overflow: 'hidden',
+            textDiv.append($('<div>').css({
+                color: '#fff', fontSize: scaledFont + 'px', fontWeight: '800',
+                textAlign: 'center', lineHeight: '1.25', overflow: 'hidden',
+                textShadow: '0 1px 4px rgba(0,0,0,0.4)',
             }).text(titleText));
         }
         const subtitleText = slide.infographic_subtitle
             || ((slide.objects || []).find(o => o.role === 'subtitle') || {}).generated_text
             || ((slide.objects || []).find(o => o.role === 'subtitle') || {}).text_content || '';
         if (subtitleText) {
-            const scaledFont = Math.max(3, 20 * Math.min(scaleX, scaleY));
-            overlayDiv.append($('<div>').css({
-                color: '#E2E8F0', fontSize: scaledFont + 'px', fontWeight: '400',
+            const scaledFont = Math.max(3, 18 * Math.min(scaleX, scaleY));
+            textDiv.append($('<div>').css({
+                color: 'rgba(226,232,240,0.9)', fontSize: scaledFont + 'px', fontWeight: '400',
                 textAlign: 'center', lineHeight: '1.4', overflow: 'hidden',
+                marginTop: '2px',
             }).text(subtitleText));
         }
-        container.append(overlayDiv);
+        container.append(textDiv);
         return;
     }
 
@@ -4470,7 +4476,12 @@ function goToSlide(index) {
         exitEditMode();
     }
     state.currentSlideIndex = index;
-    renderSlideAtIndex(index);
+    // 인포그래픽 모드에서는 전용 렌더러 사용
+    if (state.infographicMode) {
+        _renderInfographicSlide(index);
+    } else {
+        renderSlideAtIndex(index);
+    }
     updateSlideNav();
 }
 
@@ -4479,7 +4490,11 @@ function prevSlide() {
         _animationCancelled = true;
         if (state.editMode) exitEditMode();
         state.currentSlideIndex--;
-        renderSlideAtIndex(state.currentSlideIndex);
+        if (state.infographicMode) {
+            _renderInfographicSlide(state.currentSlideIndex);
+        } else {
+            renderSlideAtIndex(state.currentSlideIndex);
+        }
         updateSlideNav();
     }
 }
@@ -4489,7 +4504,11 @@ function nextSlide() {
         _animationCancelled = true;
         if (state.editMode) exitEditMode();
         state.currentSlideIndex++;
-        renderSlideAtIndex(state.currentSlideIndex);
+        if (state.infographicMode) {
+            _renderInfographicSlide(state.currentSlideIndex);
+        } else {
+            renderSlideAtIndex(state.currentSlideIndex);
+        }
         updateSlideNav();
     }
 }
@@ -4990,24 +5009,45 @@ function _renderInfographicSlide(idx) {
     }
 
     if (idx === 0) {
-        // 첫 번째 슬라이드: 중앙 반투명 오버레이 + 제목/부제목 표시
-        const overlayDiv = $('<div>').addClass('preview-obj infographic-slide-center-overlay').css({
+        // 첫 번째 슬라이드: 전체 어두운 오버레이 + 중앙 제목/부제목 표시
+        // 전체 반투명 오버레이 (이미지 위에 어둡게)
+        const fullOverlay = $('<div>').addClass('preview-obj').css({
+            position: 'absolute',
+            left: 0, top: 0,
+            width: canvasW + 'px',
+            height: canvasH + 'px',
+            background: 'linear-gradient(180deg, rgba(15,27,45,0.6) 0%, rgba(15,27,45,0.4) 40%, rgba(15,27,45,0.4) 60%, rgba(15,27,45,0.6) 100%)',
+            zIndex: 2,
+            pointerEvents: 'none',
+        });
+        canvas.append(fullOverlay);
+
+        // 중앙 텍스트 컨테이너
+        const textContainer = $('<div>').addClass('preview-obj infographic-slide-center-overlay').css({
             position: 'absolute',
             left: 0,
-            top: (canvasH * 0.2) + 'px',
+            top: 0,
             width: canvasW + 'px',
-            height: (canvasH * 0.6) + 'px',
-            background: 'rgba(0,0,0,0.35)',
-            backdropFilter: 'blur(4px)',
-            WebkitBackdropFilter: 'blur(4px)',
-            zIndex: 2,
+            height: canvasH + 'px',
+            zIndex: 3,
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
             boxSizing: 'border-box',
-            padding: '20px',
+            padding: (20 * (canvasW / 960)) + 'px',
         });
+
+        // 상단 장식 라인
+        const scale = canvasW / 960;
+        const accentLine = $('<div>').css({
+            width: (80 * scale) + 'px',
+            height: (3 * scale) + 'px',
+            background: 'linear-gradient(90deg, #2563EB, #3B82F6)',
+            borderRadius: '2px',
+            marginBottom: (20 * scale) + 'px',
+        });
+        textContainer.append(accentLine);
 
         // 제목 텍스트
         const titleText = slide.infographic_title
@@ -5016,17 +5056,29 @@ function _renderInfographicSlide(idx) {
             || '';
         if (titleText) {
             const titleEl = $('<div>').css({
-                color: '#fff',
-                fontSize: (36 * (canvasW / 960)) + 'px',
-                fontWeight: 'bold',
+                color: '#FFFFFF',
+                fontSize: (40 * scale) + 'px',
+                fontWeight: '800',
                 textAlign: 'center',
-                lineHeight: '1.3',
-                marginBottom: '12px',
+                lineHeight: '1.25',
+                marginBottom: (16 * scale) + 'px',
                 wordBreak: 'keep-all',
+                letterSpacing: '-0.02em',
+                textShadow: '0 2px 8px rgba(0,0,0,0.4)',
             });
             titleEl.text(titleText);
-            overlayDiv.append(titleEl);
+            textContainer.append(titleEl);
         }
+
+        // 하단 장식 라인
+        const accentLine2 = $('<div>').css({
+            width: (40 * scale) + 'px',
+            height: (2 * scale) + 'px',
+            background: 'rgba(255,255,255,0.3)',
+            borderRadius: '1px',
+            marginBottom: (16 * scale) + 'px',
+        });
+        textContainer.append(accentLine2);
 
         // 부제목 텍스트
         const subtitleText = slide.infographic_subtitle
@@ -5035,18 +5087,20 @@ function _renderInfographicSlide(idx) {
             || '';
         if (subtitleText) {
             const subtitleEl = $('<div>').css({
-                color: '#E2E8F0',
-                fontSize: (20 * (canvasW / 960)) + 'px',
+                color: 'rgba(226,232,240,0.9)',
+                fontSize: (20 * scale) + 'px',
                 fontWeight: '400',
                 textAlign: 'center',
-                lineHeight: '1.4',
+                lineHeight: '1.5',
                 wordBreak: 'keep-all',
+                textShadow: '0 1px 4px rgba(0,0,0,0.3)',
+                maxWidth: (700 * scale) + 'px',
             });
             subtitleEl.text(subtitleText);
-            overlayDiv.append(subtitleEl);
+            textContainer.append(subtitleEl);
         }
 
-        canvas.append(overlayDiv);
+        canvas.append(textContainer);
     } else {
         // 나머지 슬라이드: 하단 그래디언트 제목 오버레이 (기존 동작)
         if (slide.infographic_title) {
