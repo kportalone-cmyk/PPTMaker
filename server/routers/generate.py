@@ -847,19 +847,11 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
                         "z_index": 1,
                     })
 
-                # 첫 번째 슬라이드: 타이틀/서브타이틀을 별도 텍스트 오브젝트로 오버레이
+                # 첫 번째 슬라이드: 타이틀을 별도 텍스트 오브젝트로 오버레이
                 if idx == 0:
-                    # subtitle 가져오기: img_result에서 먼저, 없으면 llm_slides에서
-                    if not subtitle and llm_slides:
-                        subtitle = llm_slides[0].get("subtitle", "") or ""
-                        if not subtitle:
-                            first_items = llm_slides[0].get("items", [])
-                            if first_items and isinstance(first_items[0], dict):
-                                subtitle = first_items[0].get("heading", "")
-
                     gen_objects.append({
                         "obj_type": "text",
-                        "x": 80, "y": 195,
+                        "x": 80, "y": 220,
                         "width": 800, "height": 80,
                         "text_content": title,
                         "generated_text": title,
@@ -873,23 +865,6 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
                             "font_family": "Pretendard",
                         }
                     })
-                    if subtitle:
-                        gen_objects.append({
-                            "obj_type": "text",
-                            "x": 130, "y": 290,
-                            "width": 700, "height": 50,
-                            "text_content": subtitle,
-                            "generated_text": subtitle,
-                            "role": "subtitle",
-                            "z_index": 10,
-                            "text_style": {
-                                "font_size": 20,
-                                "bold": False,
-                                "color": "#E2E8F0",
-                                "align": "center",
-                                "font_family": "Pretendard",
-                            }
-                        })
 
                 gen_slide = {
                     "project_id": data.project_id,

@@ -4061,17 +4061,6 @@ function renderSlideToContainer(container, slide, thumbW, thumbH, slideSize, sli
                 textShadow: '0 1px 4px rgba(0,0,0,0.4)',
             }).text(titleText));
         }
-        const subtitleText = slide.infographic_subtitle
-            || ((slide.objects || []).find(o => o.role === 'subtitle') || {}).generated_text
-            || ((slide.objects || []).find(o => o.role === 'subtitle') || {}).text_content || '';
-        if (subtitleText) {
-            const scaledFont = Math.max(3, 18 * Math.min(scaleX, scaleY));
-            textDiv.append($('<div>').css({
-                color: 'rgba(226,232,240,0.9)', fontSize: scaledFont + 'px', fontWeight: '400',
-                textAlign: 'center', lineHeight: '1.4', overflow: 'hidden',
-                marginTop: '2px',
-            }).text(subtitleText));
-        }
         container.append(textDiv);
         return;
     }
@@ -5090,36 +5079,6 @@ function _renderInfographicSlide(idx) {
             });
             titleEl.text(titleText);
             textContainer.append(titleEl);
-        }
-
-        // 하단 장식 라인
-        const accentLine2 = $('<div>').css({
-            width: (40 * scale) + 'px',
-            height: (2 * scale) + 'px',
-            background: 'rgba(255,255,255,0.3)',
-            borderRadius: '1px',
-            marginBottom: (16 * scale) + 'px',
-        });
-        textContainer.append(accentLine2);
-
-        // 부제목 텍스트
-        const subtitleText = slide.infographic_subtitle
-            || ((slide.objects || []).find(o => o.role === 'subtitle') || {}).generated_text
-            || ((slide.objects || []).find(o => o.role === 'subtitle') || {}).text_content
-            || '';
-        if (subtitleText) {
-            const subtitleEl = $('<div>').css({
-                color: 'rgba(226,232,240,0.9)',
-                fontSize: (20 * scale) + 'px',
-                fontWeight: '400',
-                textAlign: 'center',
-                lineHeight: '1.5',
-                wordBreak: 'keep-all',
-                textShadow: '0 1px 4px rgba(0,0,0,0.3)',
-                maxWidth: (700 * scale) + 'px',
-            });
-            subtitleEl.text(subtitleText);
-            textContainer.append(subtitleEl);
         }
 
         canvas.append(textContainer);
