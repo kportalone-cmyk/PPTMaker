@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>K-Portal OfficeMaker - AI Office Document Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: { 50:'#eff6ff',100:'#dbeafe',200:'#bfdbfe',300:'#93c5fd',400:'#60a5fa',500:'#3b82f6',600:'#2563eb',700:'#1d4ed8',800:'#1e40af',900:'#1e3a8a' },
+                        dark: { 800:'#1a1a2e',900:'#0f0f1a',950:'#0a0a14' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+        * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+        html { scroll-behavior: smooth; }
+        body { background: #0a0a14; color: #e2e8f0; }
+
+        /* Hero gradient */
+        .hero-bg {
+            background: radial-gradient(ellipse 80% 60% at 50% -10%, rgba(59,130,246,0.15) 0%, transparent 60%),
+                        radial-gradient(ellipse 60% 40% at 80% 50%, rgba(139,92,246,0.08) 0%, transparent 50%),
+                        #0a0a14;
+        }
+
+        /* Glass card */
+        .glass { background: rgba(255,255,255,0.04); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.06); }
+        .glass:hover { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.12); }
+
+        /* Video tabs */
+        .video-tab { transition: all 0.3s ease; }
+        .video-tab.active { background: rgba(59,130,246,0.2); border-color: #3b82f6; color: #fff; }
+        .video-tab:not(.active) { background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.08); color: #94a3b8; }
+        .video-tab:not(.active):hover { background: rgba(255,255,255,0.06); color: #cbd5e1; }
+
+        /* Video player */
+        .video-wrapper { position: relative; border-radius: 16px; overflow: hidden; box-shadow: 0 0 80px rgba(59,130,246,0.1), 0 25px 50px rgba(0,0,0,0.5); }
+        .video-wrapper::before { content: ''; position: absolute; inset: -1px; border-radius: 17px; padding: 1px;
+            background: linear-gradient(135deg, rgba(59,130,246,0.3), rgba(139,92,246,0.2), rgba(59,130,246,0.1)); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none; z-index: 2; }
+        .video-wrapper video { width: 100%; display: block; border-radius: 16px; background: #111; }
+
+        /* Feature icon glow */
+        .feature-icon { transition: all 0.3s ease; }
+        .feature-icon:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(59,130,246,0.15); }
+
+        /* Animated gradient text */
+        .gradient-text { background: linear-gradient(135deg, #60a5fa, #a78bfa, #60a5fa); background-size: 200% auto;
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent; animation: shimmer 3s linear infinite; }
+        @keyframes shimmer { to { background-position: 200% center; } }
+
+        /* Process step connector */
+        .step-line { position: absolute; top: 28px; left: calc(50% + 28px); width: calc(100% - 56px); height: 2px;
+            background: linear-gradient(90deg, rgba(59,130,246,0.4), rgba(139,92,246,0.4)); }
+
+        /* Floating badge */
+        .float-badge { animation: floatY 3s ease-in-out infinite; }
+        @keyframes floatY { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+
+        /* Section fade-in */
+        .fade-section { opacity: 0; transform: translateY(30px); transition: all 0.8s cubic-bezier(0.16,1,0.3,1); }
+        .fade-section.visible { opacity: 1; transform: translateY(0); }
+
+        /* Stat counter */
+        .stat-card { position: relative; overflow: hidden; }
+        .stat-card::after { content: ''; position: absolute; top: -50%; right: -50%; width: 100%; height: 100%;
+            background: radial-gradient(circle, rgba(59,130,246,0.06) 0%, transparent 70%); }
+
+        /* Doc detail tabs (pill style) */
+        .doc-detail-tab.active { background: rgba(255,255,255,0.1); color: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+        .doc-detail-tab:not(.active) { background: transparent; color: #64748b; cursor: pointer; }
+        .doc-detail-tab:not(.active):hover { color: #cbd5e1; background: rgba(255,255,255,0.04); }
+        .doc-detail-panel { animation: panelFadeIn 0.4s cubic-bezier(0.16,1,0.3,1); }
+        @keyframes panelFadeIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+    </style>
+</head>
+<body class="antialiased">
+
+<!-- Navigation -->
+<nav class="fixed top-0 left-0 right-0 z-50 border-b border-white/5" style="background:rgba(10,10,20,0.8);backdrop-filter:blur(20px);">
+    <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center">
+                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            </div>
+            <span class="text-lg font-bold text-white" id="navSolutionName">K-Portal OfficeMaker</span>
+        </div>
+        <div class="hidden md:flex items-center gap-8 text-sm text-slate-400">
+            <a href="#demo" class="hover:text-white transition">Demo</a>
+            <a href="#features" class="hover:text-white transition">Features</a>
+            <a href="#process" class="hover:text-white transition">Process</a>
+            <a href="#documents" class="hover:text-white transition">Documents</a>
+            <a href="#contact" class="hover:text-white transition">Contact</a>
+            <div class="relative ml-2 group">
+                <a href="/app" class="px-5 py-2 rounded-lg bg-gradient-to-r from-blue-600 to-violet-600 text-white font-semibold text-sm hover:opacity-90 transition shadow-lg shadow-blue-500/25 inline-block">체험하기</a>
+                <div class="absolute right-0 top-full mt-2 w-56 rounded-xl bg-slate-800 border border-slate-700 p-4 text-xs opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 shadow-xl">
+                    <div class="text-slate-300 font-medium mb-2">데모 계정</div>
+                    <div class="space-y-1.5 text-slate-400">
+                        <div class="flex justify-between"><span>이름</span><span class="text-white font-mono">Demo</span></div>
+                        <div class="flex justify-between"><span>비밀번호</span><span class="text-white font-mono">demo1234</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- Mobile 체험하기 -->
+        <div class="md:hidden relative group">
+            <a href="/app" class="px-4 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-violet-600 text-white font-semibold text-xs hover:opacity-90 transition inline-block">체험하기</a>
+            <div class="absolute right-0 top-full mt-2 w-48 rounded-xl bg-slate-800 border border-slate-700 p-3 text-xs opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 shadow-xl">
+                <div class="text-slate-300 font-medium mb-1.5">데모 계정</div>
+                <div class="space-y-1 text-slate-400">
+                    <div class="flex justify-between"><span>이름</span><span class="text-white font-mono">Demo</span></div>
+                    <div class="flex justify-between"><span>비밀번호</span><span class="text-white font-mono">demo1234</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</nav>
+
+<!-- Hero Section -->
+<section class="hero-bg pt-32 pb-20 px-6">
+    <div class="max-w-7xl mx-auto text-center">
+        <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full glass text-xs text-blue-300 mb-8 float-badge">
+            <span class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"></span>
+            AI-Powered Enterprise Office Suite
+        </div>
+        <h1 class="text-5xl md:text-7xl font-extrabold leading-tight mb-6">
+            <span class="text-white">AI</span><span class="gradient-text">&#xB85C; &#xB9CC;&#xB4DC;&#xB294;</span><br>
+            <span class="text-white">&#xAE30;&#xC5C5; &#xBB38;&#xC11C; &#xC790;&#xB3D9;&#xD654;</span>
+        </h1>
+        <p class="text-lg md:text-xl text-slate-400 max-w-2xl mx-auto mb-12 leading-relaxed">
+            PowerPoint, Excel, Word &mdash; &#xAE30;&#xC5C5; &#xCEE4;&#xC2A4;&#xD140; &#xD15C;&#xD50C;&#xB9BF;&#xACFC; AI&#xAC00; &#xB9CC;&#xB098;<br>
+            &#xBA87; &#xBD84; &#xB9CC;&#xC5D0; &#xC804;&#xBB38;&#xAC00; &#xC218;&#xC900;&#xC758; &#xBB38;&#xC11C;&#xB97C; &#xC0DD;&#xC131;&#xD569;&#xB2C8;&#xB2E4;.
+        </p>
+        <div class="flex flex-col items-center gap-4 mb-16">
+            <div class="flex items-center justify-center gap-4">
+                <a href="#demo" class="px-8 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-blue-500 text-white font-semibold hover:from-blue-500 hover:to-blue-400 transition-all shadow-lg shadow-blue-500/20">
+                    Demo 보기
+                </a>
+                <a href="/app" class="px-8 py-3 rounded-xl glass text-white font-medium hover:bg-white/10 transition">
+                    체험하기
+                </a>
+            </div>
+            <div class="flex items-center gap-3 text-xs text-slate-500">
+                <span>체험 계정</span>
+                <span class="px-2.5 py-1 rounded-md bg-white/5 text-slate-300 font-mono">Demo</span>
+                <span class="text-slate-600">/</span>
+                <span class="px-2.5 py-1 rounded-md bg-white/5 text-slate-300 font-mono">demo1234</span>
+            </div>
+        </div>
+
+        <!-- Stats -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl mx-auto">
+            <div class="stat-card glass rounded-2xl p-5 text-center">
+                <div class="text-3xl font-bold text-white mb-1">3</div>
+                <div class="text-xs text-slate-400">&#xBB38;&#xC11C; &#xD0C0;&#xC785; &#xC9C0;&#xC6D0;</div>
+            </div>
+            <div class="stat-card glass rounded-2xl p-5 text-center">
+                <div class="text-3xl font-bold text-white mb-1">AI</div>
+                <div class="text-xs text-slate-400">LLM &#xAE30;&#xBC18;</div>
+            </div>
+            <div class="stat-card glass rounded-2xl p-5 text-center">
+                <div class="text-3xl font-bold text-white mb-1">SSO</div>
+                <div class="text-xs text-slate-400">&#xAE30;&#xC5C5; JWT &#xC5F0;&#xB3D9;</div>
+            </div>
+            <div class="stat-card glass rounded-2xl p-5 text-center">
+                <div class="text-3xl font-bold text-white mb-1">4</div>
+                <div class="text-xs text-slate-400">&#xB2E4;&#xAD6D;&#xC5B4; &#xC9C0;&#xC6D0;</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Demo Video Section -->
+<section id="demo" class="py-24 px-6 fade-section">
+    <div class="max-w-6xl mx-auto">
+        <div class="text-center mb-12">
+            <h2 class="text-3xl md:text-4xl font-bold text-white mb-4">&#xC2E4;&#xC81C; &#xB3D9;&#xC791; &#xD654;&#xBA74;</h2>
+            <p class="text-slate-400">AI&#xAC00; &#xBB38;&#xC11C;&#xB97C; &#xC0DD;&#xC131;&#xD558;&#xB294; &#xACFC;&#xC815;&#xC744; &#xC9C1;&#xC811; &#xD655;&#xC778;&#xD558;&#xC138;&#xC694;</p>
+        </div>
+
+        <!-- Video Tabs -->
+        <div class="flex justify-center gap-3 mb-8">
+            <button class="video-tab active px-6 py-3 rounded-xl border text-sm font-medium flex items-center gap-2.5" onclick="switchVideo('ppt', this)">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M3.75 3v18h16.5V8.25L14.25 3H3.75z"/><path d="M14.25 3v5.25H19.5"/></svg>
+                PowerPoint
+            </button>
+            <button class="video-tab px-6 py-3 rounded-xl border text-sm font-medium flex items-center gap-2.5" onclick="switchVideo('excel', this)">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h1.5C5.496 19.5 6 19 6 18.375m-2.625 0V5.625m0 0A1.125 1.125 0 014.5 4.5h15a1.125 1.125 0 011.125 1.125m-17.25 0h17.25m0 0v12.75M6 18.375v-12A1.125 1.125 0 017.125 5.25h9.75A1.125 1.125 0 0118 6.375v12"/></svg>
+                Excel
+            </button>
+            <button class="video-tab px-6 py-3 rounded-xl border text-sm font-medium flex items-center gap-2.5" onclick="switchVideo('word', this)">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+                Word
+            </button>
+        </div>
+
+        <!-- Video Player -->
+        <div class="video-wrapper max-w-5xl mx-auto">
+            <video id="demoVideo" controls autoplay muted loop playsinline>
+                <source src="/front/static/ppt.mp4" type="video/mp4">
+            </video>
+        </div>
+        <p id="videoCaption" class="text-center text-sm text-slate-500 mt-4">AI가 템플릿 기반으로 PowerPoint 슬라이드를 실시간 생성하는 모습</p>
+    </div>
+</section>
+
+<!-- Features Section -->
+<section id="features" class="py-24 px-6 fade-section">
+    <div class="max-w-7xl mx-auto">
+        <div class="text-center mb-16">
+            <h2 class="text-3xl md:text-4xl font-bold text-white mb-4">&#xD575;&#xC2EC; &#xAE30;&#xB2A5;</h2>
+            <p class="text-slate-400 max-w-xl mx-auto">&#xAE30;&#xC5C5; &#xD658;&#xACBD;&#xC5D0; &#xCD5C;&#xC801;&#xD654;&#xB41C; AI &#xBB38;&#xC11C; &#xC0DD;&#xC131; &#xC194;&#xB8E8;&#xC158;</p>
+        </div>
+
+        <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+            <!-- Feature 1 -->
+            <div class="glass rounded-2xl p-7 feature-icon">
+                <div class="w-12 h-12 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mb-5">
+                    <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456z"/></svg>
+                </div>
+                <h3 class="text-lg font-semibold text-white mb-2">AI &#xCF58;&#xD150;&#xCE20; &#xC0DD;&#xC131;</h3>
+                <p class="text-sm text-slate-400 leading-relaxed">LLM &#xAE30;&#xBC18; AI&#xAC00; &#xB9AC;&#xC18C;&#xC2A4;&#xB97C; &#xBD84;&#xC11D;&#xD558;&#xC5EC; &#xBB38;&#xC11C; &#xCF58;&#xD150;&#xCE20;&#xB97C; &#xC790;&#xB3D9; &#xC0DD;&#xC131;. &#xC2A4;&#xD2B8;&#xB9AC;&#xBC0D;&#xC73C;&#xB85C; &#xC2E4;&#xC2DC;&#xAC04; &#xD655;&#xC778; &#xAC00;&#xB2A5;.</p>
+            </div>
+            <!-- Feature 2 -->
+            <div class="glass rounded-2xl p-7 feature-icon">
+                <div class="w-12 h-12 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center mb-5">
+                    <svg class="w-6 h-6 text-violet-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M2.25 7.125C2.25 6.504 2.754 6 3.375 6h6c.621 0 1.125.504 1.125 1.125v3.75c0 .621-.504 1.125-1.125 1.125h-6a1.125 1.125 0 01-1.125-1.125v-3.75zM14.25 8.625c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125v8.25c0 .621-.504 1.125-1.125 1.125h-5.25a1.125 1.125 0 01-1.125-1.125v-8.25zM3.75 16.125c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125v2.25c0 .621-.504 1.125-1.125 1.125h-5.25a1.125 1.125 0 01-1.125-1.125v-2.25z"/></svg>
+                </div>
+                <h3 class="text-lg font-semibold text-white mb-2">&#xCEE4;&#xC2A4;&#xD140; &#xD15C;&#xD50C;&#xB9BF;</h3>
+                <p class="text-sm text-slate-400 leading-relaxed">&#xAE30;&#xC5C5; CI/BI &#xAC00;&#xC774;&#xB4DC;&#xC5D0; &#xB9DE;&#xB294; &#xD15C;&#xD50C;&#xB9BF;&#xC744; &#xAD00;&#xB9AC;&#xC790;&#xAC00; &#xC9C1;&#xC811; &#xAD6C;&#xCD95;. &#xBC30;&#xACBD;, &#xD3F0;&#xD2B8;, &#xB808;&#xC774;&#xC544;&#xC6C3;&#xC744; &#xC790;&#xC720;&#xB86D;&#xAC8C; &#xC124;&#xACC4;.</p>
+            </div>
+            <!-- Feature 3 -->
+            <div class="glass rounded-2xl p-7 feature-icon">
+                <div class="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-5">
+                    <svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5a17.92 17.92 0 01-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"/></svg>
+                </div>
+                <h3 class="text-lg font-semibold text-white mb-2">&#xC6F9; &#xAC80;&#xC0C9; &#xD1B5;&#xD569;</h3>
+                <p class="text-sm text-slate-400 leading-relaxed">Perplexity API &#xC5F0;&#xB3D9;&#xC73C;&#xB85C; &#xC2E4;&#xC2DC;&#xAC04; &#xC6F9; &#xAC80;&#xC0C9; &#xACB0;&#xACFC;&#xB97C; &#xB9AC;&#xC18C;&#xC2A4;&#xB85C; &#xD65C;&#xC6A9;. &#xCD5C;&#xC2E0; &#xC815;&#xBCF4; &#xAE30;&#xBC18; &#xBB38;&#xC11C; &#xC0DD;&#xC131;.</p>
+            </div>
+            <!-- Feature 4 -->
+            <div class="glass rounded-2xl p-7 feature-icon">
+                <div class="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center mb-5">
+                    <svg class="w-6 h-6 text-amber-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
+                </div>
+                <h3 class="text-lg font-semibold text-white mb-2">&#xC2E4;&#xC2DC;&#xAC04; &#xD611;&#xC5C5;</h3>
+                <p class="text-sm text-slate-400 leading-relaxed">SSE &#xAE30;&#xBC18; &#xC2E4;&#xC2DC;&#xAC04; &#xB3D9;&#xAE30;&#xD654;. &#xC2AC;&#xB77C;&#xC774;&#xB4DC; &#xC7A0;&#xAE08;, &#xC628;&#xB77C;&#xC778; &#xC0C1;&#xD0DC; &#xD45C;&#xC2DC;, &#xBCC0;&#xACBD; &#xC774;&#xB825; &#xAD00;&#xB9AC; &#xC9C0;&#xC6D0;.</p>
+            </div>
+            <!-- Feature 5 -->
+            <div class="glass rounded-2xl p-7 feature-icon">
+                <div class="w-12 h-12 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center mb-5">
+                    <svg class="w-6 h-6 text-rose-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>
+                </div>
+                <h3 class="text-lg font-semibold text-white mb-2">&#xAE30;&#xC5C5; &#xBCF4;&#xC548;</h3>
+                <p class="text-sm text-slate-400 leading-relaxed">JWT &#xAE30;&#xBC18; &#xC778;&#xC99D;, &#xC870;&#xC9C1;&#xB3C4; SSO &#xC5F0;&#xB3D9;, &#xC554;&#xD638;&#xD654; &#xCC98;&#xB9AC;. &#xB2E4;&#xC911; &#xC11C;&#xBC84; L4 &#xC774;&#xC911;&#xD654; &#xD658;&#xACBD; &#xC9C0;&#xC6D0;.</p>
+            </div>
+            <!-- Feature 6 -->
+            <div class="glass rounded-2xl p-7 feature-icon">
+                <div class="w-12 h-12 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center mb-5">
+                    <svg class="w-6 h-6 text-cyan-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M10.5 21l5.25-11.25L21 21m-9-3h7.5M3 5.621a48.474 48.474 0 016-.371m0 0c1.12 0 2.233.038 3.334.114M9 5.25V3m3.334 2.364C11.176 10.658 7.69 15.08 3 17.502m9.334-12.138c.896.061 1.785.147 2.666.257m-4.589 8.495a18.023 18.023 0 01-3.827-5.802"/></svg>
+                </div>
+                <h3 class="text-lg font-semibold text-white mb-2">&#xB2E4;&#xAD6D;&#xC5B4; &#xBC88;&#xC5ED;</h3>
+                <p class="text-sm text-slate-400 leading-relaxed">&#xD55C;&#xAD6D;&#xC5B4;, &#xC601;&#xC5B4;, &#xC77C;&#xBCF8;&#xC5B4;, &#xC911;&#xAD6D;&#xC5B4; 4&#xAC1C; &#xC5B8;&#xC5B4; &#xC9C0;&#xC6D0;. &#xC0DD;&#xC131;&#xB41C; &#xBB38;&#xC11C;&#xB97C; &#xD074;&#xB9AD; &#xD55C; &#xBC88;&#xC73C;&#xB85C; &#xBC88;&#xC5ED;.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Process Section -->
+<section id="process" class="py-24 px-6 fade-section" style="background: linear-gradient(180deg, transparent, rgba(59,130,246,0.03), transparent);">
+    <div class="max-w-5xl mx-auto">
+        <div class="text-center mb-16">
+            <h2 class="text-3xl md:text-4xl font-bold text-white mb-4">&#xC0AC;&#xC6A9; &#xD504;&#xB85C;&#xC138;&#xC2A4;</h2>
+            <p class="text-slate-400">&#xAC04;&#xB2E8;&#xD55C; 4&#xB2E8;&#xACC4;&#xB85C; &#xC804;&#xBB38;&#xAC00; &#xC218;&#xC900;&#xC758; &#xBB38;&#xC11C;&#xB97C; &#xC0DD;&#xC131;&#xD558;&#xC138;&#xC694;</p>
+        </div>
+
+        <div class="grid md:grid-cols-4 gap-6">
+            <!-- Step 1 -->
+            <div class="relative text-center">
+                <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-500/20 to-blue-600/10 border border-blue-500/20 flex items-center justify-center mx-auto mb-5">
+                    <span class="text-xl font-bold text-blue-400">1</span>
+                </div>
+                <div class="hidden md:block step-line"></div>
+                <h3 class="text-base font-semibold text-white mb-2">&#xD504;&#xB85C;&#xC81D;&#xD2B8; &#xC0DD;&#xC131;</h3>
+                <p class="text-sm text-slate-400">&#xBB38;&#xC11C; &#xD0C0;&#xC785;&#xC744; &#xC120;&#xD0DD;&#xD558;&#xACE0;<br>&#xC0C8; &#xD504;&#xB85C;&#xC81D;&#xD2B8;&#xB97C; &#xB9CC;&#xB4ED;&#xB2C8;&#xB2E4;</p>
+            </div>
+            <!-- Step 2 -->
+            <div class="relative text-center">
+                <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500/20 to-violet-600/10 border border-violet-500/20 flex items-center justify-center mx-auto mb-5">
+                    <span class="text-xl font-bold text-violet-400">2</span>
+                </div>
+                <div class="hidden md:block step-line"></div>
+                <h3 class="text-base font-semibold text-white mb-2">&#xB9AC;&#xC18C;&#xC2A4; &#xB4F1;&#xB85D;</h3>
+                <p class="text-sm text-slate-400">Word, Excel, PDF, &#xD14D;&#xC2A4;&#xD2B8;<br>&#xB610;&#xB294; &#xC6F9; &#xAC80;&#xC0C9;&#xC73C;&#xB85C; &#xC790;&#xB8CC; &#xC218;&#xC9D1;</p>
+            </div>
+            <!-- Step 3 -->
+            <div class="relative text-center">
+                <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-500/20 to-emerald-600/10 border border-emerald-500/20 flex items-center justify-center mx-auto mb-5">
+                    <span class="text-xl font-bold text-emerald-400">3</span>
+                </div>
+                <div class="hidden md:block step-line"></div>
+                <h3 class="text-base font-semibold text-white mb-2">AI &#xC0DD;&#xC131;</h3>
+                <p class="text-sm text-slate-400">&#xD15C;&#xD50C;&#xB9BF; &#xC120;&#xD0DD; + &#xC9C0;&#xCE68; &#xC785;&#xB825;<br>AI&#xAC00; &#xC2E4;&#xC2DC;&#xAC04;&#xC73C;&#xB85C; &#xBB38;&#xC11C; &#xC0DD;&#xC131;</p>
+            </div>
+            <!-- Step 4 -->
+            <div class="relative text-center">
+                <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-500/20 to-amber-600/10 border border-amber-500/20 flex items-center justify-center mx-auto mb-5">
+                    <span class="text-xl font-bold text-amber-400">4</span>
+                </div>
+                <h3 class="text-base font-semibold text-white mb-2">&#xD3B8;&#xC9D1; &amp; &#xB2E4;&#xC6B4;&#xB85C;&#xB4DC;</h3>
+                <p class="text-sm text-slate-400">&#xC2AC;&#xB77C;&#xC774;&#xB4DC;&#xBCC4; &#xD3B8;&#xC9D1;, &#xBC88;&#xC5ED;<br>PPTX / XLSX / DOCX &#xB2E4;&#xC6B4;&#xB85C;&#xB4DC;</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Document Types Section -->
+<section id="documents" class="py-24 px-6 fade-section">
+    <div class="max-w-6xl mx-auto">
+        <div class="text-center mb-16">
+            <h2 class="text-3xl md:text-4xl font-bold text-white mb-4">&#xC9C0;&#xC6D0; &#xBB38;&#xC11C; &#xD0C0;&#xC785;</h2>
+            <p class="text-slate-400">&#xD558;&#xB098;&#xC758; &#xD50C;&#xB7AB;&#xD3FC;&#xC5D0;&#xC11C; 3&#xAC00;&#xC9C0; &#xBB38;&#xC11C;&#xB97C; &#xBAA8;&#xB450; &#xC0DD;&#xC131;</p>
+        </div>
+
+        <div class="grid md:grid-cols-3 gap-6">
+            <!-- PPT -->
+            <div class="glass rounded-2xl p-8 text-center group hover:border-orange-500/30 transition-all duration-300">
+                <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-orange-500/20 to-red-500/10 border border-orange-500/20 flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition-transform">
+                    <svg class="w-8 h-8 text-orange-400" fill="currentColor" viewBox="0 0 24 24"><path d="M6 2a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6H6zm7 1.5L18.5 9H13V3.5zM8 13h8v1H8v-1zm0 3h8v1H8v-1zm0-6h3v1H8v-1z"/></svg>
+                </div>
+                <h3 class="text-xl font-bold text-white mb-3">PowerPoint</h3>
+                <p class="text-sm text-slate-400 leading-relaxed mb-4">커스텀 템플릿 기반 슬라이드 생성. 배경, 폰트, 레이아웃 자동 배치. 슬라이드별 편집 및 프레젠테이션 모드.</p>
+                <div class="flex flex-wrap justify-center gap-2">
+                    <span class="px-2.5 py-1 rounded-lg bg-orange-500/10 text-orange-300 text-xs">템플릿 기반</span>
+                    <span class="px-2.5 py-1 rounded-lg bg-orange-500/10 text-orange-300 text-xs">편집 가능</span>
+                    <span class="px-2.5 py-1 rounded-lg bg-orange-500/10 text-orange-300 text-xs">.pptx 다운로드</span>
+                </div>
+            </div>
+            <!-- Excel -->
+            <div class="glass rounded-2xl p-8 text-center group hover:border-emerald-500/30 transition-all duration-300">
+                <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500/20 to-green-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition-transform">
+                    <svg class="w-8 h-8 text-emerald-400" fill="currentColor" viewBox="0 0 24 24"><path d="M6 2a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6H6zm7 1.5L18.5 9H13V3.5zM8 13h2v2H8v-2zm0 3h2v2H8v-2zm3-3h2v2h-2v-2zm0 3h2v2h-2v-2zm3-3h2v2h-2v-2zm0 3h2v2h-2v-2z"/></svg>
+                </div>
+                <h3 class="text-xl font-bold text-white mb-3">Excel</h3>
+                <p class="text-sm text-slate-400 leading-relaxed mb-4">AI가 데이터를 분석하여 스프레드시트 자동 생성. 차트 정의 포함. 브라우저 내 편집 지원.</p>
+                <div class="flex flex-wrap justify-center gap-2">
+                    <span class="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-300 text-xs">차트 자동 생성</span>
+                    <span class="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-300 text-xs">브라우저 편집</span>
+                    <span class="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-300 text-xs">.xlsx 다운로드</span>
+                </div>
+            </div>
+            <!-- Word -->
+            <div class="glass rounded-2xl p-8 text-center group hover:border-blue-500/30 transition-all duration-300">
+                <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500/20 to-indigo-500/10 border border-blue-500/20 flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition-transform">
+                    <svg class="w-8 h-8 text-blue-400" fill="currentColor" viewBox="0 0 24 24"><path d="M6 2a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6H6zm7 1.5L18.5 9H13V3.5zM8 12h8v1.5H8V12zm0 3h8v1.5H8V15zm0 3h5v1.5H8V18z"/></svg>
+                </div>
+                <h3 class="text-xl font-bold text-white mb-3">Word</h3>
+                <p class="text-sm text-slate-400 leading-relaxed mb-4">구조화된 보고서/제안서 자동 생성. 섹션별 콘텐츠 구성. 브라우저 편집 지원.</p>
+                <div class="flex flex-wrap justify-center gap-2">
+                    <span class="px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-300 text-xs">구조화된 작성</span>
+                    <span class="px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-300 text-xs">브라우저 편집</span>
+                    <span class="px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-300 text-xs">.docx 다운로드</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Detail Feature Tabs -->
+        <div class="mt-16">
+            <!-- Tab buttons -->
+            <div class="flex justify-center mb-10">
+                <div class="inline-flex rounded-2xl p-1.5" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);">
+                    <button class="doc-detail-tab active px-7 py-2.5 rounded-xl text-sm font-medium transition-all" data-tab="ppt" onclick="switchDocTab('ppt', this)">PowerPoint</button>
+                    <button class="doc-detail-tab px-7 py-2.5 rounded-xl text-sm font-medium transition-all" data-tab="excel" onclick="switchDocTab('excel', this)">Excel</button>
+                    <button class="doc-detail-tab px-7 py-2.5 rounded-xl text-sm font-medium transition-all" data-tab="word" onclick="switchDocTab('word', this)">Word</button>
+                </div>
+            </div>
+
+            <!-- PPT Panel -->
+            <div class="doc-detail-panel" id="panel-ppt">
+                <div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                    <div class="glass rounded-2xl p-5 group hover:border-orange-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-orange-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-orange-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M2.25 7.125C2.25 6.504 2.754 6 3.375 6h6c.621 0 1.125.504 1.125 1.125v3.75c0 .621-.504 1.125-1.125 1.125h-6a1.125 1.125 0 01-1.125-1.125v-3.75z"/><path d="M14.25 8.625c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125v8.25c0 .621-.504 1.125-1.125 1.125h-5.25a1.125 1.125 0 01-1.125-1.125v-8.25z"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">템플릿 기반 생성</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">커스텀 템플릿의 배경, 폰트, 레이아웃을 자동 매칭</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-orange-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-orange-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-orange-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">실시간 스트리밍</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">AI가 슬라이드를 생성하는 과정을 실시간 확인</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-orange-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-orange-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-orange-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">슬라이드 편집</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">텍스트, 이미지, 도형, 표를 슬라이드별 직접 편집</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-orange-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-orange-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-orange-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">AI 리라이트</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">선택한 텍스트를 AI가 즉시 수정 및 개선</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-orange-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-orange-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-orange-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">프레젠테이션</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">브라우저 내 전체화면 발표 모드 지원</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-orange-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-orange-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-orange-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 0A1.125 1.125 0 014.5 4.5h15a1.125 1.125 0 011.125 1.125m-17.25 0h17.25"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">표 자동 생성</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">데이터 기반 표를 자동 생성하고 셀 단위 편집</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-orange-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-orange-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-orange-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">슬라이드 관리</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">추가, 삭제, 드래그&드롭으로 순서 변경</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-orange-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-orange-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-orange-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">다운로드 & 공유</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">PPTX, PDF 다운로드 및 공유 링크 생성</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-orange-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-orange-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-orange-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M10.5 21l5.25-11.25L21 21m-9-3h7.5M3 5.621a48.474 48.474 0 016-.371m0 0c1.12 0 2.233.038 3.334.114M9 5.25V3m3.334 2.364C11.176 10.658 7.69 15.08 3 17.502m9.334-12.138c.896.061 1.785.147 2.666.257m-4.589 8.495a18.023 18.023 0 01-3.827-5.802"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">다국어 번역</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">한/영/일/중 원클릭 전체 슬라이드 번역</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-orange-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-orange-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-orange-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">실시간 협업</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">슬라이드 잠금, 온라인 상태, 변경 이력 추적</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Excel Panel -->
+            <div class="doc-detail-panel" id="panel-excel" style="display:none;">
+                <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div class="glass rounded-2xl p-5 group hover:border-emerald-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">자동 스프레드시트</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">AI가 리소스를 분석하여 시트 구조를 자동 구성</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-emerald-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">차트 자동 생성</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">Bar, Line, Pie 등 데이터에 맞는 차트 자동 삽입</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-emerald-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">다중 시트</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">요약, 상세, 분석 등 목적별 시트 자동 구성</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-emerald-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M9.53 16.122a3 3 0 00-5.78 1.128 2.25 2.25 0 01-2.4 2.245 4.5 4.5 0 008.4-2.245c0-.399-.078-.78-.22-1.128zm0 0a15.998 15.998 0 003.388-1.62m-5.043-.025a15.994 15.994 0 011.622-3.395m3.42 3.42a15.995 15.995 0 004.764-4.648l3.876-5.814a1.151 1.151 0 00-1.597-1.597L14.146 6.32a15.996 15.996 0 00-4.649 4.763m3.42 3.42a6.776 6.776 0 00-3.42-3.42"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">셀 서식 & 스타일</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">서식, 병합, 색상, 테두리 자동 적용</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-emerald-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">브라우저 편집</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">내장 스프레드시트 편집기로 바로 수정</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-emerald-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">AI 데이터 수정</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">AI 지침으로 기존 데이터를 수정하고 보강</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-emerald-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">XLSX 다운로드</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">서식과 차트가 포함된 엑셀 파일 다운로드</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-emerald-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M10.5 21l5.25-11.25L21 21m-9-3h7.5M3 5.621a48.474 48.474 0 016-.371m0 0c1.12 0 2.233.038 3.334.114M9 5.25V3m3.334 2.364C11.176 10.658 7.69 15.08 3 17.502m9.334-12.138c.896.061 1.785.147 2.666.257m-4.589 8.495a18.023 18.023 0 01-3.827-5.802"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">다국어 번역</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">한/영/일/중 원클릭 번역 지원</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Word Panel -->
+            <div class="doc-detail-panel" id="panel-word" style="display:none;">
+                <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div class="glass rounded-2xl p-5 group hover:border-blue-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-blue-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">자동 구조화</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">섹션, 목차, 제목 구조를 AI가 자동 설계</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-blue-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-blue-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">실시간 스트리밍</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">AI가 섹션별로 문서를 실시간 생성</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-blue-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-blue-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">DOCX 템플릿</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">기업 양식 템플릿 업로드 및 스타일 적용</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-blue-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-blue-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 0A1.125 1.125 0 014.5 4.5h15a1.125 1.125 0 011.125 1.125m-17.25 0h17.25"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">표 & 서식</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">표, 목록, 텍스트 서식을 자동 생성</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-blue-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-blue-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">브라우저 편집</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">내장 리치 텍스트 편집기로 바로 수정</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-blue-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-blue-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">AI 문서 수정</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">AI 지침으로 기존 문서를 수정하고 보강</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-blue-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-blue-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">DOCX 다운로드</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">서식이 유지된 Word 파일 다운로드</p>
+                    </div>
+                    <div class="glass rounded-2xl p-5 group hover:border-blue-500/20 transition-all">
+                        <div class="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center mb-3">
+                            <svg class="w-4.5 h-4.5 text-blue-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M10.5 21l5.25-11.25L21 21m-9-3h7.5M3 5.621a48.474 48.474 0 016-.371m0 0c1.12 0 2.233.038 3.334.114M9 5.25V3m3.334 2.364C11.176 10.658 7.69 15.08 3 17.502m9.334-12.138c.896.061 1.785.147 2.666.257m-4.589 8.495a18.023 18.023 0 01-3.827-5.802"/></svg>
+                        </div>
+                        <h4 class="text-white text-sm font-medium mb-1">다국어 번역</h4>
+                        <p class="text-xs text-slate-500 leading-relaxed">한/영/일/중 원클릭 번역 지원</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Architecture / Admin Section -->
+<section class="py-24 px-6 fade-section" style="background: linear-gradient(180deg, transparent, rgba(139,92,246,0.03), transparent);">
+    <div class="max-w-6xl mx-auto">
+        <div class="text-center mb-16">
+            <h2 class="text-3xl md:text-4xl font-bold text-white mb-4">&#xAD00;&#xB9AC;&#xC790; &#xAE30;&#xB2A5;</h2>
+            <p class="text-slate-400">&#xD15C;&#xD50C;&#xB9BF;&#xBD80;&#xD130; &#xD504;&#xB86C;&#xD504;&#xD2B8;&#xAE4C;&#xC9C0;, &#xAD00;&#xB9AC;&#xC790;&#xAC00; &#xC644;&#xC804;&#xD788; &#xD1B5;&#xC81C;</p>
+        </div>
+
+        <div class="grid md:grid-cols-2 gap-6">
+            <div class="glass rounded-2xl p-8">
+                <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
+                        <svg class="w-5 h-5 text-violet-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    </div>
+                    &#xD15C;&#xD50C;&#xB9BF; &#xBE4C;&#xB354;
+                </h3>
+                <ul class="space-y-3 text-sm text-slate-400">
+                    <li class="flex items-start gap-2.5"><span class="w-1.5 h-1.5 rounded-full bg-violet-400 mt-1.5 shrink-0"></span>&#xCE94;&#xBC84;&#xC2A4; &#xAE30;&#xBC18; &#xB4DC;&#xB798;&#xADF8;&amp;&#xB4DC;&#xB86D; &#xC2AC;&#xB77C;&#xC774;&#xB4DC; &#xD3B8;&#xC9D1;&#xAE30;</li>
+                    <li class="flex items-start gap-2.5"><span class="w-1.5 h-1.5 rounded-full bg-violet-400 mt-1.5 shrink-0"></span>&#xBC30;&#xACBD; &#xC774;&#xBBF8;&#xC9C0;, &#xD14D;&#xC2A4;&#xD2B8;/&#xC774;&#xBBF8;&#xC9C0; &#xC624;&#xBE0C;&#xC81D;&#xD2B8; &#xBC30;&#xCE58;</li>
+                    <li class="flex items-start gap-2.5"><span class="w-1.5 h-1.5 rounded-full bg-violet-400 mt-1.5 shrink-0"></span>&#xD3F0;&#xD2B8;, &#xC0C9;&#xC0C1;, &#xD06C;&#xAE30; &#xC138;&#xBD80; &#xC124;&#xC815; (&#xC11C;&#xBC84; &#xB4F1;&#xB85D; &#xD3F0;&#xD2B8;)</li>
+                    <li class="flex items-start gap-2.5"><span class="w-1.5 h-1.5 rounded-full bg-violet-400 mt-1.5 shrink-0"></span>&#xC2AC;&#xB77C;&#xC774;&#xB4DC; &#xBA54;&#xD0C0;&#xC815;&#xBCF4; (&#xC81C;&#xBAA9;/&#xAC70;&#xBC84;&#xB10C;&#xC2A4;/&#xC11C;&#xBE0C;&#xD14D;&#xC2A4;&#xD2B8;) &#xAD00;&#xB9AC;</li>
+                </ul>
+            </div>
+
+            <div class="glass rounded-2xl p-8">
+                <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
+                        <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.076-4.076a1.526 1.526 0 011.037-.443 48.282 48.282 0 005.68-.494c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/></svg>
+                    </div>
+                    AI &#xD504;&#xB86C;&#xD504;&#xD2B8; &#xAD00;&#xB9AC;
+                </h3>
+                <ul class="space-y-3 text-sm text-slate-400">
+                    <li class="flex items-start gap-2.5"><span class="w-1.5 h-1.5 rounded-full bg-blue-400 mt-1.5 shrink-0"></span>&#xBB38;&#xC11C; &#xD0C0;&#xC785;&#xBCC4; &#xC2DC;&#xC2A4;&#xD15C;/&#xC0AC;&#xC6A9;&#xC790; &#xD504;&#xB86C;&#xD504;&#xD2B8; &#xCEE4;&#xC2A4;&#xD130;&#xB9C8;&#xC774;&#xC9D5;</li>
+                    <li class="flex items-start gap-2.5"><span class="w-1.5 h-1.5 rounded-full bg-blue-400 mt-1.5 shrink-0"></span>&#xC0DD;&#xC131; &#xD488;&#xC9C8; &#xBC0F; &#xC2A4;&#xD0C0;&#xC77C; &#xC81C;&#xC5B4; (&#xD1A4;, &#xBB38;&#xCCB4;, &#xAD6C;&#xC870;)</li>
+                    <li class="flex items-start gap-2.5"><span class="w-1.5 h-1.5 rounded-full bg-blue-400 mt-1.5 shrink-0"></span>&#xC544;&#xC6C3;&#xB77C;&#xC778; &#xBAA8;&#xB378; &#xBC0F; &#xCF58;&#xD150;&#xCE20; &#xBAA8;&#xB378; &#xBD84;&#xB9AC; &#xC124;&#xC815;</li>
+                    <li class="flex items-start gap-2.5"><span class="w-1.5 h-1.5 rounded-full bg-blue-400 mt-1.5 shrink-0"></span>&#xD504;&#xB86C;&#xD504;&#xD2B8; &#xBC84;&#xC804; &#xAD00;&#xB9AC; &#xBC0F; A/B &#xD14C;&#xC2A4;&#xD2B8;</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</section>
+
+
+<!-- Contact / CTA -->
+<section id="contact" class="py-24 px-6 fade-section">
+    <div class="max-w-3xl mx-auto text-center">
+        <div class="glass rounded-3xl p-12 md:p-16" style="background: linear-gradient(135deg, rgba(59,130,246,0.08), rgba(139,92,246,0.05));">
+            <h2 class="text-3xl md:text-4xl font-bold text-white mb-4">&#xB3C4;&#xC785; &#xBB38;&#xC758;</h2>
+            <p class="text-slate-400 mb-8 leading-relaxed">
+                &#xAE30;&#xC5C5; &#xD658;&#xACBD;&#xC5D0; &#xB9DE;&#xB294; &#xCEE4;&#xC2A4;&#xD140; &#xAD6C;&#xCD95; &#xBC0F; &#xB3C4;&#xC785; &#xC0C1;&#xB2F4;&#xC744; &#xC9C4;&#xD589;&#xD569;&#xB2C8;&#xB2E4;.<br>
+                &#xC544;&#xB798; &#xC5F0;&#xB77D;&#xCC98;&#xB85C; &#xBB38;&#xC758;&#xD574; &#xC8FC;&#xC138;&#xC694;.
+            </p>
+            <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+                <a href="mailto:contact@kmslab.com" class="px-8 py-3.5 rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 text-white font-semibold hover:opacity-90 transition shadow-lg shadow-blue-500/20">
+                    &#xC774;&#xBA54;&#xC77C; &#xBB38;&#xC758;
+                </a>
+                <div class="text-sm text-slate-400">
+                    contact@kmslab.com
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Footer -->
+<footer class="border-t border-white/5 py-10 px-6">
+    <div class="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+        <div class="flex items-center gap-3">
+            <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center">
+                <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            </div>
+            <span class="text-sm font-semibold text-slate-300" id="footerSolutionName">K-Portal OfficeMaker</span>
+        </div>
+        <p class="text-xs text-slate-600">&copy; 2025 KMS Lab. All rights reserved.</p>
+    </div>
+</footer>
+
+<script>
+    // Video switching
+    const videoSources = {
+        ppt:   { src: '/front/static/ppt.mp4',   caption: 'AI가 템플릿 기반으로 PowerPoint 슬라이드를 실시간 생성하는 모습' },
+        excel: { src: '/front/static/excel.mp4', caption: 'AI가 데이터를 분석하여 Excel 스프레드시트를 생성하는 모습' },
+        word:  { src: '/front/static/word.mp4',  caption: 'AI가 구조화된 Word 문서를 자동 생성하는 모습' },
+    };
+
+    function switchDocTab(type, btn) {
+        document.querySelectorAll('.doc-detail-tab').forEach(t => t.classList.remove('active'));
+        btn.classList.add('active');
+        document.querySelectorAll('.doc-detail-panel').forEach(p => p.style.display = 'none');
+        const panel = document.getElementById('panel-' + type);
+        if (panel) { panel.style.display = 'block'; panel.style.animation = 'none'; panel.offsetHeight; panel.style.animation = ''; }
+    }
+
+    function switchVideo(type, btn) {
+        const video = document.getElementById('demoVideo');
+        const caption = document.getElementById('videoCaption');
+        const info = videoSources[type];
+
+        // Update active tab
+        document.querySelectorAll('.video-tab').forEach(t => t.classList.remove('active'));
+        btn.classList.add('active');
+
+        // Switch video
+        video.src = info.src;
+        video.load();
+        video.play();
+        caption.textContent = info.caption;
+    }
+
+    // Scroll fade-in animation
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.classList.add('visible');
+            }
+        });
+    }, { threshold: 0.1 });
+
+    document.querySelectorAll('.fade-section').forEach(el => observer.observe(el));
+
+    // Solution name injection
+    if (window.__SOLUTION_NAME__) {
+        document.title = window.__SOLUTION_NAME__ + ' - AI Office Document Generator';
+        document.getElementById('navSolutionName').textContent = window.__SOLUTION_NAME__;
+        document.getElementById('footerSolutionName').textContent = window.__SOLUTION_NAME__;
+    }
+</script>
+
+</body>
+</html>

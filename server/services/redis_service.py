@@ -474,3 +474,64 @@ async def cache_delete_pattern(pattern: str) -> bool | None:
         return True
     except Exception:
         return None
+
+
+# ──────────────────────────────────────────────
+# Pub/Sub (협업 SSE 이벤트)
+# ──────────────────────────────────────────────
+
+async def publish_collab_event(project_id: str, event_type: str, data: dict) -> bool | None:
+    """
+    Redis Pub/Sub 채널에 협업 이벤트 발행.
+    Channel: officemaker:collab:{project_id}
+    Returns: True(발행 성공), None(Redis 불가)
+    """
+    r = get_redis()
+    if not r:
+        return None
+    try:
+        channel = _key("collab", project_id)
+        message = json.dumps({
+            "event_type": event_type,
+            "data": data,
+            "timestamp": datetime.utcnow().isoformat(),
+        }, ensure_ascii=False, default=str)
+        await r.publish(channel, message)
+        return True
+    except Exception:
+        return None
+
+
+async def subscribe_collab(project_id: str):
+    """
+    Redis Pub/Sub 채널 구독. (event_type, data) 튜플을 yield하는 비동기 제너레이터.
+    Redis 불가 시 즉시 종료.
+    """
+    r = get_redis()
+    if not r:
+        return
+    pubsub = r.pubsub()
+    channel = _key("collab", project_id)
+    try:
+        await pubsub.subscribe(channel)
+        while True:
+            msg = await pubsub.get_message(
+                ignore_subscribe_messages=True, timeout=1.0
+            )
+            if msg and msg.get("type") == "message":
+                try:
+                    payload = json.loads(msg["data"])
+                    yield (payload.get("event_type", ""), payload.get("data", {}))
+                except (json.JSONDecodeError, KeyError):
+                    pass
+            else:
+                # yield None to let caller handle heartbeat / cancellation
+                yield None
+    except Exception:
+        pass
+    finally:
+        try:
+            await pubsub.unsubscribe(channel)
+            await pubsub.close()
+        except Exception:
+            pass

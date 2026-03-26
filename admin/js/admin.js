@@ -1,5 +1,5 @@
 /**
- * OfficeMaker 관리자 모듈
+ * K-Portal OfficeMaker 관리자 모듈
  */
 
 // ============ 전역 상태 ============
@@ -66,7 +66,7 @@ function getTemplateCanvasSize() {
 }
 
 // ============ 초기화 ============
-const _SOLUTION = window.__SOLUTION_NAME__ || 'OfficeMaker';
+const _SOLUTION = window.__SOLUTION_NAME__ || 'K-Portal OfficeMaker';
 
 $(document).ready(function () {
     // 솔루션명 동적 반영

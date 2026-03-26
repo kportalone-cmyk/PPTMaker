@@ -11,7 +11,7 @@ logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
@@ -143,6 +143,8 @@ if front_path.exists():
     app.mount("/front/js", StaticFiles(directory=str(front_path / "js")), name="front_js")
     if (front_path / "img").exists():
         app.mount("/front/img", StaticFiles(directory=str(front_path / "img")), name="front_img")
+    if (front_path / "static").exists():
+        app.mount("/front/static", StaticFiles(directory=str(front_path / "static")), name="front_static")
 
 
 # ============ HTML 페이지 라우트 ============
@@ -181,6 +183,19 @@ def inject_version(html_content: str, base_dir: str) -> str:
     return html_content
 
 
+@app.get("/main", response_class=HTMLResponse)
+async def serve_main_landing():
+    """제품 홍보 랜딩 페이지"""
+    html_path = project_root / "front" / "static" / "main.html"
+    if not html_path.exists():
+        return HTMLResponse("<h1>Page not found</h1>", status_code=404)
+    content = html_path.read_text(encoding="utf-8")
+    # 솔루션명 주입
+    solution_script = f'<script>window.__SOLUTION_NAME__="{settings.SOLUTION_NAME}";</script>'
+    content = content.replace("</head>", f"{solution_script}\n</head>", 1)
+    return HTMLResponse(content)
+
+
 @app.get("/admin", response_class=HTMLResponse)
 @app.get("/admin/{path:path}", response_class=HTMLResponse)
 async def serve_admin(path: str = ""):
@@ -193,7 +208,12 @@ async def serve_admin(path: str = ""):
     return HTMLResponse(content)
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/")
+async def serve_root():
+    """루트 접속 시 홍보 페이지로 리다이렉트"""
+    return RedirectResponse(url="/main", status_code=302)
+
+
 @app.get("/app", response_class=HTMLResponse)
 @app.get("/app/{path:path}", response_class=HTMLResponse)
 async def serve_front(path: str = ""):
@@ -223,7 +243,7 @@ async def serve_front_with_lang(jwt_token: str, lang: str):
     예: /eyJ0eXA.../ko
     """
     # API 경로와 충돌 방지
-    if jwt_token in ("api", "admin", "front", "app", "shared", "uploads"):
+    if jwt_token in ("api", "admin", "front", "app", "shared", "uploads", "main"):
         return HTMLResponse("<h1>Not Found</h1>", status_code=404)
     html_path = project_root / "front" / "index.html"
     if not html_path.exists():
@@ -239,7 +259,7 @@ async def serve_front_with_jwt(jwt_token: str):
     예: /eyJ0eXA... (언어 미지정 → 프론트엔드 기본 언어 사용)
     """
     # 예약어/정적파일 경로 충돌 방지
-    if jwt_token in ("api", "admin", "front", "app", "shared", "uploads", "favicon.ico"):
+    if jwt_token in ("api", "admin", "front", "app", "shared", "uploads", "main", "favicon.ico"):
         return HTMLResponse("<h1>Not Found</h1>", status_code=404)
     html_path = project_root / "front" / "index.html"
     if not html_path.exists():

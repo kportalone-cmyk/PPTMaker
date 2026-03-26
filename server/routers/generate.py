@@ -986,20 +986,32 @@ async def update_generated_slide(jwt_token: str, slide_id: str, data: SlideUpdat
         {"$set": update_fields}
     )
 
-    # 협업 프로젝트면 히스토리 기록
-    if collab_count > 0:
-        user = await get_user_by_key(user_key)
-        user_name = user.get("nm", user_key) if user else user_key
-        after = {
-            "objects": data.objects,
-            "items": data.items if data.items is not None else slide.get("items", []),
-        }
-        await _record_slide_history(
-            db, project_id, slide_id,
-            action="update", user_key=user_key, user_name=user_name,
-            before_snapshot=before, after_snapshot=after,
-            description="슬라이드 수정",
-        )
+    # 히스토리 기록 (협업 여부 무관 — 항상 기록)
+    user = await get_user_by_key(user_key)
+    user_name = user.get("nm", user_key) if user else user_key
+    after = {
+        "objects": data.objects,
+        "items": data.items if data.items is not None else slide.get("items", []),
+    }
+    await _record_slide_history(
+        db, project_id, slide_id,
+        action="update", user_key=user_key, user_name=user_name,
+        before_snapshot=before, after_snapshot=after,
+        description="슬라이드 수정",
+    )
+
+    # SSE 이벤트 발행: slide_updated
+    try:
+        user_info = await get_user_by_key(user_key)
+        u_name = user_info.get("nm", user_key) if user_info else user_key
+        await redis_service.publish_collab_event(project_id, "slide_updated", {
+            "slide_id": slide_id,
+            "user_key": user_key,
+            "user_name": u_name,
+            "timestamp": update_fields["updated_at"].isoformat(),
+        })
+    except Exception:
+        pass
 
     return {"success": True}
 

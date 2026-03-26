@@ -9,7 +9,7 @@ load_dotenv(dotenv_path=env_path)
 
 class Settings:
     # Solution
-    SOLUTION_NAME: str = os.getenv("SOLUTION_NAME", "OfficeMaker")
+    SOLUTION_NAME: str = os.getenv("SOLUTION_NAME", "K-Portal OfficeMaker")
 
     # MongoDB
     MONGO_URI: str = os.getenv("MONGO_URI", "")

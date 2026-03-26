@@ -1,9 +1,9 @@
 /**
- * OfficeMaker - Kimi K2 Slides Style Frontend
+ * K-Portal OfficeMaker - Kimi K2 Slides Style Frontend
  */
 
 // ============ 솔루션명 ============
-const _SOLUTION = window.__SOLUTION_NAME__ || 'OfficeMaker';
+const _SOLUTION = window.__SOLUTION_NAME__ || 'K-Portal OfficeMaker';
 
 // ============ 전역 상태 ============
 const state = {
@@ -119,7 +119,7 @@ document.addEventListener('visibilitychange', () => {
 // ============ 다국어 사전 ============
 const I18N = {
     ko: {
-        appTitle: (window.__SOLUTION_NAME__ || 'OfficeMaker'),
+        appTitle: (window.__SOLUTION_NAME__ || 'K-Portal OfficeMaker'),
         appSubtitle: '기업용 파워포인트 자동 생성 솔루션',
         login: '로그인',
         logout: '로그아웃',
@@ -310,7 +310,7 @@ const I18N = {
         translateFailed: '번역 실패',
     },
     en: {
-        appTitle: (window.__SOLUTION_NAME__ || 'OfficeMaker'),
+        appTitle: (window.__SOLUTION_NAME__ || 'K-Portal OfficeMaker'),
         appSubtitle: 'Enterprise PowerPoint Auto-Generation',
         login: 'Login',
         logout: 'Logout',
@@ -501,7 +501,7 @@ const I18N = {
         translateFailed: 'Translation failed',
     },
     ja: {
-        appTitle: (window.__SOLUTION_NAME__ || 'OfficeMaker'),
+        appTitle: (window.__SOLUTION_NAME__ || 'K-Portal OfficeMaker'),
         appSubtitle: '企業向けPPT自動生成',
         login: 'ログイン',
         logout: 'ログアウト',
@@ -683,7 +683,7 @@ const I18N = {
         translateFailed: '翻訳失敗',
     },
     zh: {
-        appTitle: (window.__SOLUTION_NAME__ || 'OfficeMaker'),
+        appTitle: (window.__SOLUTION_NAME__ || 'K-Portal OfficeMaker'),
         appSubtitle: '企业级PPT自动生成',
         login: '登录',
         logout: '退出',
@@ -985,6 +985,9 @@ $(document).ready(function () {
         loadSharedPresentation(pathParts[1]);
     } else {
         showLogin();
+        if (jwtSegment === 'app') {
+            fillDemoCredentials();
+        }
     }
 
     initUserSearch();
@@ -1115,6 +1118,33 @@ function selectSearchUser(index) {
     $('#selectedUserDept').text(user.dp || '');
     $('#selectedUserInfo').show();
     $('#userSearchDropdown').hide();
+}
+
+// ============ 데모 계정 자동입력 ============
+async function fillDemoCredentials() {
+    $('#loginUserSearch').val('Demo');
+    $('#loginPassword').val('demo1234');
+    // 사용자 검색 후 첫 번째 결과 자동 선택
+    try {
+        const res = await fetch('/api/auth/search-users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: 'Demo' }),
+        });
+        const data = await res.json();
+        const users = data.users || [];
+        if (users.length > 0) {
+            const user = users[0];
+            $('#loginUserKey').val(user.ky);
+            $('#loginUserSearch').val(user.nm);
+            $('#selectedUserName').text(user.nm);
+            $('#selectedUserDept').text(user.dp || '');
+            $('#selectedUserInfo').show();
+            showToast('데모 계정이 입력되었습니다. 로그인 버튼을 클릭하세요.', 'success');
+        }
+    } catch (e) {
+        console.error('Demo user search failed:', e);
+    }
 }
 
 // ============ 로그인/인증 ============
@@ -3333,6 +3363,10 @@ async function generatePPT() {
         _showGenerateOrRestartButton();
         // 생성 완료 → 슬라이드 도구 버튼 활성화
         _setSlideToolsDisabled(false);
+        // 생성 완료 후 협업 상태 재초기화 (히스토리/Lock 리셋 반영)
+        if (state.currentProject) {
+            initCollaboration(state.currentProject._id);
+        }
     }
 }
 
@@ -6734,10 +6768,10 @@ function showTranslateModal() {
     }
 
     const langInfo = {
-        ko: { name: '한국어', flag: '\uD83C\uDDF0\uD83C\uDDF7' },
-        en: { name: 'English', flag: '\uD83C\uDDFA\uD83C\uDDF8' },
-        ja: { name: '日本語', flag: '\uD83C\uDDEF\uD83C\uDDF5' },
-        zh: { name: '中文', flag: '\uD83C\uDDE8\uD83C\uDDF3' },
+        ko: { name: '한국어', flag: '<img src="https://flagcdn.com/w40/kr.png" width="24" height="18" alt="KR" style="border-radius:2px;vertical-align:middle;">' },
+        en: { name: 'English', flag: '<img src="https://flagcdn.com/w40/us.png" width="24" height="18" alt="US" style="border-radius:2px;vertical-align:middle;">' },
+        ja: { name: '日本語', flag: '<img src="https://flagcdn.com/w40/jp.png" width="24" height="18" alt="JP" style="border-radius:2px;vertical-align:middle;">' },
+        zh: { name: '中文', flag: '<img src="https://flagcdn.com/w40/cn.png" width="24" height="18" alt="CN" style="border-radius:2px;vertical-align:middle;">' },
     };
 
     const list = $('#translateLangList');
@@ -6758,7 +6792,7 @@ function showTranslateModal() {
     }
 
     availableLangs.forEach(code => {
-        const info = langInfo[code] || { name: code, flag: '\uD83C\uDF10' };
+        const info = langInfo[code] || { name: code, flag: '<span style="font-size:18px;">🌐</span>' };
         list.append(`
             <div class="translate-lang-item" onclick="startTranslation('${code}')">
                 <span class="lang-flag">${info.flag}</span>
@@ -7179,7 +7213,7 @@ async function loadSharedPresentation(shareToken) {
             }
             updateSlideCanvasAspect();
 
-            document.title = data.project_name + ' - ' + (window.__SOLUTION_NAME__ || 'OfficeMaker');
+            document.title = data.project_name + ' - ' + (window.__SOLUTION_NAME__ || 'K-Portal OfficeMaker');
             showApp();
             $('#sidebar').hide();
             $('#sidebarUserName').text(t('sharedPresentation'));
@@ -7198,7 +7232,7 @@ async function loadSharedExcel(shareToken, projectName) {
     if (!res.ok) throw new Error('Not found');
     const data = await res.json();
 
-    document.title = (projectName || data.project_name) + ' - ' + (window.__SOLUTION_NAME__ || 'OfficeMaker');
+    document.title = (projectName || data.project_name) + ' - ' + (window.__SOLUTION_NAME__ || 'K-Portal OfficeMaker');
     showApp();
     $('#sidebar').hide();
     $('#sidebarUserName').text(t('sharedPresentation'));
@@ -7237,7 +7271,7 @@ async function loadSharedWord(shareToken, projectName) {
     if (!res.ok) throw new Error('Not found');
     const data = await res.json();
 
-    document.title = (projectName || data.project_name) + ' - ' + (window.__SOLUTION_NAME__ || 'OfficeMaker');
+    document.title = (projectName || data.project_name) + ' - ' + (window.__SOLUTION_NAME__ || 'K-Portal OfficeMaker');
     showApp();
     $('#sidebar').hide();
     $('#sidebarUserName').text(t('sharedPresentation'));
@@ -7506,15 +7540,133 @@ async function initCollaboration(projectId) {
     }
 }
 
+// ============ SSE 기반 실시간 협업 (Polling Fallback) ============
+let _collabEventSource = null;
+let _collabSSEFailed = false;
+
 function startCollabPolling(projectId) {
     stopCollabPolling();
     sendHeartbeat(projectId);
+    state.heartbeatInterval = setInterval(() => sendHeartbeat(projectId), 30000);
+
+    // SSE 연결 시도
+    _startCollabSSE(projectId);
+}
+
+function _startCollabSSE(projectId) {
+    if (_collabEventSource) {
+        try { _collabEventSource.close(); } catch (_) {}
+        _collabEventSource = null;
+    }
+
+    const sseUrl = `/${state.jwtToken}/api/collab/${projectId}/stream`;
+    try {
+        const es = new EventSource(sseUrl);
+        _collabEventSource = es;
+        _collabSSEFailed = false;
+
+        es.addEventListener('init', function(e) {
+            try {
+                const data = JSON.parse(e.data);
+                _handleCollabInit(data);
+            } catch (_) {}
+        });
+
+        es.addEventListener('lock_changed', function(e) {
+            try {
+                const data = JSON.parse(e.data);
+                _handleLockChanged(data);
+            } catch (_) {}
+        });
+
+        es.addEventListener('slide_updated', function(e) {
+            try {
+                const data = JSON.parse(e.data);
+                _handleSlideUpdated(data);
+            } catch (_) {}
+        });
+
+        es.addEventListener('user_joined', function(e) {
+            try {
+                const data = JSON.parse(e.data);
+                _handleUserJoined(data);
+            } catch (_) {}
+        });
+
+        es.addEventListener('user_left', function(e) {
+            try {
+                const data = JSON.parse(e.data);
+                _handleUserLeft(data);
+            } catch (_) {}
+        });
+
+        es.addEventListener('slide_structure_changed', function(e) {
+            try {
+                _handleSlideStructureChanged();
+            } catch (_) {}
+        });
+
+        // MongoDB fallback 이벤트 (전체 상태 갱신)
+        es.addEventListener('users_changed', function(e) {
+            try {
+                const data = JSON.parse(e.data);
+                state.onlineUsers = data.online_users || [];
+                updateOnlinePresence();
+            } catch (_) {}
+        });
+
+        es.addEventListener('slides_changed', function(e) {
+            try {
+                const data = JSON.parse(e.data);
+                if (_isGenerating) return;
+                const newTs = data.slide_timestamps || {};
+                const changedIds = [];
+                Object.entries(newTs).forEach(([id, ts]) => {
+                    if (state.lastSlideTimestamps[id] && state.lastSlideTimestamps[id] !== ts) {
+                        if (!(state.editMode && state.editingSlideId === id)) changedIds.push(id);
+                    }
+                });
+                state.lastSlideTimestamps = { ...newTs };
+                if (changedIds.length > 0) reloadChangedSlides(changedIds);
+            } catch (_) {}
+        });
+
+        es.addEventListener('ping', function() {
+            // keep-alive, no action needed
+        });
+
+        es.onerror = function() {
+            console.warn('[Collab SSE] 연결 오류 — Polling fallback 전환');
+            es.close();
+            _collabEventSource = null;
+            _collabSSEFailed = true;
+            // SSE 실패 시 Polling fallback
+            _startCollabPollingFallback(projectId);
+        };
+
+        console.log('[Collab SSE] 연결 시작:', sseUrl);
+    } catch (e) {
+        console.warn('[Collab SSE] EventSource 생성 실패:', e);
+        _collabSSEFailed = true;
+        _startCollabPollingFallback(projectId);
+    }
+}
+
+function _startCollabPollingFallback(projectId) {
+    // 기존 Polling 방식으로 fallback
+    if (state.pollInterval) return; // 이미 폴링 중
+    console.log('[Collab] Polling fallback 시작 (5초 간격)');
     pollCollabStatus(projectId);
     state.pollInterval = setInterval(() => pollCollabStatus(projectId), 5000);
-    state.heartbeatInterval = setInterval(() => sendHeartbeat(projectId), 30000);
 }
 
 function stopCollabPolling() {
+    // SSE 연결 종료
+    if (_collabEventSource) {
+        try { _collabEventSource.close(); } catch (_) {}
+        _collabEventSource = null;
+    }
+    // Polling fallback 종료
     if (state.pollInterval) {
         clearInterval(state.pollInterval);
         state.pollInterval = null;
@@ -7525,6 +7677,84 @@ function stopCollabPolling() {
     }
     state.activeLocks = {};
     state.onlineUsers = [];
+}
+
+// ---- SSE 이벤트 핸들러 ----
+
+function _handleCollabInit(data) {
+    // 초기 상태 동기화
+    const newLocks = {};
+    (data.locks || []).forEach(lock => { newLocks[lock.slide_id] = lock; });
+    state.activeLocks = newLocks;
+    state.onlineUsers = data.online_users || [];
+    // 타임스탬프 동기화
+    if (data.slide_timestamps) {
+        state.lastSlideTimestamps = { ...data.slide_timestamps };
+    }
+    updateLockIndicators();
+    updateOnlinePresence();
+}
+
+function _handleLockChanged(data) {
+    if (data.locks) {
+        // MongoDB fallback: 전체 locks 배열
+        const newLocks = {};
+        data.locks.forEach(lock => { newLocks[lock.slide_id] = lock; });
+        state.activeLocks = newLocks;
+    } else if (data.action === 'acquired') {
+        state.activeLocks[data.slide_id] = {
+            slide_id: data.slide_id,
+            user_key: data.user_key,
+            user_name: data.user_name,
+        };
+    } else if (data.action === 'released') {
+        delete state.activeLocks[data.slide_id];
+    }
+    updateLockIndicators();
+    // 현재 보고 있는 슬라이드의 캔버스에 편집 배너 업데이트
+    const currentSlide = state.generatedSlides[state.currentSlideIndex];
+    if (currentSlide && currentSlide._id === data.slide_id && !state.editMode) {
+        renderSlideAtIndex(state.currentSlideIndex);
+    }
+}
+
+async function _handleSlideUpdated(data) {
+    if (_isGenerating) return; // 생성 중 충돌 방지
+    const slideId = data.slide_id;
+    // 본인의 변경은 무시
+    if (data.user_key === (state.userInfo && state.userInfo.ky)) return;
+    // 편집 중인 슬라이드는 무시
+    if (state.editMode && state.editingSlideId === slideId) {
+        showToast('다른 사용자가 이 슬라이드를 수정했습니다', 'warning');
+        return;
+    }
+    // 변경된 슬라이드만 리로드
+    await reloadChangedSlides([slideId]);
+}
+
+function _handleUserJoined(data) {
+    const existing = state.onlineUsers.find(u => u.user_key === data.user_key);
+    if (!existing) {
+        state.onlineUsers.push({ user_key: data.user_key, user_name: data.user_name, last_seen: new Date().toISOString() });
+    }
+    updateOnlinePresence();
+}
+
+function _handleUserLeft(data) {
+    state.onlineUsers = state.onlineUsers.filter(u => u.user_key !== data.user_key);
+    // 떠난 사용자의 Lock 제거
+    Object.keys(state.activeLocks).forEach(slideId => {
+        if (state.activeLocks[slideId].user_key === data.user_key) {
+            delete state.activeLocks[slideId];
+        }
+    });
+    updateLockIndicators();
+    updateOnlinePresence();
+}
+
+async function _handleSlideStructureChanged() {
+    if (_isGenerating) return;
+    await reloadAllSlides();
 }
 
 async function pollCollabStatus(projectId) {
@@ -7706,8 +7936,8 @@ function updateCollabUI() {
         $('#btnCollabManage').hide();
     }
 
-    // 히스토리 버튼 (협업 프로젝트일 때)
-    if (state.isCollabProject) {
+    // 히스토리 버튼 (슬라이드가 있는 모든 프로젝트에서 표시)
+    if (state.generatedSlides.length > 0) {
         $('#btnHistory').show();
     } else {
         $('#btnHistory').hide();
