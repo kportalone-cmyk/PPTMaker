@@ -47,6 +47,7 @@ DEFAULT_PROMPTS = [
    선택 필드: table_data (표가 포함된 템플릿 선택 시), chart_data (차트가 포함된 템플릿 선택 시)
 5. **closing** - 마무리 슬라이드
    필드: title, message, contact
+   **[필수] closing 슬라이드는 간결하게 작성하세요. title은 "감사합니다" 또는 "Thank You" 등 짧은 감사 인사로, message는 1문장 이내로 짧게 작성합니다. 긴 내용을 넣지 마세요.**
 
 ## 콘텐츠 작성 규칙
 1. 제목(title)은 간결하고 임팩트 있게 작성합니다 (최대 30자).

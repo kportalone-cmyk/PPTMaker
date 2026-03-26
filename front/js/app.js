@@ -69,6 +69,7 @@ const state = {
     htmlSkills: [],
     // 인포그래픽 모드
     infographicMode: false,
+    _infographicRatio: 40,
 };
 
 let _animationCancelled = false;
@@ -2950,7 +2951,27 @@ function switchTemplatePicker(tab) {
         $('#infographicStyleGrid').show();
         $('#templatePickerTitle').text('AI 이미지 슬라이드');
         _loadAndRenderSlideStyles();
+        setTimeout(initInfographicRatioSlider, 50);
     }
+}
+
+function initInfographicRatioSlider() {
+    const slider = document.getElementById('infographicRatioSlider');
+    if (!slider) return;
+    slider.value = state._infographicRatio;
+    _updateRatioSliderUI(slider);
+    slider.addEventListener('input', function() {
+        state._infographicRatio = parseInt(this.value, 10);
+        _updateRatioSliderUI(this);
+    });
+}
+
+function _updateRatioSliderUI(slider) {
+    const val = parseInt(slider.value, 10);
+    const pct = ((val - 10) / 80) * 100;
+    slider.style.background = `linear-gradient(to right, #8b5cf6 0%, #8b5cf6 ${pct}%, var(--border-primary) ${pct}%, var(--border-primary) 100%)`;
+    const valueEl = document.getElementById('infographicRatioValue');
+    if (valueEl) valueEl.textContent = val + '%';
 }
 
 function _renderStandardTemplateGrid() {
@@ -4718,6 +4739,7 @@ async function generateInfographic() {
                 lang: lang,
                 slide_count: slideCount,
                 style_hint: state._selectedStylePrompt || '',
+                infographic_ratio: state._infographicRatio || 40,
             }),
             signal: _abortController.signal,
         });

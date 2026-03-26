@@ -751,7 +751,8 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
                 "2. 나머지 슬라이드의 내용은 너무 상세하게 작성하지 마세요. "
                 "보고서 형태로 핵심만 정리하고 요약하여 표현하세요. "
                 "긴 설명 대신 핵심 키워드, 수치, 결론 중심으로 간결하게 작성합니다.\n"
-                "3. 각 슬라이드의 items detail은 1~2문장 이내로 짧게, 핵심만 요약하세요."
+                "3. 각 슬라이드의 items detail은 1~2문장 이내로 짧게, 핵심만 요약하세요.\n"
+                "4. 마지막 슬라이드(closing)는 '감사합니다' 또는 'Thank You' 등 짧은 감사 인사 정도로만 작성하세요. 긴 내용을 넣지 마세요."
             )
             infographic_instructions = (data.instructions or "") + infographic_instruction
 
@@ -829,6 +830,7 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
                 llm_slides,
                 style_hint=data.style_hint,
                 aspect_ratio="16:9",
+                infographic_ratio=data.infographic_ratio,
             ):
                 # 취소 체크
                 if await _check_cancelled(db, data.project_id, generation_id):

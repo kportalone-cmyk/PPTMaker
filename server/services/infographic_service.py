@@ -37,6 +37,7 @@ async def generate_infographic_image(
     slide_number: int = 1,
     total_slides: int = 1,
     presentation_title: str = "",
+    infographic_ratio: int = 40,
 ) -> str | None:
     """
     Google Gemini API를 사용하여 인포그래픽 이미지를 생성합니다.
@@ -52,6 +53,7 @@ async def generate_infographic_image(
         slide_title, slide_content, slide_type, style_hint, aspect_ratio,
         slide_number=slide_number, total_slides=total_slides,
         presentation_title=presentation_title,
+        infographic_pct=infographic_ratio,
     )
 
     print(f"\n{'='*60}")
@@ -90,6 +92,7 @@ def _build_image_prompt(
     slide_number: int = 1,
     total_slides: int = 1,
     presentation_title: str = "",
+    infographic_pct: int = 40,
 ) -> str:
     """파워포인트 슬라이드 이미지 생성을 위한 프롬프트 구성"""
 
@@ -115,10 +118,11 @@ def _build_image_prompt(
             "  but designed to let overlaid text be the focal point."
         )
     else:
+        text_pct = 100 - infographic_pct
         infographic_ratio = (
-            "This is a REPORT-STYLE summary slide. Design it as a concise executive briefing page: "
-            "- Use ~50% infographic visual elements (icons, mini-charts, process arrows, "
-            "comparison cards, callout boxes, key metric highlights) and ~50% text content. "
+            f"This is a REPORT-STYLE summary slide. Design it as a concise executive briefing page: "
+            f"- Use ~{infographic_pct}% infographic visual elements (icons, mini-charts, process arrows, "
+            f"comparison cards, callout boxes, key metric highlights) and ~{text_pct}% text content. "
             "- Text content must be CONCISE and SUMMARIZED — use bullet points, short phrases, and key numbers. "
             "- Do NOT write long paragraphs or detailed explanations. "
             "- Present information in a structured, scannable report format: headings + short bullet points + visual data. "
@@ -325,7 +329,7 @@ def _build_slide_content_text(slide: dict) -> str:
     return "\n".join(content_parts)
 
 
-async def _generate_single_slide(idx, slide, style_hint, aspect_ratio, total_slides, presentation_title):
+async def _generate_single_slide(idx, slide, style_hint, aspect_ratio, total_slides, presentation_title, infographic_ratio=40):
     """단일 슬라이드 이미지를 생성"""
     title = slide.get("title", "") or slide.get("section_title", "") or f"슬라이드 {idx + 1}"
     slide_type = slide.get("type", "content")
@@ -341,6 +345,7 @@ async def _generate_single_slide(idx, slide, style_hint, aspect_ratio, total_sli
         slide_number=idx + 1,
         total_slides=total_slides,
         presentation_title=presentation_title,
+        infographic_ratio=infographic_ratio,
     )
 
     # 첫 번째 슬라이드의 subtitle 추출
@@ -365,6 +370,7 @@ async def generate_infographic_batch(
     outline_slides: list[dict],
     style_hint: str = "",
     aspect_ratio: str = "16:9",
+    infographic_ratio: int = 40,
 ):
     """
     전체 슬라이드를 한번에 병렬 생성 → 완료되는 순서대로 yield (인덱스 순서 보장).
@@ -386,7 +392,7 @@ async def generate_infographic_batch(
     tasks = []
     for idx, slide in enumerate(outline_slides):
         task = asyncio.create_task(
-            _generate_single_slide(idx, slide, style_hint, aspect_ratio, total, presentation_title)
+            _generate_single_slide(idx, slide, style_hint, aspect_ratio, total, presentation_title, infographic_ratio)
         )
         tasks.append(task)
 

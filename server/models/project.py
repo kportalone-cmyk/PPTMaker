@@ -109,6 +109,7 @@ class InfographicGenerateRequest(BaseModel):
     lang: str = ""
     slide_count: str = "auto"
     style_hint: str = ""  # 인포그래픽 스타일 힌트
+    infographic_ratio: int = 40  # 인포그래픽 비율 (%) - 기본 40%
 
 
 class HtmlReportGenerateRequest(BaseModel):
