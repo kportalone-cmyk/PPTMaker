@@ -96,21 +96,23 @@ def _build_image_prompt(
     # 콘텐츠 요약 (너무 길면 자르기)
     content_summary = content[:1500] if content else ""
 
-    # 첫 번째 슬라이드: 전체 내용을 대표하는 타이틀 + 임팩트 인포그래픽 (90%)
+    # 첫 번째 슬라이드: 배경/장식용 인포그래픽 이미지 (텍스트 없음, 타이틀은 별도 오브젝트로 오버레이)
     if slide_number == 1:
         infographic_ratio = (
-            "⚡ THIS IS THE TITLE INFOGRAPHIC SLIDE — the single most important and visually impactful slide. "
-            "It must serve as a VISUAL EXECUTIVE SUMMARY of the ENTIRE presentation. "
-            "The viewer should understand the full topic, scope, and key takeaways just from this one slide. "
-            "Design requirements for this slide ONLY: "
-            "- ~90% infographic visual elements: large hero icons, key metric callout numbers (big bold text), "
-            "  icon grids summarizing each section, mini process flow, comparison blocks, data highlights, "
-            "  visual diagrams, statistical callouts, and impactful infographic layouts "
-            "- Only ~10% text — use only the title and minimal keyword labels, NO paragraphs or sentences "
-            "- Make it bold, dense with information, and visually striking like a professional infographic poster "
-            "- Include 4-6 key data points or takeaways from the entire presentation as large visual callouts "
-            "- Use the full slide area — this slide should feel rich, comprehensive, and visually dominant "
-            "- The infographic elements should tell the story — viewers should grasp the entire presentation's message through visuals alone"
+            "⚡ THIS IS A COVER SLIDE BACKGROUND IMAGE — it must contain ABSOLUTELY NO TEXT whatsoever. "
+            "No title, no subtitle, no labels, no captions, no numbers, no letters — ZERO text of any kind. "
+            "Design requirements for this background image: "
+            "- This image will be used as a BACKGROUND behind separately overlaid title/subtitle text objects. "
+            "- The CENTER and UPPER area (top 50-60%) should be relatively CLEAN with only subtle, dark-toned "
+            "  design elements (soft gradients, gentle geometric patterns, faint abstract shapes) so that white text "
+            "  overlaid on top remains highly readable. "
+            "- The LOWER portion (bottom 30-40%) and EDGES can have rich, vibrant infographic visual elements: "
+            "  abstract data visualization graphics, geometric shapes, icon clusters, flowing lines, "
+            "  gradient overlays, circuit-like patterns, and decorative design accents. "
+            "- Use a dark, professional color scheme (deep navy, dark blue-gray gradients) as the base. "
+            "- The overall feel should be a premium, professional presentation cover slide background. "
+            "- Think of it as a high-end corporate keynote backdrop — elegant, modern, and visually striking "
+            "  but designed to let overlaid text be the focal point."
         )
     else:
         infographic_ratio = (
@@ -305,11 +307,21 @@ async def _generate_single_slide(idx, slide, style_hint, aspect_ratio, total_sli
         presentation_title=presentation_title,
     )
 
+    # 첫 번째 슬라이드의 subtitle 추출
+    subtitle = ""
+    if idx == 0:
+        subtitle = slide.get("subtitle", "") or ""
+        if not subtitle:
+            items = slide.get("items", [])
+            if items and isinstance(items[0], dict):
+                subtitle = items[0].get("heading", "")
+
     return {
         "index": idx,
         "image_url": image_url,
         "title": title,
         "slide_type": slide_type,
+        "subtitle": subtitle,
     }
 
 

@@ -3989,13 +3989,66 @@ function renderSlideAtIndex(index) {
     });
 }
 
-function renderSlideToContainer(container, slide, thumbW, thumbH, slideSize) {
+function renderSlideToContainer(container, slide, thumbW, thumbH, slideSize, slideIndex) {
     const bgStyle = slide.background_image ? `background-image:url(${slide.background_image});background-size:cover;background-position:center;` : '';
     container.attr('style', (container.attr('style') || '') + bgStyle);
 
     const _sz = slideSize ? getSlideCanvasSize(slideSize) : getCurrentSlideSize();
     const scaleX = thumbW / _sz.w;
     const scaleY = thumbH / _sz.h;
+
+    // 인포그래픽 첫 번째 슬라이드 썸네일: 중앙 오버레이 + 제목/부제목
+    const isInfographicFirst = slideIndex === 0 && state.infographicMode
+        && (slide.objects || []).some(o => o.obj_type === 'image' && o.image_url)
+        && (slide.infographic_title || (slide.objects || []).some(o => o.role === 'title'));
+    if (isInfographicFirst) {
+        // 배경 이미지 렌더링
+        const imgObj = (slide.objects || []).find(o => o.obj_type === 'image' && o.image_url);
+        if (imgObj) {
+            const imgDiv = $('<div>').css({
+                position: 'absolute', left: 0, top: 0,
+                width: thumbW + 'px', height: thumbH + 'px',
+                overflow: 'hidden', pointerEvents: 'none',
+            });
+            imgDiv.append(`<img src="${imgObj.image_url}" style="width:100%;height:100%;object-fit:cover;">`);
+            container.append(imgDiv);
+        }
+        // 중앙 반투명 오버레이
+        const overlayDiv = $('<div>').css({
+            position: 'absolute', left: 0,
+            top: (thumbH * 0.2) + 'px',
+            width: thumbW + 'px',
+            height: (thumbH * 0.6) + 'px',
+            background: 'rgba(0,0,0,0.35)',
+            display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center',
+            boxSizing: 'border-box', padding: '4px',
+            pointerEvents: 'none',
+        });
+        const titleText = slide.infographic_title
+            || ((slide.objects || []).find(o => o.role === 'title') || {}).generated_text
+            || ((slide.objects || []).find(o => o.role === 'title') || {}).text_content || '';
+        if (titleText) {
+            const scaledFont = Math.max(4, 36 * Math.min(scaleX, scaleY));
+            overlayDiv.append($('<div>').css({
+                color: '#fff', fontSize: scaledFont + 'px', fontWeight: 'bold',
+                textAlign: 'center', lineHeight: '1.3', overflow: 'hidden',
+            }).text(titleText));
+        }
+        const subtitleText = slide.infographic_subtitle
+            || ((slide.objects || []).find(o => o.role === 'subtitle') || {}).generated_text
+            || ((slide.objects || []).find(o => o.role === 'subtitle') || {}).text_content || '';
+        if (subtitleText) {
+            const scaledFont = Math.max(3, 20 * Math.min(scaleX, scaleY));
+            overlayDiv.append($('<div>').css({
+                color: '#E2E8F0', fontSize: scaledFont + 'px', fontWeight: '400',
+                textAlign: 'center', lineHeight: '1.4', overflow: 'hidden',
+            }).text(subtitleText));
+        }
+        container.append(overlayDiv);
+        return;
+    }
+
     let thumbDescIdx = 0;
     let thumbSubIdx = 0;
     const thumbItems = slide.items || [];
@@ -4075,7 +4128,7 @@ function renderSlideThumbnails() {
                 <div class="slide-thumb-inner"></div>
             </div>
         `);
-        { const _td64 = getThumbDimensions(64); renderSlideToContainer(thumbEl.find('.slide-thumb-inner'), slide, _td64.w, _td64.h); }
+        { const _td64 = getThumbDimensions(64); renderSlideToContainer(thumbEl.find('.slide-thumb-inner'), slide, _td64.w, _td64.h, undefined, i); }
         container.append(thumbEl);
     });
 }
@@ -4092,7 +4145,7 @@ function renderSlideThumbList() {
                 <div class="slide-thumb-v-inner"></div>
             </div>
         `);
-        { const _td256 = getThumbDimensions(256); renderSlideToContainer(thumbEl.find('.slide-thumb-v-inner'), slide, _td256.w, _td256.h); }
+        { const _td256 = getThumbDimensions(256); renderSlideToContainer(thumbEl.find('.slide-thumb-v-inner'), slide, _td256.w, _td256.h, undefined, i); }
 
         // 협업: Lock 배지 표시
         if (state.isCollabProject && slide._id && state.activeLocks[slide._id]) {
@@ -4143,7 +4196,7 @@ function _appendSingleThumbnail(i) {
             <div class="slide-thumb-inner"></div>
         </div>
     `);
-    { const _td64 = getThumbDimensions(64); renderSlideToContainer(thumbEl.find('.slide-thumb-inner'), slide, _td64.w, _td64.h); }
+    { const _td64 = getThumbDimensions(64); renderSlideToContainer(thumbEl.find('.slide-thumb-inner'), slide, _td64.w, _td64.h, undefined, i); }
     container.append(thumbEl);
     // 새 썸네일이 보이도록 스크롤
     thumbEl[0].scrollIntoView({ inline: 'nearest', behavior: 'smooth' });
@@ -4161,7 +4214,7 @@ function _appendSingleThumbV(i) {
             <div class="slide-thumb-v-inner"></div>
         </div>
     `);
-    { const _td256 = getThumbDimensions(256); renderSlideToContainer(thumbEl.find('.slide-thumb-v-inner'), slide, _td256.w, _td256.h); }
+    { const _td256 = getThumbDimensions(256); renderSlideToContainer(thumbEl.find('.slide-thumb-v-inner'), slide, _td256.w, _td256.h, undefined, i); }
     list.append(thumbEl);
     thumbEl[0].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
@@ -4375,7 +4428,7 @@ function renderGridView() {
                 <div class="grid-thumb-title">${escapeHtml(titleText)}</div>
             </div>
         `);
-        { const _td320 = getThumbDimensions(320); renderSlideToContainer(gridEl.find('.grid-thumb-inner'), slide, _td320.w, _td320.h); }
+        { const _td320 = getThumbDimensions(320); renderSlideToContainer(gridEl.find('.grid-thumb-inner'), slide, _td320.w, _td320.h, undefined, i); }
         container.append(gridEl);
     });
 }
@@ -4936,23 +4989,83 @@ function _renderInfographicSlide(idx) {
         canvas.append(div);
     }
 
-    // 슬라이드 제목 오버레이 (하단)
-    if (slide.infographic_title) {
-        const titleDiv = $('<div>').addClass('preview-obj infographic-slide-title-overlay').css({
+    if (idx === 0) {
+        // 첫 번째 슬라이드: 중앙 반투명 오버레이 + 제목/부제목 표시
+        const overlayDiv = $('<div>').addClass('preview-obj infographic-slide-center-overlay').css({
             position: 'absolute',
             left: 0,
-            bottom: 0,
+            top: (canvasH * 0.2) + 'px',
             width: canvasW + 'px',
-            padding: '12px 16px',
-            background: 'linear-gradient(transparent, rgba(0,0,0,0.6))',
-            color: '#fff',
-            fontSize: (14 * (canvasW / 960)) + 'px',
-            fontWeight: '500',
+            height: (canvasH * 0.6) + 'px',
+            background: 'rgba(0,0,0,0.35)',
+            backdropFilter: 'blur(4px)',
+            WebkitBackdropFilter: 'blur(4px)',
             zIndex: 2,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
             boxSizing: 'border-box',
+            padding: '20px',
         });
-        titleDiv.text(slide.infographic_title);
-        canvas.append(titleDiv);
+
+        // 제목 텍스트
+        const titleText = slide.infographic_title
+            || ((slide.objects || []).find(o => o.role === 'title') || {}).generated_text
+            || ((slide.objects || []).find(o => o.role === 'title') || {}).text_content
+            || '';
+        if (titleText) {
+            const titleEl = $('<div>').css({
+                color: '#fff',
+                fontSize: (36 * (canvasW / 960)) + 'px',
+                fontWeight: 'bold',
+                textAlign: 'center',
+                lineHeight: '1.3',
+                marginBottom: '12px',
+                wordBreak: 'keep-all',
+            });
+            titleEl.text(titleText);
+            overlayDiv.append(titleEl);
+        }
+
+        // 부제목 텍스트
+        const subtitleText = slide.infographic_subtitle
+            || ((slide.objects || []).find(o => o.role === 'subtitle') || {}).generated_text
+            || ((slide.objects || []).find(o => o.role === 'subtitle') || {}).text_content
+            || '';
+        if (subtitleText) {
+            const subtitleEl = $('<div>').css({
+                color: '#E2E8F0',
+                fontSize: (20 * (canvasW / 960)) + 'px',
+                fontWeight: '400',
+                textAlign: 'center',
+                lineHeight: '1.4',
+                wordBreak: 'keep-all',
+            });
+            subtitleEl.text(subtitleText);
+            overlayDiv.append(subtitleEl);
+        }
+
+        canvas.append(overlayDiv);
+    } else {
+        // 나머지 슬라이드: 하단 그래디언트 제목 오버레이 (기존 동작)
+        if (slide.infographic_title) {
+            const titleDiv = $('<div>').addClass('preview-obj infographic-slide-title-overlay').css({
+                position: 'absolute',
+                left: 0,
+                bottom: 0,
+                width: canvasW + 'px',
+                padding: '12px 16px',
+                background: 'linear-gradient(transparent, rgba(0,0,0,0.6))',
+                color: '#fff',
+                fontSize: (14 * (canvasW / 960)) + 'px',
+                fontWeight: '500',
+                zIndex: 2,
+                boxSizing: 'border-box',
+            });
+            titleDiv.text(slide.infographic_title);
+            canvas.append(titleDiv);
+        }
     }
 }
 
@@ -5014,7 +5127,7 @@ function _updateThumbnailAtIndex(idx) {
     if (thumbs.length > idx) {
         const $inner = $(thumbs[idx]).find('.slide-thumb-inner');
         $inner.empty().removeAttr('style');
-        { const _td64u = getThumbDimensions(64); renderSlideToContainer($inner, slide, _td64u.w, _td64u.h); }
+        { const _td64u = getThumbDimensions(64); renderSlideToContainer($inner, slide, _td64u.w, _td64u.h, undefined, idx); }
     }
 
     // 좌측 세로 썸네일 업데이트
@@ -5022,7 +5135,7 @@ function _updateThumbnailAtIndex(idx) {
     if ($thumbV.length) {
         const $innerV = $thumbV.find('.slide-thumb-v-inner');
         $innerV.empty().removeAttr('style');
-        { const _td256u = getThumbDimensions(256); renderSlideToContainer($innerV, slide, _td256u.w, _td256u.h); }
+        { const _td256u = getThumbDimensions(256); renderSlideToContainer($innerV, slide, _td256u.w, _td256u.h, undefined, idx); }
     }
 }
 
