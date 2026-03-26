@@ -16,6 +16,7 @@ from services.search_service import search_web
 from services.infographic_service import generate_infographic_image, generate_infographic_batch
 from services.onlyoffice_service import create_onlyoffice_document
 from services.file_service import extract_excel_structure
+from routers.prompt import get_prompt_content
 from config import settings
 import os
 import uuid
@@ -744,16 +745,7 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
 
             # Phase 1: Claude로 아웃라인 생성 (스트리밍)
             # 인포그래픽 전용 지침 추가: 첫 번째 아웃라인은 전체 대표 타이틀, 나머지는 보고서 형태 요약
-            infographic_instruction = (
-                "\n\n[인포그래픽 슬라이드 전용 지침]\n"
-                "1. 첫 번째 슬라이드(title 또는 첫 content)의 제목은 전체 프레젠테이션 내용을 대표하는 핵심 타이틀로 작성하세요. "
-                "전체 주제와 핵심 메시지를 함축적으로 담은 임팩트 있는 제목이어야 합니다.\n"
-                "2. 나머지 슬라이드의 내용은 너무 상세하게 작성하지 마세요. "
-                "보고서 형태로 핵심만 정리하고 요약하여 표현하세요. "
-                "긴 설명 대신 핵심 키워드, 수치, 결론 중심으로 간결하게 작성합니다.\n"
-                "3. 각 슬라이드의 items detail은 1~2문장 이내로 짧게, 핵심만 요약하세요.\n"
-                "4. 마지막 슬라이드(closing)는 '감사합니다' 또는 'Thank You' 등 짧은 감사 인사 정도로만 작성하세요. 긴 내용을 넣지 마세요."
-            )
+            infographic_instruction = await get_prompt_content("infographic_outline_instruction")
             infographic_instructions = (data.instructions or "") + infographic_instruction
 
             llm_result = None
@@ -3125,7 +3117,7 @@ async def translate_project_stream(jwt_token: str, data: TranslateProjectRequest
 
                 # LLM으로 번역
                 from services.llm_service import _stream_claude_api
-                from routers.prompt import get_prompt_model
+                from routers.prompt import get_prompt_model, get_prompt_content
 
                 lang_instruction = {
                     "ko": "모든 텍스트를 한국어로 정확하게 번역하세요.",
@@ -3134,15 +3126,8 @@ async def translate_project_stream(jwt_token: str, data: TranslateProjectRequest
                     "zh": "请将所有文本准确翻译成中文。",
                 }.get(data.target_lang, "Translate all text accurately.")
 
-                system_prompt = f"""You are a professional translator. {lang_instruction}
-
-Rules:
-- Translate each text segment separated by ---SEPARATOR---
-- Keep the ---SEPARATOR--- markers in your output exactly as they are
-- Maintain the same number of segments
-- Keep formatting, line breaks within segments
-- Do NOT add explanations, just output the translated segments
-- Keep technical terms, brand names, and proper nouns as appropriate"""
+                system_prompt_template = await get_prompt_content("translate_system")
+                system_prompt = system_prompt_template.format(lang_instruction=lang_instruction)
 
                 user_prompt = f"Translate the following text segments to {lang_name}:\n\n{combined_text}"
 

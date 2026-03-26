@@ -790,6 +790,186 @@ HTML 리포트의 모든 페이지에서 공통으로 사용할 CSS 클래스를
 - **이 페이지의 제목, 요약, 핵심 포인트에 해당하는 내용만 포함하세요.**
 - 한 장 슬라이드에 적합한 분량만 작성하세요.""",
     },
+    {
+        "key": "infographic_cover_image",
+        "name": "인포그래픽 커버 이미지 프롬프트",
+        "description": "Gemini API로 커버 슬라이드 배경 이미지를 생성하는 프롬프트. 변수: {pres_context}, {title}, {infographic_ratio}, {aspect_ratio}",
+        "model": "gemini-3.1-flash-image-preview",
+        "content": """Generate a PURE ABSTRACT BACKGROUND IMAGE for a presentation cover slide{pres_context}.
+
+The topic of this presentation is: {title}
+
+{infographic_ratio}
+
+===== COVER SLIDE BACKGROUND DESIGN =====
+
+THIS IMAGE MUST CONTAIN ABSOLUTELY ZERO TEXT — no letters, no numbers, no labels, no words in any language.
+
+DESIGN:
+- Full widescreen {aspect_ratio} abstract background image
+- Dark professional base: deep navy (#0F1B2D) to dark blue-gray (#1B2A4A) gradient
+- Abstract decorative elements scattered across the image:
+  - Soft glowing geometric shapes (circles, hexagons, thin lines) in blue tones (#2563EB, #3B82F6)
+  - Subtle flowing particle trails or light streaks
+  - Faint circuit-like or network node patterns
+  - Gentle bokeh or lens flare effects in blue/white
+  - Abstract data visualization shapes (no actual data, just decorative curves/dots)
+- The CENTER area (middle 40% of height) should be the DARKEST and CLEANEST zone
+  with minimal visual noise — this is where text will be overlaid
+- The TOP and BOTTOM edges can have more visual density and decorative elements
+- Overall mood: premium tech keynote, elegant, futuristic, professional
+- Think Apple/Google keynote dark backgrounds — sophisticated and clean
+
+FORBIDDEN:
+- ANY text, letters, numbers, words, labels, captions whatsoever
+- Bright white areas or light backgrounds
+- Header bars, content boxes, cards, or any UI elements
+- Any recognizable objects, photos, or realistic imagery
+- Red, orange, green, purple, pink, yellow colors
+
+==========================================================================""",
+    },
+    {
+        "key": "infographic_content_image",
+        "name": "인포그래픽 콘텐츠 이미지 프롬프트",
+        "description": "Gemini API로 본문 슬라이드 인포그래픽 이미지를 생성하는 프롬프트. 변수: {pres_context}, {title}, {content_summary}, {infographic_ratio}, {aspect_ratio}",
+        "model": "gemini-3.1-flash-image-preview",
+        "content": """Generate a presentation slide image{pres_context}.
+
+Slide Title: {title}
+
+Slide content:
+{content_summary}
+
+{infographic_ratio}
+
+===== MANDATORY TEMPLATE — EVERY SLIDE MUST USE THIS EXACT SAME DESIGN =====
+
+LAYOUT (identical on ALL slides):
+- Full-width dark navy (#1B2A4A) header bar at the very top, ~12% of slide height
+- Slide title displayed inside the header bar in white (#FFFFFF) bold sans-serif text
+- Thin #E2E8F0 separator line directly below the header bar
+- White (#FFFFFF) content area below — NO gradients, NO patterns, NO textures, NO colored backgrounds
+- Left/right margins: 5%, bottom margin: 5%
+- ABSOLUTELY NO slide numbers, page numbers, "Slide X/Y" text, or any footer text anywhere
+
+COLOR PALETTE (use ONLY these exact colors on ALL slides — NO exceptions):
+- #1B2A4A — header bar background, section headings
+- #FFFFFF — header text, content area background, card fills
+- #334155 — all body text
+- #2563EB — icons, chart bars, borders, arrows, accent elements
+- #E2E8F0 — card borders, divider lines, subtle backgrounds
+- #DBEAFE — highlight boxes, selected item backgrounds
+- #64748B — captions, labels, secondary text
+FORBIDDEN: Do NOT use red, orange, green, purple, pink, yellow, teal, amber, or ANY color not listed above.
+
+TYPOGRAPHY (same on ALL slides):
+- Sans-serif font family only (Pretendard, Noto Sans KR, or Arial)
+- Header title: 28-32pt bold #FFFFFF
+- Content headings: 18-20pt bold #1B2A4A
+- Body: 14-16pt regular #334155
+- Labels: 11-12pt #64748B
+
+VISUAL ELEMENTS (same style on ALL slides):
+- Icons: flat monoline, 2px stroke, #2563EB color only
+- Cards: #FFFFFF fill, 1px #E2E8F0 border, 8px rounded corners
+- Charts/graphs: #2563EB fills, #E2E8F0 grid lines
+- Arrows/connectors: #2563EB, clean geometric
+
+RULES:
+- Widescreen {aspect_ratio}
+- NO watermarks, NO placeholder text like "Lorem ipsum"
+- If the title is in Korean, ALL text in the slide MUST be in Korean
+- This slide must be visually IDENTICAL in template structure to every other slide in the deck
+
+==========================================================================""",
+    },
+    {
+        "key": "infographic_style_override",
+        "name": "인포그래픽 스타일 오버라이드 프롬프트",
+        "description": "사용자 스타일 힌트가 있을 때 인포그래픽 이미지 프롬프트에 추가되는 스타일 오버라이드. 변수: {style_hint}",
+        "model": "gemini-3.1-flash-image-preview",
+        "content": """
+⚠️ HIGHEST PRIORITY — USER STYLE OVERRIDE:
+The following user-specified style OVERRIDES all default design rules above.
+If this style specifies different colors, backgrounds, layouts, or aesthetics, follow the user style INSTEAD.
+But still keep the style CONSISTENT across ALL slides — do not vary between slides.
+
+{style_hint}""",
+    },
+    {
+        "key": "single_slide_edit_system",
+        "name": "개별 슬라이드 편집 시스템 프롬프트",
+        "description": "기존 슬라이드 내용을 수정하는 시스템 프롬프트. 변수: {lang_instruction}",
+        "model": "claude-sonnet-4-6",
+        "content": """당신은 프레젠테이션 콘텐츠 편집 전문가입니다.
+사용자의 지침에 따라 현재 슬라이드의 내용을 수정합니다.
+{lang_instruction}
+
+## 중요 규칙:
+- 사용자가 특정 부분만 수정 요청하면 해당 부분만 변경하고 나머지는 유지하세요.
+- "제목을 바꿔줘" → title 역할의 텍스트만 변경
+- "항목을 추가해줘" → 기존 items를 유지하고 새 항목 추가
+- "삭제해줘" → 해당 항목 제거
+- "전체를 다시 작성해줘" → 전체 새로 작성
+- 지침이 명확하지 않으면 기존 내용을 최대한 유지하면서 개선하세요.
+- **[필수] 응답 시 반드시 모든 placeholder에 대한 콘텐츠를 포함하세요. 특히 title(제목), subtitle(부제목), description(설명) 역할의 placeholder가 비어있으면 안 됩니다.**
+- **[필수] items 배열에는 반드시 heading(소제목)과 detail(설명)을 모두 포함해야 합니다. heading이나 detail이 빈 문자열이면 안 됩니다.**
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{{
+  "contents": {{ "placeholder_name": "텍스트 내용", ... }},
+  "items": [ {{ "heading": "소제목", "detail": "설명 내용" }}, ... ]
+}}""",
+    },
+    {
+        "key": "single_slide_generate_system",
+        "name": "개별 슬라이드 생성 시스템 프롬프트",
+        "description": "새 슬라이드 텍스트를 생성하는 시스템 프롬프트. 변수: {lang_instruction}",
+        "model": "claude-sonnet-4-6",
+        "content": """당신은 프레젠테이션 콘텐츠 전문가입니다.
+주어진 리소스와 지침을 바탕으로 슬라이드 1장의 텍스트를 생성합니다.
+{lang_instruction}
+
+## 중요 규칙:
+- **[필수] 모든 placeholder에 대한 콘텐츠를 생성하세요. title(제목), subtitle(부제목), description(설명) 역할의 placeholder를 빠뜨리지 마세요.**
+- **[필수] items 배열에는 반드시 heading(소제목)과 detail(설명)을 모두 포함해야 합니다. heading이나 detail이 빈 문자열이면 안 됩니다.**
+- governance(거버넌스)가 있으면 슬라이드 내용을 요약한 문장을 작성하세요.
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{{
+  "contents": {{ "placeholder_name": "텍스트 내용", ... }},
+  "items": [ {{ "heading": "소제목", "detail": "설명 내용" }}, ... ]
+}}""",
+    },
+    {
+        "key": "translate_system",
+        "name": "프로젝트 번역 시스템 프롬프트",
+        "description": "슬라이드 콘텐츠를 다른 언어로 번역하는 시스템 프롬프트. 변수: {lang_instruction}",
+        "model": "claude-sonnet-4-6",
+        "content": """You are a professional translator. {lang_instruction}
+
+Rules:
+- Translate each text segment separated by ---SEPARATOR---
+- Keep the ---SEPARATOR--- markers in your output exactly as they are
+- Maintain the same number of segments
+- Keep formatting, line breaks within segments
+- Do NOT add explanations, just output the translated segments
+- Keep technical terms, brand names, and proper nouns as appropriate""",
+    },
+    {
+        "key": "infographic_outline_instruction",
+        "name": "인포그래픽 아웃라인 전용 지침",
+        "description": "인포그래픽 슬라이드 생성 시 사용자 지침에 추가되는 전용 지침",
+        "model": "",
+        "content": """
+
+[인포그래픽 슬라이드 전용 지침]
+1. 첫 번째 슬라이드(title 또는 첫 content)의 제목은 전체 프레젠테이션 내용을 대표하는 핵심 타이틀로 작성하세요. 전체 주제와 핵심 메시지를 함축적으로 담은 임팩트 있는 제목이어야 합니다.
+2. 나머지 슬라이드의 내용은 너무 상세하게 작성하지 마세요. 보고서 형태로 핵심만 정리하고 요약하여 표현하세요. 긴 설명 대신 핵심 키워드, 수치, 결론 중심으로 간결하게 작성합니다.
+3. 각 슬라이드의 items detail은 1~2문장 이내로 짧게, 핵심만 요약하세요.
+4. 마지막 슬라이드(closing)는 '감사합니다' 또는 'Thank You' 등 짧은 감사 인사 정도로만 작성하세요. 긴 내용을 넣지 마세요.""",
+    },
 ]
 
 

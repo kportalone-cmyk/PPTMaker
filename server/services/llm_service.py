@@ -1212,26 +1212,8 @@ async def generate_single_slide_content(
             for i, item in enumerate(existing_items):
                 existing_text += f'  {i+1}. heading: "{item.get("heading", "")}", detail: "{item.get("detail", "")}"\n'
 
-        system_prompt = f"""당신은 프레젠테이션 콘텐츠 편집 전문가입니다.
-사용자의 지침에 따라 현재 슬라이드의 내용을 수정합니다.
-{lang_instruction}
-
-## 중요 규칙:
-- 사용자가 특정 부분만 수정 요청하면 해당 부분만 변경하고 나머지는 유지하세요.
-- "제목을 바꿔줘" → title 역할의 텍스트만 변경
-- "항목을 추가해줘" → 기존 items를 유지하고 새 항목 추가
-- "삭제해줘" → 해당 항목 제거
-- "전체를 다시 작성해줘" → 전체 새로 작성
-- 지침이 명확하지 않으면 기존 내용을 최대한 유지하면서 개선하세요.
-- **[필수] 응답 시 반드시 모든 placeholder에 대한 콘텐츠를 포함하세요. 특히 title(제목), subtitle(부제목), description(설명) 역할의 placeholder가 비어있으면 안 됩니다.**
-- **[필수] items 배열에는 반드시 heading(소제목)과 detail(설명)을 모두 포함해야 합니다. heading이나 detail이 빈 문자열이면 안 됩니다.**
-
-반드시 아래 JSON 형식으로만 응답하세요:
-{{
-  "contents": {{ "placeholder_name": "텍스트 내용", ... }},
-  "items": [ {{ "heading": "소제목", "detail": "설명 내용" }}, ... ]
-}}
-"""
+        system_prompt_template = await get_prompt_content("single_slide_edit_system")
+        system_prompt = system_prompt_template.format(lang_instruction=lang_instruction)
 
         user_prompt = f"""## 현재 슬라이드 내용 (수정 대상)
 {existing_text}
@@ -1254,21 +1236,8 @@ items 배열의 heading은 subtitle, detail은 description에 대응합니다.
 **반드시 title(제목), items의 heading(부제목)과 detail(설명)을 모두 포함하여 응답하세요. 빈 값이 없어야 합니다.**
 """
     else:
-        system_prompt = f"""당신은 프레젠테이션 콘텐츠 전문가입니다.
-주어진 리소스와 지침을 바탕으로 슬라이드 1장의 텍스트를 생성합니다.
-{lang_instruction}
-
-## 중요 규칙:
-- **[필수] 모든 placeholder에 대한 콘텐츠를 생성하세요. title(제목), subtitle(부제목), description(설명) 역할의 placeholder를 빠뜨리지 마세요.**
-- **[필수] items 배열에는 반드시 heading(소제목)과 detail(설명)을 모두 포함해야 합니다. heading이나 detail이 빈 문자열이면 안 됩니다.**
-- governance(거버넌스)가 있으면 슬라이드 내용을 요약한 문장을 작성하세요.
-
-반드시 아래 JSON 형식으로만 응답하세요:
-{{
-  "contents": {{ "placeholder_name": "텍스트 내용", ... }},
-  "items": [ {{ "heading": "소제목", "detail": "설명 내용" }}, ... ]
-}}
-"""
+        system_prompt_template = await get_prompt_content("single_slide_generate_system")
+        system_prompt = system_prompt_template.format(lang_instruction=lang_instruction)
 
         user_prompt = f"""## 리소스 (참고 자료)
 {resources_text[:8000]}

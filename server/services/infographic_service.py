@@ -12,6 +12,7 @@ from pathlib import Path
 from google import genai
 from google.genai import types
 from config import settings
+from routers.prompt import get_prompt_content
 
 
 UPLOAD_DIR = Path(settings.UPLOAD_DIR).resolve()
@@ -49,7 +50,7 @@ async def generate_infographic_image(
         print("[Infographic] GOOGLE_API_KEY가 설정되지 않았습니다.")
         return None
 
-    prompt = _build_image_prompt(
+    prompt = await _build_image_prompt(
         slide_title, slide_content, slide_type, style_hint, aspect_ratio,
         slide_number=slide_number, total_slides=total_slides,
         presentation_title=presentation_title,
@@ -83,7 +84,7 @@ async def generate_infographic_image(
         return None
 
 
-def _build_image_prompt(
+async def _build_image_prompt(
     title: str,
     content: str,
     slide_type: str,
@@ -133,99 +134,26 @@ def _build_image_prompt(
 
     # 첫 번째 슬라이드는 완전히 다른 프롬프트 사용 (순수 배경 이미지)
     if slide_number == 1:
-        prompt = f"""Generate a PURE ABSTRACT BACKGROUND IMAGE for a presentation cover slide{pres_context}.
-
-The topic of this presentation is: {title}
-
-{infographic_ratio}
-
-===== COVER SLIDE BACKGROUND DESIGN =====
-
-THIS IMAGE MUST CONTAIN ABSOLUTELY ZERO TEXT — no letters, no numbers, no labels, no words in any language.
-
-DESIGN:
-- Full widescreen {aspect_ratio} abstract background image
-- Dark professional base: deep navy (#0F1B2D) to dark blue-gray (#1B2A4A) gradient
-- Abstract decorative elements scattered across the image:
-  - Soft glowing geometric shapes (circles, hexagons, thin lines) in blue tones (#2563EB, #3B82F6)
-  - Subtle flowing particle trails or light streaks
-  - Faint circuit-like or network node patterns
-  - Gentle bokeh or lens flare effects in blue/white
-  - Abstract data visualization shapes (no actual data, just decorative curves/dots)
-- The CENTER area (middle 40% of height) should be the DARKEST and CLEANEST zone
-  with minimal visual noise — this is where text will be overlaid
-- The TOP and BOTTOM edges can have more visual density and decorative elements
-- Overall mood: premium tech keynote, elegant, futuristic, professional
-- Think Apple/Google keynote dark backgrounds — sophisticated and clean
-
-FORBIDDEN:
-- ANY text, letters, numbers, words, labels, captions whatsoever
-- Bright white areas or light backgrounds
-- Header bars, content boxes, cards, or any UI elements
-- Any recognizable objects, photos, or realistic imagery
-- Red, orange, green, purple, pink, yellow colors
-
-=========================================================================="""
+        prompt_template = await get_prompt_content("infographic_cover_image")
+        prompt = prompt_template.format(
+            pres_context=pres_context,
+            title=title,
+            infographic_ratio=infographic_ratio,
+            aspect_ratio=aspect_ratio,
+        )
     else:
-        prompt = f"""Generate a presentation slide image{pres_context}.
-
-Slide Title: {title}
-
-Slide content:
-{content_summary}
-
-{infographic_ratio}
-
-===== MANDATORY TEMPLATE — EVERY SLIDE MUST USE THIS EXACT SAME DESIGN =====
-
-LAYOUT (identical on ALL slides):
-- Full-width dark navy (#1B2A4A) header bar at the very top, ~12% of slide height
-- Slide title displayed inside the header bar in white (#FFFFFF) bold sans-serif text
-- Thin #E2E8F0 separator line directly below the header bar
-- White (#FFFFFF) content area below — NO gradients, NO patterns, NO textures, NO colored backgrounds
-- Left/right margins: 5%, bottom margin: 5%
-- ABSOLUTELY NO slide numbers, page numbers, "Slide X/Y" text, or any footer text anywhere
-
-COLOR PALETTE (use ONLY these exact colors on ALL slides — NO exceptions):
-- #1B2A4A — header bar background, section headings
-- #FFFFFF — header text, content area background, card fills
-- #334155 — all body text
-- #2563EB — icons, chart bars, borders, arrows, accent elements
-- #E2E8F0 — card borders, divider lines, subtle backgrounds
-- #DBEAFE — highlight boxes, selected item backgrounds
-- #64748B — captions, labels, secondary text
-FORBIDDEN: Do NOT use red, orange, green, purple, pink, yellow, teal, amber, or ANY color not listed above.
-
-TYPOGRAPHY (same on ALL slides):
-- Sans-serif font family only (Pretendard, Noto Sans KR, or Arial)
-- Header title: 28-32pt bold #FFFFFF
-- Content headings: 18-20pt bold #1B2A4A
-- Body: 14-16pt regular #334155
-- Labels: 11-12pt #64748B
-
-VISUAL ELEMENTS (same style on ALL slides):
-- Icons: flat monoline, 2px stroke, #2563EB color only
-- Cards: #FFFFFF fill, 1px #E2E8F0 border, 8px rounded corners
-- Charts/graphs: #2563EB fills, #E2E8F0 grid lines
-- Arrows/connectors: #2563EB, clean geometric
-
-RULES:
-- Widescreen {aspect_ratio}
-- NO watermarks, NO placeholder text like "Lorem ipsum"
-- If the title is in Korean, ALL text in the slide MUST be in Korean
-- This slide must be visually IDENTICAL in template structure to every other slide in the deck
-
-=========================================================================="""
+        prompt_template = await get_prompt_content("infographic_content_image")
+        prompt = prompt_template.format(
+            pres_context=pres_context,
+            title=title,
+            content_summary=content_summary,
+            infographic_ratio=infographic_ratio,
+            aspect_ratio=aspect_ratio,
+        )
 
     if style_hint:
-        prompt += f"""
-
-⚠️ HIGHEST PRIORITY — USER STYLE OVERRIDE:
-The following user-specified style OVERRIDES all default design rules above.
-If this style specifies different colors, backgrounds, layouts, or aesthetics, follow the user style INSTEAD.
-But still keep the style CONSISTENT across ALL slides — do not vary between slides.
-
-{style_hint}"""
+        style_template = await get_prompt_content("infographic_style_override")
+        prompt += style_template.format(style_hint=style_hint)
 
     return prompt
 
