@@ -5123,25 +5123,6 @@ function _renderInfographicSlide(idx) {
         }
 
         canvas.append(textContainer);
-    } else {
-        // 나머지 슬라이드: 하단 그래디언트 제목 오버레이 (기존 동작)
-        if (slide.infographic_title) {
-            const titleDiv = $('<div>').addClass('preview-obj infographic-slide-title-overlay').css({
-                position: 'absolute',
-                left: 0,
-                bottom: 0,
-                width: canvasW + 'px',
-                padding: '12px 16px',
-                background: 'linear-gradient(transparent, rgba(0,0,0,0.6))',
-                color: '#fff',
-                fontSize: (14 * (canvasW / 960)) + 'px',
-                fontWeight: '500',
-                zIndex: 2,
-                boxSizing: 'border-box',
-            });
-            titleDiv.text(slide.infographic_title);
-            canvas.append(titleDiv);
-        }
     }
 }
 
