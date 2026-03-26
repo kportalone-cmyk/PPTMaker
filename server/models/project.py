@@ -103,6 +103,14 @@ class TranslateProjectRequest(BaseModel):
     target_lang: str  # "ko", "en", "ja", "zh"
 
 
+class InfographicGenerateRequest(BaseModel):
+    project_id: str
+    instructions: str = ""
+    lang: str = ""
+    slide_count: str = "auto"
+    style_hint: str = ""  # 인포그래픽 스타일 힌트
+
+
 class HtmlReportGenerateRequest(BaseModel):
     project_id: str
     skill_id: str

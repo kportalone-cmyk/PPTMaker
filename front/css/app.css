@@ -6870,3 +6870,708 @@ body {
     0%, 100% { opacity: 1; }
     50% { opacity: 0; }
 }
+
+/* ============ 인포그래픽 템플릿 피커 ============ */
+.template-picker-card.infographic-card {
+    border: 2px dashed rgba(139, 92, 246, 0.3);
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.05), rgba(59, 130, 246, 0.05));
+    transition: all 0.25s ease;
+}
+.template-picker-card.infographic-card:hover {
+    border-color: rgba(139, 92, 246, 0.6);
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.1));
+    box-shadow: 0 4px 16px rgba(139, 92, 246, 0.15);
+}
+.template-picker-card.infographic-card.active {
+    border-color: #8b5cf6;
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.15), rgba(59, 130, 246, 0.1));
+    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.3);
+}
+
+.infographic-thumb {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #1e1b4b, #312e81);
+}
+.infographic-thumb-icon {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    color: rgba(196, 181, 253, 0.8);
+}
+.infographic-badge {
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    background: linear-gradient(135deg, #8b5cf6, #3b82f6);
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 10px;
+}
+
+/* ============ 인포그래픽 로딩 애니메이션 ============ */
+.infographic-loading {
+    background: linear-gradient(135deg, #0f0a1a 0%, #1a1145 50%, #0d1117 100%);
+}
+
+.infographic-loading-animation {
+    position: relative;
+    width: 140px;
+    height: 140px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 24px;
+}
+
+.infographic-pulse-ring {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    border: 2px solid rgba(139, 92, 246, 0.3);
+    animation: infographicPulse 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+.infographic-pulse-ring.delay-1 {
+    animation-delay: 0.8s;
+}
+.infographic-pulse-ring.delay-2 {
+    animation-delay: 1.6s;
+}
+
+@keyframes infographicPulse {
+    0% {
+        transform: scale(0.6);
+        opacity: 0.8;
+        border-color: rgba(139, 92, 246, 0.6);
+    }
+    100% {
+        transform: scale(1.4);
+        opacity: 0;
+        border-color: rgba(59, 130, 246, 0);
+    }
+}
+
+.infographic-icon-container {
+    position: relative;
+    z-index: 2;
+    width: 72px;
+    height: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(59, 130, 246, 0.2));
+    border-radius: 18px;
+    border: 1px solid rgba(139, 92, 246, 0.3);
+    backdrop-filter: blur(8px);
+}
+
+.infographic-icon-spin {
+    color: #c4b5fd;
+    animation: infographicIconFloat 3s ease-in-out infinite;
+}
+
+@keyframes infographicIconFloat {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    50% { transform: translateY(-4px) rotate(3deg); }
+}
+
+/* 프로그레스 바 */
+.infographic-progress-bar {
+    width: 200px;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    margin-top: 16px;
+    position: relative;
+    overflow: hidden;
+}
+.infographic-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #8b5cf6, #3b82f6, #8b5cf6);
+    background-size: 200% 100%;
+    border-radius: 3px;
+    transition: width 0.5s ease;
+    animation: infographicProgressShimmer 2s ease-in-out infinite;
+}
+@keyframes infographicProgressShimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+.infographic-progress-text {
+    display: block;
+    text-align: center;
+    font-size: 12px;
+    color: rgba(196, 181, 253, 0.7);
+    margin-top: 8px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+}
+
+/* ============ 인포그래픽 슬라이드별 생성 중 로딩 ============ */
+.infographic-slide-generating {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #0c0a1a 0%, #151030 40%, #0d1520 100%);
+    z-index: 50;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.infographic-gen-visual {
+    position: relative;
+    width: 100px;
+    height: 100px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 20px;
+}
+
+.infographic-gen-brush {
+    position: relative;
+    z-index: 2;
+    color: #a78bfa;
+    animation: infographicBrushPaint 2s ease-in-out infinite;
+}
+
+@keyframes infographicBrushPaint {
+    0% { transform: translateX(-10px) scale(0.95); opacity: 0.7; }
+    50% { transform: translateX(10px) scale(1.05); opacity: 1; }
+    100% { transform: translateX(-10px) scale(0.95); opacity: 0.7; }
+}
+
+.infographic-gen-scanline {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, #8b5cf6, #3b82f6, transparent);
+    animation: infographicScanline 2s ease-in-out infinite;
+    border-radius: 2px;
+}
+
+@keyframes infographicScanline {
+    0% { top: 0; opacity: 0; }
+    20% { opacity: 1; }
+    80% { opacity: 1; }
+    100% { top: 100%; opacity: 0; }
+}
+
+.infographic-gen-info {
+    text-align: center;
+}
+
+.infographic-gen-counter {
+    font-size: 13px;
+    font-weight: 700;
+    color: #a78bfa;
+    letter-spacing: 2px;
+    margin-bottom: 6px;
+}
+
+.infographic-gen-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.9);
+    margin-bottom: 8px;
+    max-width: 80%;
+    margin-left: auto;
+    margin-right: auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.infographic-gen-status {
+    font-size: 12px;
+    color: rgba(196, 181, 253, 0.6);
+}
+
+/* ============ 인포그래픽 아웃라인 (카드형) ============ */
+.inf-outline {
+    padding: 0;
+}
+.inf-outline-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 14px 8px;
+}
+.inf-outline-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+.inf-outline-count {
+    font-size: 11px;
+    color: #a78bfa;
+    background: rgba(139, 92, 246, 0.1);
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-weight: 600;
+}
+
+/* 카드 */
+.inf-outline-card {
+    position: relative;
+    margin: 4px 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-primary);
+    transition: all 0.25s ease;
+}
+.inf-outline-card + .inf-outline-card {
+    margin-top: 6px;
+}
+
+/* 카드 헤더 */
+.inf-outline-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.inf-outline-num {
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    background: rgba(139, 92, 246, 0.1);
+    color: #a78bfa;
+    font-size: 11px;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+.inf-outline-card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.inf-outline-card-header .slide-type-badge {
+    flex-shrink: 0;
+}
+.infographic-item-status {
+    margin-left: 4px;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+/* 부제목 */
+.inf-outline-subtitle {
+    margin-top: 6px;
+    padding-left: 30px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+/* 설명 */
+.inf-outline-desc {
+    margin-top: 4px;
+    padding-left: 30px;
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    display: -webkit-box;
+    -webkit-line-clamp: 5;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* 항목 목록 */
+.inf-outline-items {
+    margin-top: 8px;
+    padding-left: 30px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.inf-outline-item-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+.inf-outline-item-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #8b5cf6;
+    flex-shrink: 0;
+    margin-top: 6px;
+    opacity: 0.6;
+}
+.inf-outline-item-content {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+.inf-outline-item-heading {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.4;
+}
+.inf-outline-item-detail {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    display: -webkit-box;
+    -webkit-line-clamp: 5;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    white-space: normal;
+}
+
+/* 데이터 태그 */
+.inf-outline-data-tags {
+    margin-top: 8px;
+    padding-left: 30px;
+    display: flex;
+    gap: 6px;
+}
+.inf-outline-data-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.3px;
+}
+.inf-outline-data-tag.table-tag {
+    background: rgba(59, 130, 246, 0.1);
+    color: #60a5fa;
+}
+.inf-outline-data-tag.chart-tag {
+    background: rgba(16, 185, 129, 0.1);
+    color: #34d399;
+}
+
+/* ── 카드 활성 상태 (생성 중) ── */
+.inf-outline-card.outline-item-active {
+    border-color: #8b5cf6;
+    background: rgba(139, 92, 246, 0.08);
+    box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.2), 0 2px 8px rgba(139, 92, 246, 0.1);
+}
+.inf-outline-card.outline-item-active .inf-outline-num {
+    background: #8b5cf6;
+    color: #fff;
+}
+.inf-outline-card.outline-item-active::before {
+    content: '';
+    position: absolute;
+    right: 10px;
+    top: 12px;
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(139, 92, 246, 0.4);
+    border-top-color: #8b5cf6;
+    border-radius: 50%;
+    animation: infOutlineSpin 0.8s linear infinite;
+}
+
+/* ── 카드 완료 상태 ── */
+.inf-outline-card.outline-item-done {
+    opacity: 0.55;
+    border-color: rgba(34, 197, 94, 0.2);
+}
+.inf-outline-card.outline-item-done .inf-outline-num {
+    background: rgba(34, 197, 94, 0.15);
+    color: #22c55e;
+}
+.inf-outline-card.outline-item-done .inf-outline-card-title {
+    color: var(--text-muted);
+}
+.inf-outline-card.outline-item-done.outline-item-active {
+    border-color: rgba(34, 197, 94, 0.3);
+    box-shadow: none;
+}
+.inf-outline-card.outline-item-done.outline-item-active::before {
+    display: none;
+}
+
+@keyframes infOutlineSpin {
+    to { transform: rotate(360deg); }
+}
+
+/* ============ 인포그래픽 슬라이드 이미지 렌더링 ============ */
+.infographic-slide-img img {
+    border-radius: 2px;
+}
+
+.infographic-slide-title-overlay {
+    pointer-events: none;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+}
+
+/* ============ 템플릿 피커 탭 ============ */
+.tpl-picker-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border-primary);
+    margin: 0 -20px;
+    padding: 0 20px;
+}
+.tpl-picker-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 12px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+.tpl-picker-tab:hover {
+    color: var(--text-primary);
+    background: rgba(139, 92, 246, 0.04);
+}
+.tpl-picker-tab.active {
+    color: #8b5cf6;
+    border-bottom-color: #8b5cf6;
+}
+.tpl-picker-tab svg {
+    opacity: 0.6;
+}
+.tpl-picker-tab.active svg {
+    opacity: 1;
+    stroke: #8b5cf6;
+}
+
+/* ============ 스타일 필터 바 ============ */
+.style-filter-bar {
+    display: flex;
+    gap: 6px;
+    padding: 14px 0 10px;
+    flex-wrap: wrap;
+}
+.style-filter-btn {
+    padding: 5px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 16px;
+    border: 1px solid var(--border-primary);
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.style-filter-btn:hover {
+    border-color: #8b5cf6;
+    color: #8b5cf6;
+}
+.style-filter-btn.active {
+    background: #8b5cf6;
+    border-color: #8b5cf6;
+    color: #fff;
+}
+
+/* ============ 스타일 카드 그리드 ============ */
+.style-cards-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    padding-bottom: 16px;
+    max-height: 420px;
+    overflow-y: auto;
+}
+
+.style-card {
+    position: relative;
+    padding: 14px;
+    border-radius: 10px;
+    border: 1px solid var(--border-primary);
+    background: var(--bg-secondary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.style-card:hover {
+    border-color: rgba(139, 92, 246, 0.4);
+    background: rgba(139, 92, 246, 0.04);
+    box-shadow: 0 2px 8px rgba(139, 92, 246, 0.08);
+    transform: translateY(-1px);
+}
+.style-card.selected {
+    border-color: #8b5cf6;
+    background: rgba(139, 92, 246, 0.08);
+    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
+}
+
+.style-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+.style-card-num {
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    background: rgba(139, 92, 246, 0.1);
+    color: #8b5cf6;
+    font-size: 10px;
+    font-weight: 700;
+}
+.style-card.selected .style-card-num {
+    background: #8b5cf6;
+    color: #fff;
+}
+.style-card-cat {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.style-card-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+    line-height: 1.3;
+}
+.style-card-name-en {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+.style-card-prompt {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    line-height: 1.5;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    background: rgba(0,0,0,0.03);
+    padding: 6px 8px;
+    border-radius: 6px;
+}
+
+.style-card-check {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+}
+
+/* ============ 커스텀 프롬프트 입력 ============ */
+.custom-prompt-section {
+    margin-top: 12px;
+    border: 1px solid var(--border-primary);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--bg-secondary);
+}
+.custom-prompt-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.custom-prompt-header:hover {
+    background: rgba(139, 92, 246, 0.04);
+}
+.custom-prompt-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+.custom-prompt-header-left svg {
+    color: #8b5cf6;
+}
+.custom-prompt-chevron {
+    color: var(--text-muted);
+    transition: transform 0.2s ease;
+}
+
+.custom-prompt-body {
+    padding: 0 14px 14px;
+}
+.custom-prompt-input {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.6;
+    border: 1px solid var(--border-primary);
+    border-radius: 8px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    resize: vertical;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    box-sizing: border-box;
+    transition: border-color 0.2s ease;
+}
+.custom-prompt-input:focus {
+    outline: none;
+    border-color: #8b5cf6;
+    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.15);
+}
+.custom-prompt-input::placeholder {
+    color: var(--text-muted);
+    font-family: inherit;
+}
+.custom-prompt-apply-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 8px 18px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+    background: #8b5cf6;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    margin-left: auto;
+}
+.custom-prompt-apply-btn:hover {
+    background: #7c3aed;
+    box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
+}
+
+/* 반응형: 모바일에서 2열 */
+@media (max-width: 640px) {
+    .style-cards-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}

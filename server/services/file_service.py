@@ -24,7 +24,7 @@ def extract_text_from_file(file_path: str, ext: str) -> str:
     """파일에서 텍스트를 추출하여 마크다운 형식으로 반환"""
     ext = ext.lower()
     try:
-        if ext == ".txt":
+        if ext in (".txt", ".md"):
             return _extract_txt(file_path)
         elif ext == ".csv":
             return _extract_csv(file_path)

@@ -29,6 +29,9 @@ class Settings:
     ANTHROPIC_MAX_TOKENS: int = int(os.getenv("ANTHROPIC_MAX_TOKENS", "0"))  # 0이면 API 기본값 사용
     ANTHROPIC_OUTLINE_MAX_TOKENS: int = int(os.getenv("ANTHROPIC_OUTLINE_MAX_TOKENS", "0"))  # Outline(Sonnet) 전용
 
+    # Google AI (Gemini image generation)
+    GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
+
     # Perplexity
     PERPLEXITY_API_KEY: str = os.getenv("PERPLEXITY_API_KEY", "")
 

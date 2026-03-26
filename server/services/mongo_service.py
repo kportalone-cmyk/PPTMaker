@@ -124,6 +124,11 @@ async def init_indexes():
     # generated_html 컬렉션
     await db.generated_html.create_index("project_id", unique=True)
 
+    # slide_styles 컬렉션
+    await db.slide_styles.create_index("style_id", unique=True)
+    await db.slide_styles.create_index("category")
+    await db.slide_styles.create_index("is_active")
+
     # 조직도 인덱스
     org_db = get_org_db()
     org_col = org_db[settings.ORG_COLLECTION]
@@ -161,6 +166,26 @@ async def seed_demo_accounts():
     old_account = await db.accounts.find_one({"user_key": "demo"})
     if old_account:
         await db.accounts.delete_one({"user_key": "demo"})
+
+
+async def seed_slide_styles():
+    """슬라이드 스타일 시드 데이터 초기화 (없으면 삽입, 있으면 업데이트)"""
+    from services.slide_styles_seed import SLIDE_STYLES
+    db = get_db()
+
+    existing_count = await db.slide_styles.count_documents({})
+    if existing_count >= len(SLIDE_STYLES):
+        return  # 이미 충분히 있으면 스킵
+
+    from datetime import datetime
+    now = datetime.utcnow()
+    for style in SLIDE_STYLES:
+        await db.slide_styles.update_one(
+            {"style_id": style["style_id"]},
+            {"$setOnInsert": {**style, "created_at": now}},
+            upsert=True,
+        )
+    print(f"[DB] 슬라이드 스타일 {len(SLIDE_STYLES)}개 시드 완료")
 
 
 async def close_connection():

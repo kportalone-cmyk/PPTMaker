@@ -746,3 +746,17 @@ async def toggle_skill_publish(jwt_token: str, skill_id: str):
         {"$set": {"is_published": new_status, "updated_at": datetime.utcnow()}}
     )
     return {"success": True, "is_published": new_status}
+
+
+# ============ 슬라이드 스타일 API ============
+
+@router.get("/api/slide-styles")
+async def list_slide_styles():
+    """인포그래픽 슬라이드 스타일 목록 조회 (인증 불필요)"""
+    db = get_db()
+    cursor = db.slide_styles.find(
+        {"is_active": True},
+        {"_id": 0, "style_id": 1, "name": 1, "name_en": 1, "prompt": 1, "category": 1}
+    ).sort("style_id", 1)
+    styles = await cursor.to_list(length=100)
+    return {"styles": styles}

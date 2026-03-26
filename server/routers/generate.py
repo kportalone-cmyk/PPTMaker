@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from bson import ObjectId
 from datetime import datetime
-from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest, DocxModifyRequest, DocxPrepareRequest, RewriteRequest, TranslateProjectRequest, HtmlReportGenerateRequest
+from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest, DocxModifyRequest, DocxPrepareRequest, RewriteRequest, TranslateProjectRequest, HtmlReportGenerateRequest, InfographicGenerateRequest
 from services.mongo_service import get_db
 from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible, get_user_by_key
 from services import redis_service
@@ -13,6 +13,7 @@ from services.excel_service import generate_xlsx, auto_generate_chart_definition
 from services.word_service import generate_docx, create_empty_docx, extract_docx_template_structure
 from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content, generate_excel_content_stream, modify_excel_content_stream, generate_docx_content_stream, rewrite_text_stream, generate_html_report_stream, generate_html_report_outline_stream, generate_html_report_css_stream, generate_html_page_content
 from services.search_service import search_web
+from services.infographic_service import generate_infographic_image, generate_infographic_batch
 from services.onlyoffice_service import create_onlyoffice_document
 from services.file_service import extract_excel_structure
 from config import settings
@@ -620,6 +621,280 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
         except Exception as e:
             print(f"[SSE] Stream error: {e}")
             # 중단 요청으로 인한 에러인지 확인
+            project = await db.projects.find_one(
+                {"_id": ObjectId(data.project_id)}, {"status": 1}
+            )
+            if project and project.get("status") in ("stop_requested", "stopped"):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+            else:
+                yield _sse("error", {"message": str(e)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@router.post("/{jwt_token}/api/generate/infographic/stream")
+async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateRequest):
+    """인포그래픽 슬라이드 생성 - Google Gemini 이미지 생성 기반 SSE 스트리밍"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    # 기존 생성 슬라이드 삭제
+    await db.generated_slides.delete_many({"project_id": data.project_id})
+    await db.slide_locks.delete_many({"project_id": data.project_id})
+    await db.slide_history.delete_many({"project_id": data.project_id})
+    await redis_service.delete_project_locks(data.project_id)
+
+    # 리소스 텍스트 수집
+    cursor = db.resources.find({"project_id": data.project_id})
+    all_content = []
+    async for r in cursor:
+        if r.get("resource_type") == "image":
+            img_desc = r.get("content", "")
+            if img_desc:
+                img_title = r.get("title") or r.get("original_filename") or "이미지"
+                all_content.append(f"[이미지: {img_title}]\n{img_desc}")
+            continue
+        if r.get("content"):
+            all_content.append(r["content"])
+        elif r.get("title"):
+            all_content.append(f"[{r['title']}]")
+    combined_text = "\n\n".join(all_content)
+
+    # 리소스가 없으면 지침으로 자동 웹 검색
+    web_search_performed = False
+    if not combined_text.strip():
+        if not data.instructions.strip():
+            raise HTTPException(status_code=400, detail="리소스 또는 지침을 입력하세요.")
+        search_result = await search_web(data.instructions)
+        pages = search_result.get("pages", [])
+        if pages:
+            search_contents = []
+            search_sources = []
+            for page in pages:
+                title = page.get("title", "")
+                content = page.get("content", "")
+                url = page.get("url", "")
+                if content:
+                    search_contents.append(f"[{title}]\n{content}")
+                    if url:
+                        search_sources.append(url)
+            combined_text = "\n\n".join(search_contents)
+            if combined_text.strip():
+                await db.resources.insert_one({
+                    "project_id": data.project_id,
+                    "resource_type": "web",
+                    "title": f"자동 웹 검색: {data.instructions[:50]}",
+                    "content": combined_text,
+                    "sources": search_sources,
+                    "created_at": datetime.utcnow(),
+                })
+                web_search_performed = True
+
+    if not combined_text.strip():
+        raise HTTPException(status_code=400, detail="리소스에 텍스트 내용이 없습니다.")
+
+    # 인포그래픽용 간이 아웃라인 생성을 위한 슬라이드 메타 (body 타입만)
+    dummy_meta = [{
+        "slide_index": 0,
+        "slide_meta": {"content_type": "body", "has_title": True},
+        "placeholders": [
+            {"placeholder": "auto_title_0", "role": "title"},
+            {"placeholder": "auto_description_0", "role": "description"},
+        ],
+    }]
+
+    generation_id = str(uuid.uuid4())
+    await redis_service.clear_generation_cancel(data.project_id)
+
+    # 프로젝트 상태 업데이트
+    await db.projects.update_one(
+        {"_id": ObjectId(data.project_id)},
+        {"$set": {
+            "instructions": data.instructions,
+            "status": "generating",
+            "generation_id": generation_id,
+            "infographic_mode": True,
+            "updated_at": datetime.utcnow(),
+        }}
+    )
+
+    def _sse(event: str, payload: dict) -> str:
+        return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False, default=str)}\n\n"
+
+    async def event_stream():
+        try:
+            if web_search_performed:
+                yield _sse("start", {"message": "웹 검색으로 자료를 수집하여 아웃라인을 설계하고 있습니다..."})
+            else:
+                yield _sse("start", {"message": "AI가 인포그래픽 아웃라인을 설계하고 있습니다..."})
+
+            # 취소 체크
+            if await _check_cancelled(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            # Phase 1: Claude로 아웃라인 생성 (스트리밍)
+            # 인포그래픽 전용 지침 추가: 첫 번째 아웃라인은 전체 대표 타이틀, 나머지는 보고서 형태 요약
+            infographic_instruction = (
+                "\n\n[인포그래픽 슬라이드 전용 지침]\n"
+                "1. 첫 번째 슬라이드(title 또는 첫 content)의 제목은 전체 프레젠테이션 내용을 대표하는 핵심 타이틀로 작성하세요. "
+                "전체 주제와 핵심 메시지를 함축적으로 담은 임팩트 있는 제목이어야 합니다.\n"
+                "2. 나머지 슬라이드의 내용은 너무 상세하게 작성하지 마세요. "
+                "보고서 형태로 핵심만 정리하고 요약하여 표현하세요. "
+                "긴 설명 대신 핵심 키워드, 수치, 결론 중심으로 간결하게 작성합니다.\n"
+                "3. 각 슬라이드의 items detail은 1~2문장 이내로 짧게, 핵심만 요약하세요."
+            )
+            infographic_instructions = (data.instructions or "") + infographic_instruction
+
+            llm_result = None
+            chunk_count = 0
+            cancelled = False
+            async for event_type, event_data in generate_slide_content_stream(
+                combined_text, infographic_instructions, dummy_meta, data.lang,
+                slide_count=data.slide_count,
+            ):
+                if event_type == "delta":
+                    yield _sse("delta", {"text": event_data})
+                    chunk_count += 1
+                    if chunk_count % 50 == 0:
+                        if await _check_cancelled(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
+                elif event_type == "result":
+                    llm_result = event_data
+
+            if cancelled:
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            if not llm_result:
+                yield _sse("error", {"message": "아웃라인 생성 실패"})
+                return
+
+            yield _sse("parsing", {"message": "아웃라인을 분석하고 있습니다..."})
+
+            # 아웃라인 데이터 전송 (인포그래픽: items 상세 포함)
+            raw_slides = llm_result.get("raw_slides", [])
+            if raw_slides:
+                outline_items = []
+                for rs in raw_slides:
+                    slide_type = rs.get("type", "content")
+                    title = rs.get("title", "") or rs.get("section_title", "")
+                    items = rs.get("items", [])
+                    oi = {
+                        "type": slide_type,
+                        "title": title,
+                        "items_count": len(items),
+                        "items": items,  # heading/detail 포함
+                        "subtitle": rs.get("subtitle", ""),
+                    }
+                    # contents에서 description 텍스트 추출
+                    contents = rs.get("contents", {})
+                    if isinstance(contents, dict):
+                        descs = [v for k, v in contents.items()
+                                 if isinstance(v, str) and v and "description" in k.lower()]
+                        if descs:
+                            oi["description"] = descs[0]
+                    if rs.get("table_data"):
+                        oi["has_table"] = True
+                        oi["table_data"] = rs["table_data"]
+                    if rs.get("chart_data"):
+                        oi["has_chart"] = True
+                        oi["chart_data"] = rs["chart_data"]
+                    outline_items.append(oi)
+                yield _sse("outline", {"slides": outline_items})
+
+            # Phase 2: 인포그래픽 이미지 생성 시작 알림
+            llm_slides = raw_slides if raw_slides else llm_result.get("slides", [])
+            total_slides = len(llm_slides)
+
+            yield _sse("infographic_start", {
+                "total": total_slides,
+                "message": "인포그래픽 이미지를 생성하고 있습니다..."
+            })
+
+            # Phase 3: 각 슬라이드별 인포그래픽 이미지 생성
+            generated = []
+            async for img_result in generate_infographic_batch(
+                llm_slides,
+                style_hint=data.style_hint,
+                aspect_ratio="16:9",
+            ):
+                # 취소 체크
+                if await _check_cancelled(db, data.project_id, generation_id):
+                    yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                    await _set_stopped(db, data.project_id)
+                    return
+
+                idx = img_result["index"]
+                image_url = img_result["image_url"]
+                title = img_result["title"]
+
+                # 인포그래픽 슬라이드 = 전체 영역 이미지 오브젝트 (16:9 = 960x540)
+                gen_objects = []
+                if image_url:
+                    gen_objects.append({
+                        "obj_type": "image",
+                        "x": 0, "y": 0,
+                        "width": 960, "height": 540,
+                        "image_url": image_url,
+                        "image_fit": "cover",
+                        "z_index": 1,
+                    })
+
+                gen_slide = {
+                    "project_id": data.project_id,
+                    "template_slide_id": "infographic",
+                    "order": idx + 1,
+                    "objects": gen_objects,
+                    "items": [],
+                    "background_image": None,
+                    "infographic": True,
+                    "infographic_title": title,
+                    "created_at": datetime.utcnow(),
+                }
+
+                result = await db.generated_slides.insert_one(gen_slide)
+                gen_slide["_id"] = str(result.inserted_id)
+                generated.append(gen_slide)
+
+                yield _sse("infographic_slide", {
+                    "index": idx,
+                    "total": total_slides,
+                    "slide": gen_slide,
+                    "title": title,
+                })
+
+            # 프로젝트 업데이트
+            presentation_meta = llm_result.get("meta", {})
+            update_fields = {
+                "status": "generated",
+                "updated_at": datetime.utcnow(),
+            }
+            if presentation_meta:
+                update_fields["presentation_meta"] = presentation_meta
+
+            await db.projects.update_one(
+                {"_id": ObjectId(data.project_id)},
+                {"$set": update_fields}
+            )
+
+            yield _sse("complete", {"total": len(generated)})
+
+        except Exception as e:
+            print(f"[SSE] Infographic stream error: {e}")
+            import traceback
+            traceback.print_exc()
             project = await db.projects.find_one(
                 {"_id": ObjectId(data.project_id)}, {"status": 1}
             )

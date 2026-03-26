@@ -89,7 +89,7 @@ async def upload_file_resource(
     await get_user_key(jwt_token)
 
     # 허용 확장자 확인
-    allowed_ext = {".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".pdf", ".txt", ".csv"}
+    allowed_ext = {".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".pdf", ".txt", ".csv", ".md"}
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in allowed_ext:
         raise HTTPException(status_code=400, detail=f"허용되지 않은 파일 형식입니다: {ext}")

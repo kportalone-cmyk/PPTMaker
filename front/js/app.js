@@ -67,6 +67,8 @@ const state = {
     selectedSkillInfo: null,
     generatedHtml: null,
     htmlSkills: [],
+    // 인포그래픽 모드
+    infographicMode: false,
 };
 
 let _animationCancelled = false;
@@ -2875,6 +2877,14 @@ function updateTemplateButtonLabel() {
         return;
     }
 
+    // 인포그래픽 모드
+    if (state.infographicMode) {
+        const styleName = state._selectedStyleName || 'AI 이미지 슬라이드';
+        $('#templateSelectLabel').text(styleName);
+        $('#templateSelectBtn').addClass('has-value');
+        return;
+    }
+
     // Custom PPTX template selected
     if (state.customTemplateId && state.customTemplateInfo) {
         $('#templateSelectLabel').text(state.customTemplateInfo.filename);
@@ -2903,42 +2913,57 @@ function openTemplatePickerModal() {
         return;
     }
 
+    const isSlideType = (projectType === 'slide' || projectType === 'onlyoffice_pptx');
+
+    // 탭 표시 (슬라이드 타입에서만)
+    if (isSlideType) {
+        $('#tplPickerTabs').show();
+    } else {
+        $('#tplPickerTabs').hide();
+    }
+
+    // Hide skill grid
+    $('#skillPickerGrid').hide();
+
+    // 인포그래픽 모드면 인포그래픽 탭, 아니면 표준 탭을 기본 활성화
+    if (state.infographicMode && isSlideType) {
+        switchTemplatePicker('infographic');
+    } else {
+        switchTemplatePicker('standard');
+    }
+
+    $('#templatePickerModal').show();
+}
+
+function switchTemplatePicker(tab) {
+    // 탭 버튼 활성화
+    $('.tpl-picker-tab').removeClass('active');
+    $(`.tpl-picker-tab[data-tab="${tab}"]`).addClass('active');
+
+    if (tab === 'standard') {
+        $('#templatePickerGrid').show();
+        $('#infographicStyleGrid').hide();
+        $('#templatePickerTitle').text('표준 템플릿');
+        _renderStandardTemplateGrid();
+    } else {
+        $('#templatePickerGrid').hide();
+        $('#infographicStyleGrid').show();
+        $('#templatePickerTitle').text('AI 이미지 슬라이드');
+        _loadAndRenderSlideStyles();
+    }
+}
+
+function _renderStandardTemplateGrid() {
     const grid = $('#templatePickerGrid');
     grid.empty();
 
-    // Show/hide custom PPTX section based on project type (only for slide type)
-    const isSlideType = (projectType === 'slide' || projectType === 'onlyoffice_pptx');
-    if (isSlideType) {
-        $('#customPptxSection').show();
-        $('#templatePickerDivider').show();
-        // Restore custom PPTX state if exists
-        if (state.customTemplateId && state.customTemplateInfo) {
-            $('#customPptxDropzone').hide();
-            $('#customPptxCard').show();
-            $('#customPptxFilename').text(state.customTemplateInfo.filename);
-            $('#customPptxMeta').text(state.customTemplateInfo.slides_count + '개 슬라이드');
-        } else {
-            $('#customPptxDropzone').show();
-            $('#customPptxCard').hide();
-        }
-    } else {
-        $('#customPptxSection').hide();
-        $('#templatePickerDivider').hide();
-    }
-
-    // Hide skill grid, show template grid
-    $('#skillPickerGrid').hide();
-    $('#templatePickerGrid').show();
-    $('#templatePickerTitle').text('템플릿을 선택하세요');
-
     if (state.templates.length === 0) {
         grid.append('<div style="text-align:center;padding:40px;color:var(--text-muted);">등록된 템플릿이 없습니다</div>');
-        $('#templatePickerModal').show();
         return;
     }
 
     state.templates.forEach(tmpl => {
-        const isActive = state.selectedTemplateId === tmpl._id && !state.customTemplateId;
+        const isActive = state.selectedTemplateId === tmpl._id && !state.customTemplateId && !state.infographicMode;
         const card = $(`
             <div class="template-picker-card ${isActive ? 'active' : ''}" onclick="selectTemplateFromPicker('${tmpl._id}')">
                 <div class="template-picker-thumb"></div>
@@ -2949,17 +2974,14 @@ function openTemplatePickerModal() {
             </div>
         `);
 
-        // 첫 번째 슬라이드 썸네일 렌더링
         const thumbContainer = card.find('.template-picker-thumb');
         if (tmpl.first_slide) {
             const slideData = { ...tmpl.first_slide };
-            // 슬라이드 배경이 없으면 템플릿 배경 사용
             if (!slideData.background_image && tmpl.background_image) {
                 slideData.background_image = tmpl.background_image;
             }
             const _tmplSz = tmpl.slide_size || '16:9';
             const _tdPicker = getThumbDimensions(240, _tmplSz);
-            // 썸네일 aspect-ratio를 개별 템플릿의 slide_size에 맞춤
             const _szPicker = getSlideCanvasSize(_tmplSz);
             thumbContainer.css('aspect-ratio', _szPicker.w + ' / ' + _szPicker.h);
             renderSlideToContainer(thumbContainer, slideData, _tdPicker.w, _tdPicker.h, _tmplSz);
@@ -2967,11 +2989,177 @@ function openTemplatePickerModal() {
 
         grid.append(card);
     });
+}
 
-    $('#templatePickerModal').show();
+// 슬라이드 스타일 캐시
+let _slideStylesCache = null;
 
-    // Setup drag & drop for custom PPTX
-    _initCustomPptxDragDrop();
+async function _loadAndRenderSlideStyles() {
+    const grid = $('#styleCardsGrid');
+
+    if (!_slideStylesCache) {
+        grid.html('<div style="text-align:center;padding:40px;color:var(--text-muted);">스타일을 불러오는 중...</div>');
+        try {
+            const res = await fetch('/api/slide-styles');
+            const data = await res.json();
+            _slideStylesCache = data.styles || [];
+        } catch (e) {
+            grid.html('<div style="text-align:center;padding:40px;color:var(--text-muted);">스타일을 불러올 수 없습니다</div>');
+            return;
+        }
+    }
+
+    _renderSlideStyleCards(_slideStylesCache);
+}
+
+function _renderSlideStyleCards(styles) {
+    const grid = $('#styleCardsGrid');
+    grid.empty();
+
+    const currentFilter = $('.style-filter-btn.active').data('cat') || 'all';
+    const filtered = currentFilter === 'all' ? styles : styles.filter(s => s.category === currentFilter);
+
+    const categoryIcons = {
+        business: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>',
+        modern: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>',
+        creative: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/></svg>',
+        artistic: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13.5" cy="6.5" r="2.5"/><path d="M17.5 15.5a4 4 0 10-8 0"/><path d="M3 19.5A9 9 0 0121 19.5"/></svg>',
+        retro: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+    };
+
+    const categoryLabels = { business: '비즈니스', modern: '모던', creative: '크리에이티브', artistic: '아티스틱', retro: '레트로' };
+
+    if (filtered.length === 0) {
+        grid.html('<div style="text-align:center;padding:40px;color:var(--text-muted);">해당 카테고리에 스타일이 없습니다</div>');
+        return;
+    }
+
+    filtered.forEach(style => {
+        const isSelected = state.infographicMode && state._selectedStyleId === style.style_id;
+        const catIcon = categoryIcons[style.category] || '';
+        const catLabel = categoryLabels[style.category] || style.category;
+
+        const card = $(`
+            <div class="style-card ${isSelected ? 'selected' : ''}" onclick="selectSlideStyle(${style.style_id})" data-style-id="${style.style_id}" data-category="${style.category}">
+                <div class="style-card-header">
+                    <span class="style-card-num">${style.style_id}</span>
+                    <span class="style-card-cat">${catIcon} ${catLabel}</span>
+                </div>
+                <div class="style-card-name">${escapeHtml(style.name)}</div>
+                <div class="style-card-name-en">${escapeHtml(style.name_en)}</div>
+                <div class="style-card-prompt">${escapeHtml(style.prompt)}</div>
+                ${isSelected ? '<div class="style-card-check"><svg width="18" height="18" viewBox="0 0 16 16" fill="#8b5cf6"><path d="M8 0a8 8 0 110 16A8 8 0 018 0zm3.78 5.22a.75.75 0 00-1.06 0L7 8.94 5.28 7.22a.75.75 0 10-1.06 1.06l2.25 2.25a.75.75 0 001.06 0l4.25-4.25a.75.75 0 000-1.06z"/></svg></div>' : ''}
+            </div>
+        `);
+        grid.append(card);
+    });
+}
+
+function filterSlideStyles(category) {
+    $('.style-filter-btn').removeClass('active');
+    $(`.style-filter-btn[data-cat="${category}"]`).addClass('active');
+    if (_slideStylesCache) {
+        _renderSlideStyleCards(_slideStylesCache);
+    }
+}
+
+function selectSlideStyle(styleId) {
+    // 스타일 선택 → 인포그래픽 모드 활성화
+    const style = (_slideStylesCache || []).find(s => s.style_id === styleId);
+    if (!style) return;
+
+    if (state.customTemplateId) {
+        _clearCustomPptxState();
+    }
+    state.selectedTemplateId = null;
+    state.infographicMode = true;
+    state._selectedStyleId = styleId;
+    state._selectedStylePrompt = style.prompt;
+    state._selectedStyleName = style.name;
+    state._templateSlideSize = '16:9';
+    updateSlideCanvasAspect();
+    updateTemplateButtonLabel();
+    closeModal('templatePickerModal');
+
+    if (state.currentProject && state.currentProject._id) {
+        state.currentProject.infographic_mode = true;
+        state.currentProject.template_id = null;
+        apiPut('/api/projects/' + state.currentProject._id, {
+            template_id: null,
+            infographic_mode: true,
+        }).catch(() => {});
+    }
+}
+
+function toggleCustomPrompt() {
+    const body = $('#customPromptBody');
+    const chevron = $('#customPromptChevron');
+    if (body.is(':visible')) {
+        body.slideUp(200);
+        chevron.css('transform', 'rotate(0deg)');
+    } else {
+        body.slideDown(200);
+        chevron.css('transform', 'rotate(180deg)');
+        $('#customStylePrompt').focus();
+    }
+}
+
+function applyCustomStylePrompt() {
+    const prompt = $('#customStylePrompt').val().trim();
+    if (!prompt) {
+        showToast('스타일 프롬프트를 입력하세요', 'error');
+        return;
+    }
+
+    if (state.customTemplateId) {
+        _clearCustomPptxState();
+    }
+    state.selectedTemplateId = null;
+    state.infographicMode = true;
+    state._selectedStyleId = 'custom';
+    state._selectedStylePrompt = prompt;
+    state._selectedStyleName = '커스텀 스타일';
+    state._templateSlideSize = '16:9';
+    updateSlideCanvasAspect();
+    updateTemplateButtonLabel();
+    closeModal('templatePickerModal');
+
+    if (state.currentProject && state.currentProject._id) {
+        state.currentProject.infographic_mode = true;
+        state.currentProject.template_id = null;
+        apiPut('/api/projects/' + state.currentProject._id, {
+            template_id: null,
+            infographic_mode: true,
+        }).catch(() => {});
+    }
+
+    showToast('커스텀 스타일이 적용되었습니다', 'success');
+}
+
+function selectInfographicMode() {
+    // 인포그래픽 모드 선택 → 기존 템플릿/커스텀 PPTX 해제
+    if (state.customTemplateId) {
+        _clearCustomPptxState();
+    }
+    state.selectedTemplateId = null;
+    state.infographicMode = true;
+    state._selectedStyleId = null;
+    state._selectedStylePrompt = '';
+    state._selectedStyleName = null;
+    state._templateSlideSize = '16:9';
+    updateSlideCanvasAspect();
+    updateTemplateButtonLabel();
+    closeModal('templatePickerModal');
+
+    // 프로젝트에 인포그래픽 모드 저장
+    if (state.currentProject && state.currentProject._id) {
+        state.currentProject.infographic_mode = true;
+        state.currentProject.template_id = null;
+        apiPut('/api/projects/' + state.currentProject._id, {
+            template_id: null,
+            infographic_mode: true,
+        }).catch(() => {});
+    }
 }
 
 function selectTemplateFromPicker(templateId) {
@@ -2980,6 +3168,11 @@ function selectTemplateFromPicker(templateId) {
         _clearCustomPptxState();
     }
 
+    // 인포그래픽 모드 해제
+    state.infographicMode = false;
+    state._selectedStyleId = null;
+    state._selectedStylePrompt = '';
+    state._selectedStyleName = null;
     state.selectedTemplateId = templateId;
     // 선택한 템플릿의 slide_size 저장
     const tmpl = state.templates.find(t => t._id === templateId);
@@ -3096,6 +3289,11 @@ async function generatePPT() {
     const instructions = $('#instructionsInput').val().trim();
     const lang = $('#langSelect').val();
     const slideCount = $('#slideCountSelect').val();
+
+    // 인포그래픽 모드 → 전용 생성 함수 호출
+    if (state.infographicMode) {
+        return generateInfographic();
+    }
 
     // Allow generation with either admin template or custom template
     if (!templateId && !customTemplateId) { showToast(t('msgSelectTemplate'), 'error'); return; }
@@ -4359,6 +4557,452 @@ async function _processContentQueue() {
         });
         showToast(t('msgAllComplete'), 'success');
     }
+}
+
+// ============ 인포그래픽 슬라이드 생성 ============
+async function generateInfographic() {
+    const instructions = $('#instructionsInput').val().trim();
+    const lang = $('#langSelect').val();
+    const slideCount = $('#slideCountSelect').val();
+
+    if (state.resources.length === 0 && !instructions) {
+        showToast(t('msgEnterInstructions', '지침을 입력하세요'), 'error');
+        return;
+    }
+
+    _isGenerating = true;
+    _animationCancelled = true;
+    state.generatedSlides = [];
+    state.currentSlideIndex = 0;
+    state._contentQueue = [];
+    state._generationComplete = false;
+
+    _showStopButton();
+
+    // 슬라이드 프리뷰 영역 표시
+    $('#slideEmpty').hide();
+    $('#slidePreview').css('display', 'flex');
+    $('#wsSlideTools').css('display', 'flex');
+    _setSlideToolsDisabled(true);
+    switchPanelTab('outline');
+
+    // 스트리밍 프로그레스 UI 표시
+    $('#slideTextList').addClass('streaming-active').empty().append(`
+        <div id="streamingProgress" class="streaming-progress">
+            <div class="streaming-progress-header">
+                <div class="streaming-spinner-sm"></div>
+                <span id="streamingStatus">AI가 인포그래픽 아웃라인을 설계하고 있습니다...</span>
+            </div>
+            <div id="streamingContent" class="streaming-content"></div>
+        </div>
+    `);
+
+    // 이전 결과 초기화
+    $('#slideThumbnails').empty();
+    $('#slideThumbList').empty();
+    $('#slideCounter').text('0 / 0');
+    $('#slideCounterInline').text('0 / 0');
+
+    // 캔버스 영역에 인포그래픽 로딩 애니메이션
+    $('#previewCanvas .preview-obj').remove();
+    $('#previewBg').css('background-image', 'none');
+    $('#canvasLoadingOverlay').remove();
+    $('#previewCanvas').append(`
+        <div class="canvas-loading-overlay infographic-loading" id="canvasLoadingOverlay">
+            <div class="infographic-loading-animation">
+                <div class="infographic-pulse-ring"></div>
+                <div class="infographic-pulse-ring delay-1"></div>
+                <div class="infographic-pulse-ring delay-2"></div>
+                <div class="infographic-icon-container">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="infographic-icon-spin">
+                        <rect x="3" y="3" width="18" height="18" rx="2"/>
+                        <circle cx="8.5" cy="8.5" r="1.5"/>
+                        <path d="M21 15l-5-5L5 21"/>
+                    </svg>
+                </div>
+            </div>
+            <div class="canvas-loading-text">
+                <div class="canvas-loading-title" id="infographicLoadingTitle">인포그래픽을 준비하고 있습니다</div>
+                <div class="canvas-loading-sub" id="infographicLoadingSub">
+                    AI가 아웃라인을 설계하는 중<span class="canvas-loading-dots"><span>.</span><span>.</span><span>.</span></span>
+                </div>
+                <div class="infographic-progress-bar" id="infographicProgressBar" style="display:none;">
+                    <div class="infographic-progress-fill" id="infographicProgressFill"></div>
+                    <span class="infographic-progress-text" id="infographicProgressText">0 / 0</span>
+                </div>
+            </div>
+        </div>
+    `);
+
+    _abortController = new AbortController();
+
+    try {
+        const response = await fetch(`/${state.jwtToken}/api/generate/infographic/stream`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                project_id: state.currentProject._id,
+                instructions: instructions,
+                lang: lang,
+                slide_count: slideCount,
+                style_hint: state._selectedStylePrompt || '',
+            }),
+            signal: _abortController.signal,
+        });
+
+        if (!response.ok) {
+            let errMsg = '생성 실패';
+            try { const err = await response.json(); errMsg = err.detail || errMsg; } catch (_) {}
+            throw new Error(errMsg);
+        }
+
+        _streamReader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await _streamReader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split('\n\n');
+            buffer = parts.pop() || '';
+
+            for (const part of parts) {
+                for (const line of part.split('\n')) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        _handleInfographicStreamEvent(data);
+                    } catch (e) {
+                        console.warn('SSE parse error:', e);
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            console.log('Infographic generation aborted by user');
+        } else {
+            showToast(e.message || '인포그래픽 생성 중 오류가 발생했습니다.', 'error');
+            console.error('Infographic stream error:', e);
+        }
+        if (state.generatedSlides.length === 0) {
+            $('#slideEmpty').show();
+            $('#slidePreview').hide();
+            $('#wsSlideTools').hide();
+        }
+    } finally {
+        _isGenerating = false;
+        _streamReader = null;
+        _abortController = null;
+        $('#canvasLoadingOverlay').remove();
+        $('#streamingProgress').remove();
+        $('#slideTextList').removeClass('streaming-active');
+        _showGenerateOrRestartButton();
+        _setSlideToolsDisabled(false);
+        if (state.currentProject) {
+            initCollaboration(state.currentProject._id);
+        }
+    }
+}
+
+function _handleInfographicStreamEvent(data) {
+    switch (data.event) {
+        case 'start':
+            $('#streamingStatus').text(data.message || 'AI가 인포그래픽을 설계하고 있습니다...');
+            break;
+
+        case 'delta': {
+            const el = document.getElementById('streamingContent');
+            if (el) {
+                el.textContent += (data.text || '');
+                el.scrollTop = el.scrollHeight;
+            }
+            break;
+        }
+
+        case 'parsing':
+            $('#streamingStatus').text(data.message || '아웃라인을 분석하고 있습니다...');
+            $('#streamingContent').css('opacity', '0.4');
+            break;
+
+        case 'outline': {
+            const outlineSlides = data.slides || [];
+            state._infographicOutline = outlineSlides;
+            const typeLabelsMap = {
+                title: 'Cover', toc: 'Contents',
+                section: 'Chapter', content: 'Body', closing: 'Closing',
+            };
+            let outlineHtml = '<div class="inf-outline" id="infographicOutlineSummary">';
+            outlineHtml += '<div class="inf-outline-header"><span class="inf-outline-title">인포그래픽 아웃라인</span><span class="inf-outline-count">' + outlineSlides.length + '장</span></div>';
+
+            outlineSlides.forEach((s, i) => {
+                const badge = typeLabelsMap[s.type] || s.type;
+                const items = s.items || [];
+                const subtitle = s.subtitle || '';
+                const description = s.description || '';
+
+                outlineHtml += `<div class="inf-outline-card" id="infOutlineItem_${i}">`;
+                // 헤더 영역 (번호 + 제목 + 뱃지 + 상태)
+                outlineHtml += `<div class="inf-outline-card-header">`;
+                outlineHtml += `<span class="inf-outline-num">${i + 1}</span>`;
+                outlineHtml += `<span class="inf-outline-card-title">${escapeHtml(s.title || '슬라이드 ' + (i + 1))}</span>`;
+                outlineHtml += `<span class="slide-type-badge">${badge}</span>`;
+                outlineHtml += `<span class="infographic-item-status" id="infOutlineStatus_${i}"></span>`;
+                outlineHtml += `</div>`;
+
+                // 부제목
+                if (subtitle) {
+                    outlineHtml += `<div class="inf-outline-subtitle">${escapeHtml(subtitle)}</div>`;
+                }
+
+                // 설명 텍스트
+                if (description) {
+                    outlineHtml += `<div class="inf-outline-desc">${escapeHtml(description)}</div>`;
+                }
+
+                // 항목 목록
+                if (items.length > 0) {
+                    outlineHtml += `<div class="inf-outline-items">`;
+                    items.forEach(item => {
+                        const heading = item.heading || '';
+                        const detail = item.detail || '';
+                        outlineHtml += `<div class="inf-outline-item-row">`;
+                        outlineHtml += `<span class="inf-outline-item-dot"></span>`;
+                        outlineHtml += `<div class="inf-outline-item-content">`;
+                        if (heading) outlineHtml += `<span class="inf-outline-item-heading">${escapeHtml(heading)}</span>`;
+                        if (detail) outlineHtml += `<span class="inf-outline-item-detail">${escapeHtml(detail.length > 200 ? detail.slice(0, 200) + '...' : detail)}</span>`;
+                        outlineHtml += `</div></div>`;
+                    });
+                    outlineHtml += `</div>`;
+                }
+
+                // 표/차트 뱃지
+                if (s.has_table || s.has_chart) {
+                    outlineHtml += `<div class="inf-outline-data-tags">`;
+                    if (s.has_table) outlineHtml += `<span class="inf-outline-data-tag table-tag"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="3" x2="9" y2="21"/></svg> Table</span>`;
+                    if (s.has_chart) outlineHtml += `<span class="inf-outline-data-tag chart-tag"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="22,6 13.5,15.5 8.5,10.5 2,17"/></svg> Chart</span>`;
+                    outlineHtml += `</div>`;
+                }
+
+                outlineHtml += `</div>`; // card end
+            });
+            outlineHtml += '</div>';
+            $('#streamingProgress').replaceWith(outlineHtml);
+            break;
+        }
+
+        case 'infographic_start': {
+            const total = data.total || 0;
+
+            // 캔버스 로딩 오버레이 제거
+            $('#canvasLoadingOverlay').remove();
+
+            // 슬라이드 프리뷰 영역 표시
+            $('#slideEmpty').hide();
+            $('#slidePreview').css('display', 'flex');
+            $('#wsSlideTools').css('display', 'flex');
+
+            // 빈 슬라이드 배열 초기화
+            state.generatedSlides = new Array(total).fill(null);
+            state.currentSlideIndex = 0;
+            state._infographicTotal = total;
+
+            // 좌측 썸네일 초기화
+            $('#slideThumbnails').empty();
+            $('#slideThumbList').empty();
+            $('#slideCounter').text(`0 / ${total}`);
+            $('#slideCounterInline').text(`0 / ${total}`);
+
+            // 첫 번째 슬라이드에 로딩 표시
+            _showInfographicSlideLoading(0, total);
+
+            // 아웃라인에서 첫 번째 항목 활성화
+            _highlightInfographicOutlineItem(0);
+            break;
+        }
+
+        case 'infographic_slide': {
+            const idx = data.index;
+            const total = data.total;
+            const slide = data.slide;
+            const title = data.title || '';
+
+            // 슬라이드 저장
+            state.generatedSlides[idx] = slide;
+
+            // 현재 슬라이드로 이동 & 이미지 렌더링
+            state.currentSlideIndex = idx;
+            _renderInfographicSlide(idx);
+            updateSlideNav();
+
+            // 좌측 썸네일 추가
+            _appendSingleThumbnail(idx);
+            _appendSingleThumbV(idx);
+
+            // 카운터 업데이트
+            $('#slideCounter').text(`${idx + 1} / ${total}`);
+            $('#slideCounterInline').text(`${idx + 1} / ${total}`);
+
+            // 아웃라인 상태 업데이트 (완료 표시)
+            $(`#infOutlineStatus_${idx}`).html('<svg width="14" height="14" viewBox="0 0 16 16" fill="#22c55e"><path d="M8 0a8 8 0 110 16A8 8 0 018 0zm3.78 5.22a.75.75 0 00-1.06 0L7 8.94 5.28 7.22a.75.75 0 10-1.06 1.06l2.25 2.25a.75.75 0 001.06 0l4.25-4.25a.75.75 0 000-1.06z"/></svg>');
+            $(`#infOutlineItem_${idx}`).addClass('outline-item-done');
+
+            // 다음 슬라이드가 있으면 로딩 표시
+            if (idx + 1 < total) {
+                // 잠시 현재 슬라이드 표시 후 다음 로딩으로 전환
+                setTimeout(() => {
+                    if (state.currentSlideIndex === idx && _isGenerating) {
+                        _showInfographicSlideLoading(idx + 1, total);
+                        _highlightInfographicOutlineItem(idx + 1);
+                    }
+                }, 1500);
+            }
+            break;
+        }
+
+        case 'complete':
+            // 마지막 슬라이드 로딩 표시 제거
+            $('#infographicSlideLoading').remove();
+
+            renderSlideTextPanel();
+            state.currentSlideIndex = 0;
+            _renderInfographicSlide(0);
+            renderSlideThumbnails();
+            renderSlideThumbList();
+            updateSlideNav();
+            showToast('인포그래픽 생성이 완료되었습니다!', 'success');
+            break;
+
+        case 'stopped':
+            $('#infographicSlideLoading').remove();
+            showToast(data.message || '생성이 중단되었습니다.', 'info');
+            if (state.generatedSlides.filter(Boolean).length > 0) {
+                state.currentSlideIndex = 0;
+                _renderInfographicSlide(0);
+                renderSlideThumbnails();
+                renderSlideThumbList();
+                updateSlideNav();
+                renderSlideTextPanel();
+            }
+            break;
+
+        case 'error':
+            $('#infographicSlideLoading').remove();
+            showToast(data.message || '인포그래픽 생성 중 오류가 발생했습니다.', 'error');
+            break;
+    }
+}
+
+/** 인포그래픽 슬라이드 이미지를 캔버스 전체에 렌더링 */
+function _renderInfographicSlide(idx) {
+    const slide = state.generatedSlides[idx];
+    if (!slide) return;
+
+    const canvas = $('#previewCanvas');
+    canvas.find('.preview-obj').remove();
+    canvas.find('.live-edit-banner').remove();
+    $('#infographicSlideLoading').remove();
+
+    // 배경 초기화
+    $('#previewBg').css('background-image', 'none');
+
+    const canvasW = canvas.width();
+    const canvasH = canvas.height();
+
+    // 인포그래픽 이미지를 캔버스 전체에 표시
+    const imgObj = (slide.objects || []).find(o => o.obj_type === 'image' && o.image_url);
+    if (imgObj) {
+        const div = $('<div>').addClass('preview-obj infographic-slide-img').css({
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            width: canvasW + 'px',
+            height: canvasH + 'px',
+            zIndex: 1,
+            overflow: 'hidden',
+        });
+        const img = $('<img>').attr('src', imgObj.image_url).css({
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            display: 'block',
+        });
+        // 이미지 로드 시 부드럽게 등장
+        img.css({ opacity: 0, transition: 'opacity 0.5s ease' });
+        img.on('load', function() { $(this).css('opacity', 1); });
+        div.append(img);
+        canvas.append(div);
+    }
+
+    // 슬라이드 제목 오버레이 (하단)
+    if (slide.infographic_title) {
+        const titleDiv = $('<div>').addClass('preview-obj infographic-slide-title-overlay').css({
+            position: 'absolute',
+            left: 0,
+            bottom: 0,
+            width: canvasW + 'px',
+            padding: '12px 16px',
+            background: 'linear-gradient(transparent, rgba(0,0,0,0.6))',
+            color: '#fff',
+            fontSize: (14 * (canvasW / 960)) + 'px',
+            fontWeight: '500',
+            zIndex: 2,
+            boxSizing: 'border-box',
+        });
+        titleDiv.text(slide.infographic_title);
+        canvas.append(titleDiv);
+    }
+}
+
+/** 캔버스에 인포그래픽 슬라이드 생성 중 로딩 표시 */
+function _showInfographicSlideLoading(slideIdx, total) {
+    const canvas = $('#previewCanvas');
+    canvas.find('.preview-obj').remove();
+    $('#infographicSlideLoading').remove();
+    $('#previewBg').css('background-image', 'none');
+
+    const canvasW = canvas.width();
+    const canvasH = canvas.height();
+
+    // 아웃라인에서 현재 슬라이드 제목 가져오기
+    const outline = state._infographicOutline || [];
+    const currentTitle = (outline[slideIdx] && outline[slideIdx].title) || `슬라이드 ${slideIdx + 1}`;
+
+    const loadingDiv = $(`
+        <div id="infographicSlideLoading" class="infographic-slide-generating" style="width:${canvasW}px;height:${canvasH}px;">
+            <div class="infographic-gen-visual">
+                <div class="infographic-gen-brush">
+                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <rect x="3" y="3" width="18" height="18" rx="2"/>
+                        <circle cx="8.5" cy="8.5" r="1.5"/>
+                        <path d="M21 15l-5-5L5 21"/>
+                    </svg>
+                </div>
+                <div class="infographic-gen-scanline"></div>
+            </div>
+            <div class="infographic-gen-info">
+                <div class="infographic-gen-counter">${slideIdx + 1} / ${total}</div>
+                <div class="infographic-gen-title">${escapeHtml(currentTitle)}</div>
+                <div class="infographic-gen-status">
+                    AI가 슬라이드를 생성하고 있습니다<span class="canvas-loading-dots"><span>.</span><span>.</span><span>.</span></span>
+                </div>
+            </div>
+        </div>
+    `);
+
+    canvas.append(loadingDiv);
+}
+
+/** 아웃라인에서 현재 생성 중인 항목 하이라이트 */
+function _highlightInfographicOutlineItem(idx) {
+    $('.outline-summary-item').removeClass('outline-item-active');
+    $(`#infOutlineItem_${idx}`).addClass('outline-item-active');
+
+    // 스크롤 이동
+    const item = document.getElementById(`infOutlineItem_${idx}`);
+    if (item) item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function _updateThumbnailAtIndex(idx) {
@@ -6444,9 +7088,16 @@ function _buildPresCarousel() {
     const $carousel = $('#presNavCarousel');
     $carousel.empty();
     state.generatedSlides.forEach((slide, i) => {
-        const bgStyle = slide.background_image
-            ? `background-image:url(${slide.background_image})`
-            : 'background:#e5e7eb';
+        // 배경 이미지 또는 인포그래픽 이미지 오브젝트에서 썸네일 추출
+        let bgStyle = 'background:#e5e7eb';
+        if (slide.background_image) {
+            bgStyle = `background-image:url(${slide.background_image})`;
+        } else if (slide.infographic || slide.template_slide_id === 'infographic') {
+            const imgObj = (slide.objects || []).find(o => o.obj_type === 'image' && o.image_url);
+            if (imgObj) {
+                bgStyle = `background-image:url(${imgObj.image_url});background-size:cover;background-position:center`;
+            }
+        }
         $carousel.append(
             `<div class="pres-thumb${i === presentationIndex ? ' active' : ''}" data-idx="${i}" style="${bgStyle}" onclick="presNavGoTo(${i})"><span class="pres-thumb-num">${i + 1}</span></div>`
         );
