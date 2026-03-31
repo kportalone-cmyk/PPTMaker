@@ -2375,6 +2375,28 @@ body {
 }
 
 /* 슬라이드 추가 버튼 */
+/* 하단 도구 버튼 (언어 전환, 텍스트 재정리) */
+.btn-bottom-tool {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 7px 12px;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 12px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+.btn-bottom-tool:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-light);
+}
+
 .btn-add-slide {
     display: flex;
     align-items: center;
@@ -7838,4 +7860,335 @@ body {
     align-items: center;
     justify-content: center;
     color: #fff;
+}
+
+/* ============ 텍스트 재정리 로딩 오버레이 ============ */
+.fix-text-overlay {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 15, 26, 0.65);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border-radius: inherit;
+    animation: fixTextFadeIn 0.3s ease;
+}
+@keyframes fixTextFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+.fix-text-loader {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+}
+.fix-text-icon-wrap {
+    position: relative;
+    width: 64px;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.fix-text-icon {
+    color: #a78bfa;
+    animation: fixTextIconPen 2s ease-in-out infinite;
+    filter: drop-shadow(0 0 8px rgba(167, 139, 250, 0.5));
+}
+@keyframes fixTextIconPen {
+    0%, 100% { transform: rotate(0deg) scale(1); }
+    25% { transform: rotate(-8deg) scale(1.08); }
+    50% { transform: rotate(0deg) scale(1); }
+    75% { transform: rotate(8deg) scale(1.08); }
+}
+.fix-text-pulse {
+    position: absolute;
+    width: 56px; height: 56px;
+    border-radius: 50%;
+    border: 2px solid rgba(167, 139, 250, 0.3);
+    animation: fixTextPulse 2s ease-out infinite;
+}
+.fix-text-pulse.delay-1 {
+    animation-delay: 0.8s;
+}
+@keyframes fixTextPulse {
+    0% { transform: scale(0.8); opacity: 0.6; }
+    100% { transform: scale(1.8); opacity: 0; }
+}
+.fix-text-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+    letter-spacing: -0.02em;
+}
+.fix-text-sub {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+/* ============ 프로젝트 폴더 ============ */
+.folder-actions {
+    display: flex;
+    padding: 4px 12px 8px;
+}
+.folder-add-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border: 1px dashed rgba(99, 102, 241, 0.3);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--sidebar-text);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    width: 100%;
+    justify-content: center;
+}
+.folder-add-btn:hover {
+    border-color: var(--accent);
+    color: var(--sidebar-text-bright);
+    background: rgba(99, 102, 241, 0.08);
+}
+/* 폴더 목록 컨테이너 (5개 초과 시 스크롤) */
+.folder-list-container {
+    max-height: 200px;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.folder-group {
+    margin-bottom: 2px;
+}
+.folder-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: background 0.15s;
+    user-select: none;
+}
+.folder-header:hover {
+    background: var(--sidebar-hover);
+}
+.folder-header.drag-over {
+    background: rgba(99, 102, 241, 0.15);
+    outline: 2px dashed var(--accent);
+    outline-offset: -2px;
+}
+.folder-chevron {
+    flex-shrink: 0;
+    color: var(--sidebar-text);
+    opacity: 0.5;
+    transition: transform 0.2s;
+}
+.folder-chevron.expanded {
+    transform: rotate(90deg);
+}
+.folder-icon {
+    flex-shrink: 0;
+    color: #f59e0b;
+}
+.folder-name {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--sidebar-text-bright);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.folder-count {
+    font-size: 11px;
+    color: var(--sidebar-text);
+    opacity: 0.5;
+    margin-right: 2px;
+}
+.folder-menu {
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.folder-header:hover .folder-menu {
+    opacity: 1;
+}
+.folder-menu-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--sidebar-text);
+    cursor: pointer;
+    padding: 0;
+}
+.folder-menu-btn:hover {
+    background: rgba(255,255,255,0.1);
+    color: var(--sidebar-text-bright);
+}
+.folder-content {
+    padding-left: 18px;
+    max-height: 240px;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+.folder-content .project-item {
+    padding-left: 8px;
+}
+
+/* 폴더 컨텍스트 메뉴 */
+.folder-context-menu {
+    position: fixed;
+    z-index: 9999;
+    background: var(--sidebar-bg);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px;
+    padding: 4px;
+    min-width: 140px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.folder-context-menu button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--sidebar-text-bright);
+    font-size: 13px;
+    cursor: pointer;
+    text-align: left;
+}
+.folder-context-menu button:hover {
+    background: var(--sidebar-hover);
+}
+.folder-context-menu button.danger:hover {
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+}
+
+/* 미분류 드롭 영역 */
+.unfiled-drop-zone {
+    padding: 6px 12px;
+    margin: 4px 0;
+    border-radius: var(--radius-sm);
+    transition: all 0.15s;
+}
+.unfiled-drop-zone.drag-over {
+    background: rgba(99, 102, 241, 0.1);
+    outline: 2px dashed var(--accent);
+    outline-offset: -2px;
+}
+.unfiled-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--sidebar-text);
+    opacity: 0.5;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* 드래그 중인 프로젝트 */
+.project-item.dragging {
+    opacity: 0.4;
+}
+.project-item[draggable="true"] {
+    cursor: grab;
+}
+.project-item[draggable="true"]:active {
+    cursor: grabbing;
+}
+
+/* ============ 범용 다이얼로그 (alert/confirm/prompt) ============ */
+.dialog-card {
+    background: var(--surface);
+    border-radius: 16px;
+    padding: 28px;
+    max-width: 380px;
+    width: 90%;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    animation: dialogSlideIn 0.2s ease;
+}
+@keyframes dialogSlideIn {
+    from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.dialog-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+}
+.dialog-message {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 20px;
+    white-space: pre-line;
+}
+.dialog-input {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    font-size: 14px;
+    font-family: inherit;
+    color: var(--text-primary);
+    background: var(--surface-2);
+    outline: none;
+    transition: border-color 0.15s;
+    margin-bottom: 20px;
+    box-sizing: border-box;
+}
+.dialog-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+.dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+.dialog-btn {
+    padding: 9px 20px;
+    border: none;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.dialog-cancel {
+    background: var(--surface-3);
+    color: var(--text-secondary);
+}
+.dialog-cancel:hover {
+    background: var(--border);
+    color: var(--text-primary);
+}
+.dialog-confirm {
+    background: var(--accent);
+    color: #fff;
+}
+.dialog-confirm:hover {
+    background: var(--accent-hover);
+}
+.dialog-confirm.danger {
+    background: #ef4444;
+}
+.dialog-confirm.danger:hover {
+    background: #dc2626;
 }

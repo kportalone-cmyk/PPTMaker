@@ -12,6 +12,7 @@ const state = {
     isAdmin: false,
     lang: 'ko',
     projects: [],
+    folders: [],
     currentProject: null,
     resources: [],
     generatedSlides: [],
@@ -1390,11 +1391,69 @@ async function loadProjects() {
         const res = await apiGet('/api/projects');
         state.projects = res.projects || [];
         state.sharedProjects = res.shared_projects || [];
+        state.folders = res.folders || [];
         renderProjectList();
         _updateHomeTabCounts();
     } catch (e) {
         showToast(t('msgLoadingProject'), 'error');
     }
+}
+
+function _buildProjectItemHtml(p, isShared) {
+    const isActive = state.currentProject && state.currentProject._id === p._id;
+    const date = p.created_at ? new Date(p.created_at).toLocaleDateString() : '';
+    const typeClass = _getProjectTypeClass(p.project_type);
+    const projTypeIcon = _getProjectTypeIcon(p.project_type);
+
+    if (isShared) {
+        const roleLabel = p._collab_role === 'editor' ? '편집자' : '뷰어';
+        return `
+            <div class="project-item ${isActive ? 'active' : ''}" onclick="openProject('${p._id}')"
+                 data-project-id="${p._id}">
+                <div class="proj-icon ${typeClass}">${projTypeIcon}</div>
+                <div class="proj-info">
+                    <div class="proj-name">${escapeHtml(p.name)}</div>
+                    <div class="proj-date">${date} · ${roleLabel}</div>
+                </div>
+                <div class="proj-status-dot ${p.status || 'draft'}"></div>
+            </div>
+        `;
+    }
+
+    const collabCount = p._collab_count || 0;
+    const collabBadge = collabCount > 0
+        ? `<span class="proj-collab-badge" onclick="event.stopPropagation();openProject('${p._id}');setTimeout(showCollabModal,300)" title="${t('collaboration','협업')} (${collabCount})"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="4.5" cy="4.5" r="2.2"/><circle cx="9" cy="5.5" r="1.8"/><path d="M.5 10.5c0-2 1.5-3.5 4-3.5s2.5.8 3 1.5"/></svg><span>${collabCount}</span></span>`
+        : '';
+
+    return `
+        <div class="project-item ${isActive ? 'active' : ''}" onclick="openProject('${p._id}')"
+             draggable="true"
+             ondragstart="onProjectDragStart(event,'${p._id}')"
+             data-project-id="${p._id}">
+            <div class="proj-icon ${typeClass}">${projTypeIcon}</div>
+            <div class="proj-info">
+                <div class="proj-name">${escapeHtml(p.name)}${collabBadge}</div>
+                <div class="proj-date">${date}</div>
+            </div>
+            <button class="proj-delete-btn" onclick="deleteProjectById('${p._id}', event)" title="${t('delete','삭제')}">
+                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 4h8M5 4V3a1 1 0 011-1h2a1 1 0 011 1v1M10 4v7a1 1 0 01-1 1H5a1 1 0 01-1-1V4"/></svg>
+            </button>
+            <div class="proj-status-dot ${p.status || 'draft'}"></div>
+        </div>
+    `;
+}
+
+function _renderProjectItems(list, projects, isShared) {
+    if (projects.length === 0) {
+        const emptyMsg = isShared
+            ? t('noSharedProjects', '공유받은 파일이 없습니다')
+            : t('noResources');
+        list.html(`<div style="padding:16px 12px;text-align:center;color:var(--sidebar-text);font-size:12px;opacity:0.6;">${emptyMsg}</div>`);
+        return;
+    }
+    projects.forEach(p => {
+        list.append(_buildProjectItemHtml(p, isShared));
+    });
 }
 
 function renderProjectList(skipAutoNav) {
@@ -1409,35 +1468,113 @@ function renderProjectList(skipAutoNav) {
         $('#sidebarSharedCount').hide();
     }
 
-    // 탭에 따라 프로젝트 필터링
     const isSharedTab = state.sidebarTab === 'shared';
-    const allProjects = isSharedTab
-        ? state.sharedProjects.map(p => ({ ...p, _isShared: true }))
-        : state.projects.map(p => ({ ...p, _isShared: false }));
 
-    if (allProjects.length === 0) {
-        const emptyMsg = isSharedTab
-            ? t('noSharedProjects', '공유받은 파일이 없습니다')
-            : t('noResources');
-        list.html(`<div style="padding:16px 12px;text-align:center;color:var(--sidebar-text);font-size:12px;opacity:0.6;">${emptyMsg}</div>`);
+    if (isSharedTab) {
+        // 공유 탭: 기존 플랫 리스트 (페이지네이션 포함)
+        const projects = state.sharedProjects.map(p => ({...p, _isShared: true}));
+        _renderProjectItems(list, projects, true);
         return;
     }
 
-    const pageSize = state.projectPageSize;
-    const totalPages = Math.ceil(allProjects.length / pageSize);
+    // 내 프로젝트 탭: 폴더 + 미분류 프로젝트
+    const folders = state.folders || [];
+    const allProjects = state.projects;
 
-    // 페이지 범위 보정
+    if (allProjects.length === 0 && folders.length === 0) {
+        list.html(`<div style="padding:16px 12px;text-align:center;color:var(--sidebar-text);font-size:12px;opacity:0.6;">${t('noResources')}</div>`);
+        return;
+    }
+
+    // 폴더 생성 버튼
+    list.append(`
+        <div class="folder-actions">
+            <button class="folder-add-btn" onclick="createFolder()" title="새 폴더">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+                <span>새 폴더</span>
+            </button>
+        </div>
+    `);
+
+    // 폴더 렌더링 (5개 초과 시 스크롤)
+    const folderContainer = $('<div class="folder-list-container"></div>');
+
+    folders.forEach(folder => {
+        const folderProjects = allProjects.filter(p => p.folder_id === folder._id);
+        const isExpanded = state._expandedFolders && state._expandedFolders[folder._id];
+        const chevronClass = isExpanded ? 'expanded' : '';
+
+        const folderEl = $(`
+            <div class="folder-group" data-folder-id="${folder._id}">
+                <div class="folder-header" onclick="toggleFolder('${folder._id}')"
+                     ondragover="event.preventDefault();this.classList.add('drag-over')"
+                     ondragleave="this.classList.remove('drag-over')"
+                     ondrop="dropProjectToFolder(event,'${folder._id}')">
+                    <svg class="folder-chevron ${chevronClass}" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+                    <svg class="folder-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+                    <span class="folder-name">${escapeHtml(folder.name)}</span>
+                    <span class="folder-count">${folderProjects.length}</span>
+                    <div class="folder-menu">
+                        <button class="folder-menu-btn" onclick="event.stopPropagation();showFolderMenu('${folder._id}',event)" title="폴더 메뉴">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="folder-content" style="display:${isExpanded ? 'block' : 'none'};" id="folderContent_${folder._id}">
+                </div>
+            </div>
+        `);
+
+        // 폴더 내 프로젝트 렌더링
+        const contentEl = folderEl.find('.folder-content');
+        folderProjects.forEach(p => {
+            contentEl.append(_buildProjectItemHtml(p, false));
+        });
+
+        folderContainer.append(folderEl);
+    });
+
+    if (folders.length > 0) {
+        list.append(folderContainer);
+    }
+
+    // 미분류 프로젝트 (폴더에 속하지 않은)
+    const unfiledProjects = allProjects.filter(p => !p.folder_id);
+
+    // 미분류 프로젝트가 있으면 구분선 + 드롭 영역
+    if (folders.length > 0 && unfiledProjects.length > 0) {
+        list.append(`
+            <div class="unfiled-drop-zone"
+                 ondragover="event.preventDefault();this.classList.add('drag-over')"
+                 ondragleave="this.classList.remove('drag-over')"
+                 ondrop="dropProjectToFolder(event,null)">
+                <span class="unfiled-label">미분류</span>
+            </div>
+        `);
+    }
+
+    // 미분류 프로젝트 페이지네이션 (폴더 수에 따라 페이지 크기 자동 조정)
+    const totalUnfiled = unfiledProjects.length;
+    // 확장된 폴더 내 프로젝트 수 계산
+    let expandedItemCount = 0;
+    folders.forEach(f => {
+        if (state._expandedFolders && state._expandedFolders[f._id]) {
+            expandedItemCount += allProjects.filter(p => p.folder_id === f._id).length;
+        }
+    });
+    const folderHeaderRows = Math.min(folders.length, 5); // 최대 5개 폴더 헤더 표시
+    const usedRows = folderHeaderRows + expandedItemCount + (folders.length > 0 ? 1 : 0); // +1 미분류 라벨
+    const pageSize = Math.max(3, 10 - usedRows); // 최소 3개, 최대 10개
+    const totalPages = Math.max(1, Math.ceil(totalUnfiled / pageSize));
+
     if (state.projectPage >= totalPages) state.projectPage = totalPages - 1;
     if (state.projectPage < 0) state.projectPage = 0;
 
-    const start = state.projectPage * pageSize;
-    const pageItems = allProjects.slice(start, start + pageSize);
-
-    // 현재 프로젝트가 포함된 페이지로 이동 (새 프로젝트 열 때, 수동 페이지 이동 시 제외)
+    // 현재 프로젝트가 어느 페이지에 있는지 확인
     if (!skipAutoNav && state.currentProject) {
-        const globalIdx = allProjects.findIndex(p => p._id === state.currentProject._id);
-        if (globalIdx >= 0) {
-            const targetPage = Math.floor(globalIdx / pageSize);
+        const curIdx = unfiledProjects.findIndex(p => p._id === state.currentProject._id);
+        if (curIdx >= 0) {
+            const targetPage = Math.floor(curIdx / pageSize);
             if (targetPage !== state.projectPage) {
                 state.projectPage = targetPage;
                 renderProjectList();
@@ -1446,49 +1583,11 @@ function renderProjectList(skipAutoNav) {
         }
     }
 
-    pageItems.forEach(p => {
+    const start = state.projectPage * pageSize;
+    const pageProjects = unfiledProjects.slice(start, start + pageSize);
 
-        const isActive = state.currentProject && state.currentProject._id === p._id;
-        const date = p.created_at ? new Date(p.created_at).toLocaleDateString() : '';
-
-        const typeClass = _getProjectTypeClass(p.project_type);
-        const projTypeIcon = _getProjectTypeIcon(p.project_type);
-
-        if (p._isShared) {
-            const roleLabel = p._collab_role === 'editor' ? '편집자' : '뷰어';
-            list.append(`
-                <div class="project-item ${isActive ? 'active' : ''}" onclick="openProject('${p._id}')">
-                    <div class="proj-icon ${typeClass}">
-                        ${projTypeIcon}
-                    </div>
-                    <div class="proj-info">
-                        <div class="proj-name">${escapeHtml(p.name)}</div>
-                        <div class="proj-date">${date} · ${roleLabel}</div>
-                    </div>
-                    <div class="proj-status-dot ${p.status || 'draft'}"></div>
-                </div>
-            `);
-        } else {
-            const collabCount = p._collab_count || 0;
-            const collabBadge = collabCount > 0
-                ? `<span class="proj-collab-badge" onclick="event.stopPropagation();openProject('${p._id}');setTimeout(showCollabModal,300)" title="${t('collaboration','협업')} (${collabCount})"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="4.5" cy="4.5" r="2.2"/><circle cx="9" cy="5.5" r="1.8"/><path d="M.5 10.5c0-2 1.5-3.5 4-3.5s2.5.8 3 1.5"/></svg><span>${collabCount}</span></span>`
-                : '';
-            list.append(`
-                <div class="project-item ${isActive ? 'active' : ''}" onclick="openProject('${p._id}')">
-                    <div class="proj-icon ${typeClass}">
-                        ${projTypeIcon}
-                    </div>
-                    <div class="proj-info">
-                        <div class="proj-name">${escapeHtml(p.name)}${collabBadge}</div>
-                        <div class="proj-date">${date}</div>
-                    </div>
-                    <button class="proj-delete-btn" onclick="deleteProjectById('${p._id}', event)" title="${t('delete','삭제')}">
-                        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 4h8M5 4V3a1 1 0 011-1h2a1 1 0 011 1v1M10 4v7a1 1 0 01-1 1H5a1 1 0 01-1-1V4"/></svg>
-                    </button>
-                    <div class="proj-status-dot ${p.status || 'draft'}"></div>
-                </div>
-            `);
-        }
+    pageProjects.forEach(p => {
+        list.append(_buildProjectItemHtml(p, false));
     });
 
     // 페이징 UI (2페이지 이상일 때만)
@@ -1496,7 +1595,6 @@ function renderProjectList(skipAutoNav) {
         let paginationHtml = '<div class="project-pagination">';
         paginationHtml += `<button class="pp-btn ${state.projectPage === 0 ? 'disabled' : ''}" onclick="goProjectPage(${state.projectPage - 1})" ${state.projectPage === 0 ? 'disabled' : ''}><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2L3 6l5 4"/></svg></button>`;
 
-        // 페이지 번호 (최대 5개 표시)
         let startPage = Math.max(0, state.projectPage - 2);
         let endPage = Math.min(totalPages - 1, startPage + 4);
         if (endPage - startPage < 4) startPage = Math.max(0, endPage - 4);
@@ -1514,6 +1612,128 @@ function renderProjectList(skipAutoNav) {
 function goProjectPage(page) {
     state.projectPage = page;
     renderProjectList(true);
+}
+
+// ============ 폴더 관리 ============
+if (!state._expandedFolders) state._expandedFolders = {};
+
+function toggleFolder(folderId) {
+    if (!state._expandedFolders) state._expandedFolders = {};
+    state._expandedFolders[folderId] = !state._expandedFolders[folderId];
+    const content = $(`#folderContent_${folderId}`);
+    const chevron = content.closest('.folder-group').find('.folder-chevron');
+    if (state._expandedFolders[folderId]) {
+        content.slideDown(150);
+        chevron.addClass('expanded');
+    } else {
+        content.slideUp(150);
+        chevron.removeClass('expanded');
+    }
+}
+
+async function createFolder() {
+    const name = await showPrompt('새 폴더', '폴더 이름을 입력하세요', '', { confirmText: '생성' });
+    if (!name || !name.trim()) return;
+    try {
+        await apiPost('/api/folders', { name: name.trim() });
+        await loadProjects();
+        showToast('폴더가 생성되었습니다', 'success');
+    } catch (e) {
+        showToast(e.message || '폴더 생성 실패', 'error');
+    }
+}
+
+function showFolderMenu(folderId, event) {
+    event.stopPropagation();
+    // 기존 메뉴 제거
+    $('.folder-context-menu').remove();
+    const rect = event.target.closest('.folder-menu-btn').getBoundingClientRect();
+    const menu = $(`
+        <div class="folder-context-menu" style="top:${rect.bottom + 4}px;left:${rect.left}px;">
+            <button onclick="renameFolder('${folderId}')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+                이름 변경
+            </button>
+            <button onclick="deleteFolder('${folderId}')" class="danger">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+                폴더 삭제
+            </button>
+        </div>
+    `);
+    $('body').append(menu);
+    // 외부 클릭 시 메뉴 닫기
+    setTimeout(() => {
+        $(document).one('click', () => $('.folder-context-menu').remove());
+    }, 50);
+}
+
+async function renameFolder(folderId) {
+    $('.folder-context-menu').remove();
+    const folder = (state.folders || []).find(f => f._id === folderId);
+    const newName = await showPrompt('폴더 이름 변경', '새 이름을 입력하세요', folder ? folder.name : '', { confirmText: '변경' });
+    if (!newName || !newName.trim()) return;
+    try {
+        await apiPut(`/api/folders/${folderId}`, { name: newName.trim() });
+        await loadProjects();
+        showToast('폴더 이름이 변경되었습니다', 'success');
+    } catch (e) {
+        showToast(e.message || '이름 변경 실패', 'error');
+    }
+}
+
+async function deleteFolder(folderId) {
+    $('.folder-context-menu').remove();
+    const confirmed = await showConfirm('폴더 삭제', '폴더를 삭제하시겠습니까?\n폴더 안의 프로젝트는 미분류로 이동됩니다.', { danger: true, confirmText: '삭제' });
+    if (!confirmed) return;
+    try {
+        await apiDelete(`/api/folders/${folderId}`);
+        if (state._expandedFolders) delete state._expandedFolders[folderId];
+        await loadProjects();
+        showToast('폴더가 삭제되었습니다', 'success');
+    } catch (e) {
+        showToast(e.message || '폴더 삭제 실패', 'error');
+    }
+}
+
+// 드래그 & 드롭
+function onProjectDragStart(event, projectId) {
+    event.dataTransfer.setData('text/plain', projectId);
+    event.dataTransfer.effectAllowed = 'move';
+    // 드래그 중 시각 효과
+    setTimeout(() => {
+        $(event.target).closest('.project-item').addClass('dragging');
+    }, 0);
+}
+
+async function dropProjectToFolder(event, folderId) {
+    event.preventDefault();
+    event.stopPropagation();
+    $(event.target).closest('.folder-header,.unfiled-drop-zone').removeClass('drag-over');
+    $('.project-item.dragging').removeClass('dragging');
+
+    const projectId = event.dataTransfer.getData('text/plain');
+    if (!projectId) return;
+
+    // 같은 폴더에 드롭하면 무시
+    const project = state.projects.find(p => p._id === projectId);
+    if (project && project.folder_id === folderId) return;
+
+    try {
+        await apiPut(`/api/projects/${projectId}/folder`, { folder_id: folderId });
+        // 로컬 상태 즉시 업데이트
+        if (project) {
+            if (folderId) {
+                project.folder_id = folderId;
+            } else {
+                delete project.folder_id;
+            }
+        }
+        renderProjectList(true);
+        const folderName = folderId ? (state.folders.find(f => f._id === folderId) || {}).name : '미분류';
+        showToast(`"${folderName}" ${folderId ? '폴더로' : '(으)로'} 이동했습니다`, 'success');
+    } catch (e) {
+        showToast(e.message || '이동 실패', 'error');
+    }
 }
 
 function showNewProjectModal() {
@@ -2606,6 +2826,64 @@ function _collectCurrentSlideContent(slide) {
     return { contents, items };
 }
 
+async function _editInfographicSlideImage(slide, instruction) {
+    const btn = $('#btnSlideAI');
+    btn.prop('disabled', true).html(
+        '<svg class="spin-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 1a7 7 0 106.93 6"/></svg> 이미지 수정 중...'
+    ).css('opacity', '0.7');
+    $('#slideInstructionInput').prop('disabled', true);
+
+    // 캔버스에 로딩 오버레이 표시
+    $('#fixTextOverlay').remove();
+    $('#previewCanvas').append(`
+        <div class="fix-text-overlay" id="fixTextOverlay">
+            <div class="fix-text-loader">
+                <div class="fix-text-icon-wrap">
+                    <div class="fix-text-pulse"></div>
+                    <div class="fix-text-pulse delay-1"></div>
+                    <svg class="fix-text-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M17 3a2.85 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
+                    </svg>
+                </div>
+                <div class="fix-text-label">슬라이드 이미지를 수정하는 중</div>
+                <div class="fix-text-sub">AI가 요청사항을 반영하고 있습니다<span class="canvas-loading-dots"><span>.</span><span>.</span><span>.</span></span></div>
+            </div>
+        </div>
+    `);
+
+    try {
+        const res = await apiPost(`/api/generate/edit-slide-image/${slide._id}`, {
+            instruction: instruction,
+        });
+        if (res.success && res.image_url) {
+            const slideData = state.generatedSlides[state.currentSlideIndex];
+            for (const obj of (slideData.objects || [])) {
+                if (obj.obj_type === 'image' && (obj.width || 0) >= 900) {
+                    obj.image_url = res.image_url;
+                    break;
+                }
+            }
+            goToSlide(state.currentSlideIndex);
+            renderSlideThumbnails();
+            renderSlideThumbList();
+            $('#slideInstructionInput').val('');
+            autoResizeTextarea(document.getElementById('slideInstructionInput'));
+            showToast('슬라이드 이미지가 수정되었습니다', 'success');
+        } else {
+            showToast('이미지 수정에 실패했습니다', 'error');
+        }
+    } catch (e) {
+        showToast(e.message || '이미지 수정 중 오류 발생', 'error');
+    } finally {
+        $('#fixTextOverlay').remove();
+        btn.prop('disabled', false).html(
+            '<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 1L3 6l8 5V1z"/></svg> ' +
+            t('aiModifyRequest', 'AI 수정 요청')
+        ).css('opacity', '');
+        $('#slideInstructionInput').prop('disabled', false);
+    }
+}
+
 async function generateSlideText() {
     if (!state.currentProject || state.generatedSlides.length === 0) return;
 
@@ -2616,6 +2894,16 @@ async function generateSlideText() {
     if (!instruction) {
         $('#slideInstructionInput').focus();
         return;
+    }
+
+    // 인포그래픽 이미지 슬라이드인지 확인 (전체 이미지 오브젝트 포함)
+    const isInfographicSlide = (slide.objects || []).some(
+        o => o.obj_type === 'image' && (o.width || 0) >= 900
+    );
+
+    if (isInfographicSlide) {
+        // 인포그래픽 슬라이드: 이미지 수정 API 호출
+        return _editInfographicSlideImage(slide, instruction);
     }
 
     // 편집 모드에서 수정된 텍스트 수집
@@ -3558,6 +3846,83 @@ async function generateImageSlides(templateId) {
         _showGenerateOrRestartButton();
         _setSlideToolsDisabled(false);
         updateCollabUI();
+    }
+}
+
+// ============ 텍스트 재정리 (인포그래픽 슬라이드 텍스트 수정) ============
+// 텍스트 재정리 진행 중인 슬라이드 인덱스 (-1이면 없음)
+let _fixingSlideIndex = -1;
+
+function _showFixTextOverlay() {
+    $('#fixTextOverlay').remove();
+    $('#previewCanvas').append(`
+        <div class="fix-text-overlay" id="fixTextOverlay">
+            <div class="fix-text-loader">
+                <div class="fix-text-icon-wrap">
+                    <div class="fix-text-pulse"></div>
+                    <div class="fix-text-pulse delay-1"></div>
+                    <svg class="fix-text-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M17 3a2.85 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
+                    </svg>
+                </div>
+                <div class="fix-text-label">텍스트를 재정리하는 중</div>
+                <div class="fix-text-sub">AI가 깨진 글자를 수정하고 있습니다<span class="canvas-loading-dots"><span>.</span><span>.</span><span>.</span></span></div>
+            </div>
+        </div>
+    `);
+}
+
+async function fixCurrentSlideText() {
+    if (!state.currentProject || state.generatedSlides.length === 0) return;
+
+    const slide = state.generatedSlides[state.currentSlideIndex];
+    if (!slide || !slide._id) {
+        showToast('슬라이드를 선택하세요', 'error');
+        return;
+    }
+
+    const hasImage = (slide.objects || []).some(o => o.obj_type === 'image' && (o.width || 0) >= 900);
+    if (!hasImage) {
+        showToast('인포그래픽 이미지가 없는 슬라이드입니다', 'error');
+        return;
+    }
+
+    const fixIndex = state.currentSlideIndex;
+    _fixingSlideIndex = fixIndex;
+
+    const btn = $('#btnFixSlideText');
+    btn.prop('disabled', true).find('span').text('수정 중...');
+
+    _showFixTextOverlay();
+
+    try {
+        const res = await apiPost(`/api/generate/fix-slide-text/${slide._id}`, {});
+        if (res.success && res.image_url) {
+            const slideData = state.generatedSlides[fixIndex];
+            if (slideData) {
+                for (const obj of (slideData.objects || [])) {
+                    if (obj.obj_type === 'image' && (obj.width || 0) >= 900) {
+                        obj.image_url = res.image_url;
+                        break;
+                    }
+                }
+            }
+            // 현재 보고 있는 슬라이드가 수정된 슬라이드면 갱신
+            if (state.currentSlideIndex === fixIndex) {
+                goToSlide(fixIndex);
+            }
+            renderSlideThumbnails();
+            renderSlideThumbList();
+            showToast('텍스트가 수정되었습니다', 'success');
+        } else {
+            showToast('텍스트 수정에 실패했습니다', 'error');
+        }
+    } catch (e) {
+        showToast(e.message || '텍스트 수정 중 오류 발생', 'error');
+    } finally {
+        _fixingSlideIndex = -1;
+        $('#fixTextOverlay').remove();
+        btn.prop('disabled', false).find('span').text('텍스트 재정리');
     }
 }
 
@@ -4739,6 +5104,16 @@ function updateSlideNav() {
     if (activeItem.length) {
         activeItem[0].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
+
+    // 텍스트 재정리 버튼: 인포그래픽 이미지 슬라이드에서만 표시
+    const fixBtn = document.getElementById('btnFixSlideText');
+    if (fixBtn) {
+        const currentSlide = state.generatedSlides[state.currentSlideIndex];
+        const hasFullImage = currentSlide && (currentSlide.objects || []).some(
+            o => o.obj_type === 'image' && (o.width || 0) >= 900
+        );
+        fixBtn.style.display = hasFullImage ? '' : 'none';
+    }
 }
 
 function goToSlide(index) {
@@ -4756,33 +5131,28 @@ function goToSlide(index) {
         renderSlideAtIndex(index);
     }
     updateSlideNav();
+
+    // 텍스트 재정리 오버레이: 진행 중인 슬라이드면 표시, 아니면 숨김
+    if (_fixingSlideIndex >= 0) {
+        if (index === _fixingSlideIndex) {
+            if (!document.getElementById('fixTextOverlay')) {
+                _showFixTextOverlay();
+            }
+        } else {
+            $('#fixTextOverlay').remove();
+        }
+    }
 }
 
 function prevSlide() {
     if (state.currentSlideIndex > 0) {
-        _animationCancelled = true;
-        if (state.editMode) exitEditMode();
-        state.currentSlideIndex--;
-        if (state.infographicMode) {
-            _renderInfographicSlide(state.currentSlideIndex);
-        } else {
-            renderSlideAtIndex(state.currentSlideIndex);
-        }
-        updateSlideNav();
+        goToSlide(state.currentSlideIndex - 1);
     }
 }
 
 function nextSlide() {
     if (state.currentSlideIndex < state.generatedSlides.length - 1) {
-        _animationCancelled = true;
-        if (state.editMode) exitEditMode();
-        state.currentSlideIndex++;
-        if (state.infographicMode) {
-            _renderInfographicSlide(state.currentSlideIndex);
-        } else {
-            renderSlideAtIndex(state.currentSlideIndex);
-        }
-        updateSlideNav();
+        goToSlide(state.currentSlideIndex + 1);
     }
 }
 
@@ -9548,6 +9918,74 @@ function showToast(message, type) {
 
 function closeModal(id) {
     $('#' + id).hide();
+}
+
+// ============ 범용 다이얼로그 (alert/confirm/prompt 대체) ============
+function _showDialog({ title, message, input, inputValue, placeholder, confirmText, cancelText, danger, onConfirm }) {
+    return new Promise(resolve => {
+        $('#customDialog').remove();
+        const inputHtml = input
+            ? `<input type="text" class="dialog-input" id="dialogInput" value="${escapeHtml(inputValue || '')}" placeholder="${escapeHtml(placeholder || '')}" autocomplete="off">`
+            : '';
+        const cancelBtn = cancelText !== false
+            ? `<button class="dialog-btn dialog-cancel" id="dialogCancel">${escapeHtml(cancelText || '취소')}</button>`
+            : '';
+        const confirmClass = danger ? 'dialog-confirm danger' : 'dialog-confirm';
+
+        const html = `
+            <div class="modal-overlay" id="customDialog" style="z-index:10000;">
+                <div class="dialog-card">
+                    <div class="dialog-title">${escapeHtml(title || '')}</div>
+                    ${message ? `<div class="dialog-message">${escapeHtml(message)}</div>` : ''}
+                    ${inputHtml}
+                    <div class="dialog-actions">
+                        ${cancelBtn}
+                        <button class="dialog-btn ${confirmClass}" id="dialogConfirm">${escapeHtml(confirmText || '확인')}</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        $('body').append(html);
+
+        const $dialog = $('#customDialog');
+        const $input = $('#dialogInput');
+        if ($input.length) {
+            setTimeout(() => { $input.focus(); $input[0].select(); }, 100);
+            $input.on('keydown', e => {
+                if (e.key === 'Enter') { e.preventDefault(); $('#dialogConfirm').click(); }
+                if (e.key === 'Escape') { e.preventDefault(); $('#dialogCancel').click(); }
+            });
+        }
+
+        $('#dialogConfirm').on('click', () => {
+            const val = input ? $input.val() : true;
+            $dialog.remove();
+            resolve(val);
+        });
+        $('#dialogCancel').on('click', () => {
+            $dialog.remove();
+            resolve(input ? null : false);
+        });
+        // 배경 클릭 시 취소
+        $dialog.on('click', e => {
+            if (e.target === $dialog[0]) {
+                $dialog.remove();
+                resolve(input ? null : false);
+            }
+        });
+    });
+}
+
+function showConfirm(title, message, opts) {
+    return _showDialog({ title, message, confirmText: '확인', cancelText: '취소', ...opts });
+}
+
+function showPrompt(title, placeholder, defaultValue, opts) {
+    return _showDialog({ title, input: true, placeholder, inputValue: defaultValue, confirmText: '확인', cancelText: '취소', ...opts });
+}
+
+function showAlert(title, message, opts) {
+    return _showDialog({ title, message, confirmText: '확인', cancelText: false, ...opts });
 }
 
 function showLoading(text) {

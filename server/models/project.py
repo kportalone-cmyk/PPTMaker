@@ -14,6 +14,7 @@ class ProjectUpdate(BaseModel):
     description: Optional[str] = None
     template_id: Optional[str] = None
     instructions: Optional[str] = None
+    folder_id: Optional[str] = None
 
 
 class GenerateRequest(BaseModel):

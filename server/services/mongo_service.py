@@ -75,6 +75,10 @@ async def init_indexes():
     # generated_docx 컬렉션
     await db.generated_docx.create_index("project_id", unique=True)
 
+    # project_folders 컬렉션
+    await db.project_folders.create_index([("user_key", 1), ("order", 1)])
+    await db.project_folders.create_index([("user_key", 1), ("name", 1)], unique=True)
+
     # fonts 컬렉션
     await db.fonts.create_index("name", unique=True)
 

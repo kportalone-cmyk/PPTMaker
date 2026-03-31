@@ -92,6 +92,7 @@ d:/PPTMaker/
 - Tailwind CSS로 스타일링
 - Chart.js 차트 라이브러리
 - 사용자 검색: 동명이인 선택창, 키보드 ↑↓ + Enter 선택
+- **다이얼로그**: 브라우저 기본 `alert()`, `confirm()`, `prompt()`는 사용 금지. 반드시 커스텀 레이어 다이얼로그(`showAlert()`, `showConfirm()`, `showPrompt()`)를 사용. 해당 함수는 `front/js/app.js`에 정의되어 있으며, Promise 기반 async/await로 호출
 
 ## 주요 기능
 

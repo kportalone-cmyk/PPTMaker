@@ -791,6 +791,33 @@ HTML 리포트의 모든 페이지에서 공통으로 사용할 CSS 클래스를
 - 한 장 슬라이드에 적합한 분량만 작성하세요.""",
     },
     {
+        "key": "infographic_cover_ratio",
+        "name": "인포그래픽 커버 슬라이드 비율/지침",
+        "description": "커버 슬라이드 이미지 생성 시 {infographic_ratio} 변수에 삽입되는 디자인 지침. 변수: 없음",
+        "model": "",
+        "content": """⚡ THIS IS A COVER SLIDE — a simple, clean infographic style.
+Design requirements:
+- Include ONLY the presentation title and subtitle text — no other text content.
+- Use simple, minimal infographic visual elements: a few clean icons, subtle geometric shapes, thin divider lines, and gentle gradient backgrounds.
+- Keep the layout spacious and uncluttered — lots of whitespace/breathing room.
+- The title should be prominently displayed in the center-upper area.
+- The subtitle should appear below the title in a smaller, lighter style.
+- Add a few tasteful decorative elements (abstract shapes, simple icons related to the topic) but keep them minimal and non-distracting.
+- Professional, modern, corporate presentation feel — think elegant simplicity.""",
+    },
+    {
+        "key": "infographic_content_ratio",
+        "name": "인포그래픽 본문 슬라이드 비율/지침",
+        "description": "본문 슬라이드 이미지 생성 시 {infographic_ratio} 변수에 삽입되는 디자인 지침. 변수: {infographic_pct}, {text_pct}",
+        "model": "",
+        "content": """This is a REPORT-STYLE summary slide. Design it as a concise executive briefing page:
+- Use ~{infographic_pct}% infographic visual elements (icons, mini-charts, process arrows, comparison cards, callout boxes, key metric highlights) and ~{text_pct}% text content.
+- Text content must be CONCISE and SUMMARIZED — use bullet points, short phrases, and key numbers.
+- Do NOT write long paragraphs or detailed explanations.
+- Present information in a structured, scannable report format: headings + short bullet points + visual data.
+- Emphasize key figures, percentages, and conclusions with visual callouts or bold formatting.""",
+    },
+    {
         "key": "infographic_cover_image",
         "name": "인포그래픽 커버 이미지 프롬프트",
         "description": "Gemini API로 커버 슬라이드 인포그래픽 이미지를 생성하는 프롬프트. 변수: {pres_context}, {title}, {content_summary}, {infographic_ratio}, {aspect_ratio}",
@@ -812,15 +839,15 @@ TEXT TO INCLUDE (ONLY these, nothing else):
 
 DESIGN:
 - Full widescreen {aspect_ratio} layout
-- Dark professional gradient background (deep navy to dark blue-gray)
+- Clean, professional background (light or white preferred, or soft gradient)
 - SIMPLE and MINIMAL visual elements:
   - A few clean, flat icons related to the presentation topic (3-5 max)
   - Subtle thin geometric lines or dividers
   - Gentle abstract shapes in the corners or edges
   - Soft gradient overlays or light accents
 - SPACIOUS layout with generous whitespace — do NOT fill the entire image
-- Title text: white or very light color, large and clear
-- Subtitle text: light gray or muted tone, smaller size
+- Title text: dark color (#1B2A4A or black), large, bold, and clear
+- Subtitle text: dark gray (#334155), smaller size
 - Overall feel: elegant simplicity, premium corporate style, modern and clean
 - Think minimalist keynote cover — less is more
 
@@ -831,6 +858,8 @@ FORBIDDEN:
 - Header bars, content boxes, tables, charts
 - Any text other than the title and subtitle
 - Bright or neon colors
+- Page numbers, slide numbers, "Page X", footer text, or any navigation elements
+- Company names, brand names, logos, or solution names (e.g. no "KMSLab", no company logos in corners or footer)
 
 ==========================================================================""",
     },
@@ -868,12 +897,15 @@ COLOR PALETTE (use ONLY these exact colors on ALL slides — NO exceptions):
 - #64748B — captions, labels, secondary text
 FORBIDDEN: Do NOT use red, orange, green, purple, pink, yellow, teal, amber, or ANY color not listed above.
 
-TYPOGRAPHY (same on ALL slides):
+TYPOGRAPHY (same on ALL slides — USE SMALL, COMPACT TEXT):
 - Sans-serif font family only (Pretendard, Noto Sans KR, or Arial)
-- Header title: 28-32pt bold #FFFFFF
-- Content headings: 18-20pt bold #1B2A4A
-- Body: 14-16pt regular #334155
-- Labels: 11-12pt #64748B
+- Header title: 20-24pt bold #FFFFFF (NOT larger than 24pt)
+- Content headings/subtitles: 13-15pt bold #1B2A4A (NOT larger than 15pt)
+- Body text / bullet points: 10-12pt regular #334155 (NOT larger than 12pt)
+- Labels/captions: 8-9pt #64748B
+- ⚠️ TEXT MUST BE SMALL AND COMPACT — this is a data-dense slide, not a billboard
+- ⚠️ Leave enough room for infographic visuals on the right side (at least 40% of width)
+- ⚠️ Text area should occupy at most 55-60% of slide width (left side)
 
 VISUAL ELEMENTS (same style on ALL slides):
 - Icons: flat monoline, 2px stroke, #2563EB color only
@@ -884,6 +916,9 @@ VISUAL ELEMENTS (same style on ALL slides):
 RULES:
 - Widescreen {aspect_ratio}
 - NO watermarks, NO placeholder text like "Lorem ipsum"
+- ABSOLUTELY NO page numbers, slide numbers, "Page X", "Slide X/Y", or any numbering in corners or footer
+- ABSOLUTELY NO footer text like "Section: ...", page indicators, or navigation elements
+- ABSOLUTELY NO company names, brand names, logos, or solution names anywhere in the slide (no footer logos, no header branding, no "Company Name" text)
 - If the title is in Korean, ALL text in the slide MUST be in Korean
 - This slide must be visually IDENTICAL in template structure to every other slide in the deck
 
@@ -901,6 +936,29 @@ If this style specifies different colors, backgrounds, layouts, or aesthetics, f
 But still keep the style CONSISTENT across ALL slides — do not vary between slides.
 
 {style_hint}""",
+    },
+    {
+        "key": "infographic_reference_image",
+        "name": "인포그래픽 참조 이미지 프롬프트",
+        "description": "참조 이미지가 있을 때 스타일 일관성을 위해 추가되는 프롬프트. 변수: 없음",
+        "model": "",
+        "content": """⚠️⚠️⚠️ ABSOLUTE HIGHEST PRIORITY — STYLE REFERENCE IMAGE PROVIDED ⚠️⚠️⚠️
+A reference slide image from this SAME presentation is attached.
+You MUST produce a slide that looks like it belongs to the EXACT SAME slide deck.
+
+COPY EXACTLY from the reference image:
+- SAME header bar: same color, same height, same position at top
+- SAME background: same content area style, same margins
+- SAME typography: same font family, same sizes, same colors, same weight
+- SAME icon style: same line weight, same color, same flat monoline style
+- SAME card/box design: same border color, same radius, same shadow style
+- SAME color palette: ONLY the colors used in the reference image
+- SAME layout grid: same left-right split ratio, same spacing between elements
+- SAME footer style: if reference has no footer/page numbers, do NOT add them
+
+ONLY the CONTENT (text words, specific icons, data) should differ.
+The VISUAL TEMPLATE must be PIXEL-PERFECT identical to the reference.
+If your output looks like a DIFFERENT slide deck style, it is WRONG.""",
     },
     {
         "key": "single_slide_edit_system",
@@ -1165,6 +1223,48 @@ Requirements:
 - High quality, smooth gradients, professional aesthetics
 
 {style_hint}""",
+    },
+    {
+        "key": "fix_slide_text",
+        "name": "슬라이드 텍스트 수정 프롬프트",
+        "description": "인포그래픽 슬라이드 이미지의 깨진 텍스트를 수정하여 재생성하는 Gemini 프롬프트. 변수: 없음",
+        "model": "gemini-3.1-flash-image-preview",
+        "content": """You are given a presentation slide image that contains broken, garbled, or unreadable text characters (especially Korean text).
+
+YOUR TASK: Regenerate this EXACT SAME slide image with ALL text fixed and readable.
+
+CRITICAL RULES:
+1. Keep the EXACT SAME visual design: same background, colors, layout, icons, charts, shapes, spacing
+2. Keep the EXACT SAME text CONTENT and MEANING — only fix characters that are broken/garbled/unreadable
+3. All Korean text (한글) must be rendered with a clean, modern sans-serif font (like Pretendard, Noto Sans KR)
+4. All text must be sharp, clear, and perfectly readable
+5. Do NOT change the layout, position, or size of any element
+6. Do NOT add or remove any visual elements
+7. The output must look like the same slide but with perfectly rendered text
+
+Think of this as a "text rendering fix" — same content, same design, just clean readable text.""",
+    },
+    {
+        "key": "edit_slide_image",
+        "name": "인포그래픽 슬라이드 이미지 수정 프롬프트",
+        "description": "사용자 지침에 따라 인포그래픽 슬라이드 이미지를 수정하여 재생성하는 Gemini 프롬프트. 변수: {instruction}",
+        "model": "gemini-3.1-flash-image-preview",
+        "content": """You are given a presentation slide image. The user wants to modify this slide.
+
+USER'S INSTRUCTION: {instruction}
+
+YOUR TASK: Regenerate this slide image with the user's requested changes applied.
+
+RULES:
+1. Keep the SAME overall visual design style: same background style, color scheme, layout structure
+2. Apply the user's requested changes accurately
+3. All Korean text (한글) must be rendered with a clean, modern sans-serif font (like Pretendard, Noto Sans KR)
+4. All text must be sharp, clear, and perfectly readable
+5. Keep the same 16:9 widescreen aspect ratio
+6. Maintain professional presentation quality
+7. If the user asks to change text content, update it while keeping the visual style
+8. If the user asks to change layout/design, modify it while keeping text content
+9. If the user asks to add/remove elements, do so while maintaining visual consistency""",
     },
     {
         "key": "infographic_outline_instruction",

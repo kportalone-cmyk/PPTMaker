@@ -11,7 +11,7 @@ import asyncio
 from pathlib import Path
 from google import genai
 from google.genai import types
-from config import settings
+from config import settings, google_key_rotator
 from routers.prompt import get_prompt_content
 
 
@@ -19,14 +19,15 @@ UPLOAD_DIR = Path(settings.UPLOAD_DIR).resolve()
 INFOGRAPHIC_DIR = UPLOAD_DIR / "infographics"
 INFOGRAPHIC_DIR.mkdir(parents=True, exist_ok=True)
 
-# Gemini 클라이언트 (lazy init)
-_client = None
+# Gemini 클라이언트 (키별 캐시)
+_clients = {}
 
 def _get_client():
-    global _client
-    if _client is None:
-        _client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-    return _client
+    """라운드 로빈으로 Google API 키를 선택하여 클라이언트 반환"""
+    api_key = google_key_rotator.next()
+    if api_key not in _clients:
+        _clients[api_key] = genai.Client(api_key=api_key)
+    return _clients[api_key]
 
 
 async def generate_infographic_image(
@@ -47,7 +48,7 @@ async def generate_infographic_image(
     Returns:
         (생성된 이미지의 URL 경로, 원본 이미지 바이트) 튜플. 실패 시 (None, None)
     """
-    if not settings.GOOGLE_API_KEY:
+    if not settings.GOOGLE_API_KEYS:
         print("[Infographic] GOOGLE_API_KEY가 설정되지 않았습니다.")
         return None, None
 
@@ -103,32 +104,15 @@ async def _build_image_prompt(
     # 콘텐츠 요약 (이미지 생성에 적합한 분량으로 제한)
     content_summary = content[:600] if content else ""
 
-    # 첫 번째 슬라이드: 심플한 인포그래픽 커버 (제목+부제목만 포함)
+    # 슬라이드 비율/지침을 DB에서 조회 (하드코딩 금지)
     if slide_number == 1:
-        infographic_ratio = (
-            "⚡ THIS IS A COVER SLIDE — a simple, clean infographic style. "
-            "Design requirements: "
-            "- Include ONLY the presentation title and subtitle text — no other text content. "
-            "- Use simple, minimal infographic visual elements: a few clean icons, subtle geometric shapes, "
-            "  thin divider lines, and gentle gradient backgrounds. "
-            "- Keep the layout spacious and uncluttered — lots of whitespace/breathing room. "
-            "- The title should be prominently displayed in the center-upper area. "
-            "- The subtitle should appear below the title in a smaller, lighter style. "
-            "- Add a few tasteful decorative elements (abstract shapes, simple icons related to the topic) "
-            "  but keep them minimal and non-distracting. "
-            "- Professional, modern, corporate presentation feel — think elegant simplicity. "
-            "- Dark or gradient background with clean white/light text."
-        )
+        infographic_ratio = await get_prompt_content("infographic_cover_ratio")
     else:
         text_pct = 100 - infographic_pct
-        infographic_ratio = (
-            f"This is a REPORT-STYLE summary slide. Design it as a concise executive briefing page: "
-            f"- Use ~{infographic_pct}% infographic visual elements (icons, mini-charts, process arrows, "
-            f"comparison cards, callout boxes, key metric highlights) and ~{text_pct}% text content. "
-            "- Text content must be CONCISE and SUMMARIZED — use bullet points, short phrases, and key numbers. "
-            "- Do NOT write long paragraphs or detailed explanations. "
-            "- Present information in a structured, scannable report format: headings + short bullet points + visual data. "
-            "- Emphasize key figures, percentages, and conclusions with visual callouts or bold formatting."
+        ratio_template = await get_prompt_content("infographic_content_ratio")
+        infographic_ratio = ratio_template.format(
+            infographic_pct=infographic_pct,
+            text_pct=text_pct,
         )
 
     pres_context = f' for a presentation about "{presentation_title}"' if presentation_title else ""
@@ -157,21 +141,10 @@ async def _build_image_prompt(
         style_template = await get_prompt_content("infographic_style_override")
         prompt += style_template.format(style_hint=style_hint)
 
-    # 참조 이미지가 있을 경우 스타일 일관성 지시 추가
+    # 참조 이미지가 있을 경우 스타일 일관성 지시 추가 (DB에서 프롬프트 조회)
     if has_reference:
-        prompt += (
-            "\n\n⚠️ CRITICAL — STYLE REFERENCE IMAGE PROVIDED:\n"
-            "A reference slide image from this same presentation is attached. "
-            "You MUST match its visual style EXACTLY:\n"
-            "- Same background color/gradient\n"
-            "- Same header bar design and color\n"
-            "- Same font styles, sizes, and colors\n"
-            "- Same icon style (line weight, color)\n"
-            "- Same card/box design (border, radius, shadow)\n"
-            "- Same color palette throughout\n"
-            "- Same overall layout structure and spacing\n"
-            "Only the CONTENT (text, data, icons) should differ — the DESIGN TEMPLATE must be identical."
-        )
+        ref_prompt = await get_prompt_content("infographic_reference_image")
+        prompt += "\n\n" + ref_prompt
 
     return prompt
 
@@ -382,40 +355,110 @@ async def generate_infographic_batch(
     for idx in sorted(phase1_results.keys()):
         yield phase1_results[idx]
 
-    # ── Phase 2: 나머지 슬라이드 병렬 생성 (참조 이미지 포함) ──
+    # ── Phase 2: 나머지 슬라이드 병렬 생성 (동시 3개 제한, 참조 이미지 포함) ──
     if total <= 2:
         print(f"[Infographic] 전체 {total}장 생성 완료")
         return
 
     remaining_indices = list(range(2, total))
-    print(f"[Infographic] 나머지 {len(remaining_indices)}장 병렬 생성 시작 (참조 이미지 {'있음' if reference_image_bytes else '없음'})")
+    print(f"[Infographic] 나머지 {len(remaining_indices)}장 생성 시작 (동시 3개, 참조 이미지 {'있음' if reference_image_bytes else '없음'})")
 
-    tasks = []
-    for idx in remaining_indices:
-        task = asyncio.create_task(
-            _generate_single_slide(
-                idx, outline_slides[idx], style_hint, aspect_ratio,
-                total, presentation_title, infographic_ratio,
-                reference_image=reference_image_bytes,
-            )
-        )
-        tasks.append(task)
-
-    # 완료되는 대로 수집하되, 인덱스 순서대로 yield
-    results = {}
+    # 동시 실행 수 제한 (3개씩 배치)
+    BATCH_SIZE = 5
     next_yield = 2
+    results = {}
 
-    for coro in asyncio.as_completed(tasks):
-        result = await coro
-        idx = result["index"]
-        results[idx] = result
-        print(f"[Infographic] 슬라이드 {idx + 1}/{total} 완료 (Phase 2)")
+    for batch_start in range(0, len(remaining_indices), BATCH_SIZE):
+        batch = remaining_indices[batch_start:batch_start + BATCH_SIZE]
+        tasks = []
+        for idx in batch:
+            task = asyncio.create_task(
+                _generate_single_slide(
+                    idx, outline_slides[idx], style_hint, aspect_ratio,
+                    total, presentation_title, infographic_ratio,
+                    reference_image=reference_image_bytes,
+                )
+            )
+            tasks.append(task)
 
-        while next_yield < total and next_yield in results:
-            yield results[next_yield]
-            next_yield += 1
+        for coro in asyncio.as_completed(tasks):
+            result = await coro
+            idx = result["index"]
+            results[idx] = result
+            print(f"[Infographic] 슬라이드 {idx + 1}/{total} 완료 (Phase 2, batch {batch_start // BATCH_SIZE + 1})")
+
+            while next_yield < total and next_yield in results:
+                yield results[next_yield]
+                next_yield += 1
 
     print(f"[Infographic] 전체 {total}장 생성 완료")
+
+
+async def fix_slide_text_image(image_bytes: bytes) -> tuple[str | None, bytes | None]:
+    """
+    기존 슬라이드 이미지의 깨진 텍스트를 수정하여 재생성합니다.
+    원본 이미지를 Gemini에 보내 동일 디자인 + 수정된 텍스트로 재생성.
+    """
+    if not settings.GOOGLE_API_KEYS:
+        return None, None
+
+    prompt = await get_prompt_content("fix_slide_text")
+
+    print(f"[FixText] 텍스트 수정 이미지 재생성 시작")
+
+    try:
+        new_image_bytes, file_ext = await _call_gemini_image_api(
+            prompt, reference_image=image_bytes,
+        )
+        if not new_image_bytes:
+            return None, None
+
+        ext = file_ext or ".png"
+        filename = f"fixed_{uuid.uuid4().hex}{ext}"
+        filepath = INFOGRAPHIC_DIR / filename
+        filepath.write_bytes(new_image_bytes)
+
+        print(f"[FixText] 텍스트 수정 이미지 저장 완료: {filepath}")
+        return f"/uploads/infographics/{filename}", new_image_bytes
+    except Exception as e:
+        print(f"[FixText] 텍스트 수정 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, None
+
+
+async def edit_slide_image(image_bytes: bytes, instruction: str) -> tuple[str | None, bytes | None]:
+    """
+    사용자 지침에 따라 인포그래픽 슬라이드 이미지를 수정하여 재생성합니다.
+    원본 이미지 + 사용자 지침을 Gemini에 보내 수정된 이미지를 생성.
+    """
+    if not settings.GOOGLE_API_KEYS:
+        return None, None
+
+    prompt_template = await get_prompt_content("edit_slide_image")
+    prompt = prompt_template.format(instruction=instruction)
+
+    print(f"[EditSlide] 슬라이드 이미지 수정 요청: {instruction[:80]}...")
+
+    try:
+        new_image_bytes, file_ext = await _call_gemini_image_api(
+            prompt, reference_image=image_bytes,
+        )
+        if not new_image_bytes:
+            return None, None
+
+        ext = file_ext or ".png"
+        filename = f"edited_{uuid.uuid4().hex}{ext}"
+        filepath = INFOGRAPHIC_DIR / filename
+        filepath.write_bytes(new_image_bytes)
+
+        print(f"[EditSlide] 수정 이미지 저장 완료: {filepath}")
+        return f"/uploads/infographics/{filename}", new_image_bytes
+    except Exception as e:
+        print(f"[EditSlide] 슬라이드 이미지 수정 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, None
 
 
 async def generate_bg_image(
@@ -428,7 +471,7 @@ async def generate_bg_image(
     배경 이미지만 생성 (텍스트 없이 추상적/테마 배경).
     AI 슬라이드 모드에서 사용.
     """
-    if not settings.GOOGLE_API_KEY:
+    if not settings.GOOGLE_API_KEYS:
         return None, None
 
     prompt_template = await get_prompt_content("ai_slide_bg_image")

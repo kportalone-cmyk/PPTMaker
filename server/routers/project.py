@@ -62,7 +62,17 @@ async def list_projects(jwt_token: str):
                     p["_owner_dept"] = owner.get("dp", "")
             shared_projects.append(p)
 
-    return {"projects": projects, "shared_projects": shared_projects}
+    # 폴더 목록 조회
+    folder_cursor = db.project_folders.find({"user_key": user_key}).sort("order", 1)
+    folders = []
+    async for f in folder_cursor:
+        f["_id"] = str(f["_id"])
+        f["project_count"] = await db.projects.count_documents({
+            "user_key": user_key, "folder_id": f["_id"],
+        })
+        folders.append(f)
+
+    return {"projects": projects, "shared_projects": shared_projects, "folders": folders}
 
 
 @router.post("/{jwt_token}/api/projects")
@@ -227,4 +237,121 @@ async def delete_project(jwt_token: str, project_id: str):
     await redis_service.delete_project_locks(project_id)
     await redis_service.clear_generation_cancel(project_id)
     await redis_service.remove_presence(project_id, user_key)
+    return {"success": True}
+
+
+# ── 프로젝트 폴더 관리 ──
+
+@router.get("/{jwt_token}/api/folders")
+async def list_folders(jwt_token: str):
+    """프로젝트 폴더 목록 조회"""
+    user_key = await get_user_key(jwt_token)
+    db = get_db()
+    cursor = db.project_folders.find({"user_key": user_key}).sort("order", 1)
+    folders = []
+    async for f in cursor:
+        f["_id"] = str(f["_id"])
+        f["project_count"] = await db.projects.count_documents({
+            "user_key": user_key,
+            "folder_id": f["_id"],
+        })
+        folders.append(f)
+    return {"folders": folders}
+
+
+@router.post("/{jwt_token}/api/folders")
+async def create_folder(jwt_token: str, body: dict):
+    """프로젝트 폴더 생성"""
+    user_key = await get_user_key(jwt_token)
+    db = get_db()
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="폴더 이름을 입력하세요")
+    if len(name) > 50:
+        raise HTTPException(status_code=400, detail="폴더 이름은 50자 이내로 입력하세요")
+
+    # 중복 체크
+    existing = await db.project_folders.find_one({"user_key": user_key, "name": name})
+    if existing:
+        raise HTTPException(status_code=400, detail="같은 이름의 폴더가 이미 존재합니다")
+
+    # 순서 계산
+    max_order = await db.project_folders.count_documents({"user_key": user_key})
+
+    doc = {
+        "user_key": user_key,
+        "name": name,
+        "order": max_order,
+        "created_at": datetime.utcnow(),
+    }
+    result = await db.project_folders.insert_one(doc)
+    doc["_id"] = str(result.inserted_id)
+    doc["project_count"] = 0
+    return {"folder": doc}
+
+
+@router.put("/{jwt_token}/api/folders/{folder_id}")
+async def update_folder(jwt_token: str, folder_id: str, body: dict):
+    """프로젝트 폴더 이름 수정"""
+    user_key = await get_user_key(jwt_token)
+    db = get_db()
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="폴더 이름을 입력하세요")
+
+    # 중복 체크
+    existing = await db.project_folders.find_one({
+        "user_key": user_key, "name": name, "_id": {"$ne": ObjectId(folder_id)}
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="같은 이름의 폴더가 이미 존재합니다")
+
+    result = await db.project_folders.update_one(
+        {"_id": ObjectId(folder_id), "user_key": user_key},
+        {"$set": {"name": name}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="폴더를 찾을 수 없습니다")
+    return {"success": True}
+
+
+@router.delete("/{jwt_token}/api/folders/{folder_id}")
+async def delete_folder(jwt_token: str, folder_id: str):
+    """프로젝트 폴더 삭제 (프로젝트는 폴더 밖으로 이동)"""
+    user_key = await get_user_key(jwt_token)
+    db = get_db()
+
+    result = await db.project_folders.delete_one({"_id": ObjectId(folder_id), "user_key": user_key})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="폴더를 찾을 수 없습니다")
+
+    # 해당 폴더의 프로젝트들 → folder_id 제거
+    await db.projects.update_many(
+        {"user_key": user_key, "folder_id": folder_id},
+        {"$unset": {"folder_id": ""}}
+    )
+    return {"success": True}
+
+
+@router.put("/{jwt_token}/api/projects/{project_id}/folder")
+async def move_project_to_folder(jwt_token: str, project_id: str, body: dict):
+    """프로젝트를 폴더로 이동 (folder_id: null이면 폴더 밖으로)"""
+    user_key = await get_user_key(jwt_token)
+    db = get_db()
+    folder_id = body.get("folder_id")
+
+    if folder_id:
+        # 폴더 존재 확인
+        folder = await db.project_folders.find_one({"_id": ObjectId(folder_id), "user_key": user_key})
+        if not folder:
+            raise HTTPException(status_code=404, detail="폴더를 찾을 수 없습니다")
+        await db.projects.update_one(
+            {"_id": ObjectId(project_id), "user_key": user_key},
+            {"$set": {"folder_id": folder_id}}
+        )
+    else:
+        await db.projects.update_one(
+            {"_id": ObjectId(project_id), "user_key": user_key},
+            {"$unset": {"folder_id": ""}}
+        )
     return {"success": True}

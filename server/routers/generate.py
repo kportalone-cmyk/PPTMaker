@@ -13,11 +13,12 @@ from services.excel_service import generate_xlsx, auto_generate_chart_definition
 from services.word_service import generate_docx, create_empty_docx, extract_docx_template_structure
 from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content, generate_excel_content_stream, modify_excel_content_stream, generate_docx_content_stream, rewrite_text_stream, generate_html_report_stream, generate_html_report_outline_stream, generate_html_report_css_stream, generate_html_page_content, _call_claude_api
 from services.search_service import search_web
-from services.infographic_service import generate_infographic_image, generate_infographic_batch, generate_bg_image
+from services.infographic_service import generate_infographic_image, generate_infographic_batch, generate_bg_image, fix_slide_text_image, edit_slide_image
 from services.onlyoffice_service import create_onlyoffice_document
 from services.file_service import extract_excel_structure
 from routers.prompt import get_prompt_content, get_prompt_model
 from config import settings
+from pathlib import Path
 import os
 import uuid
 import json
@@ -1133,171 +1134,173 @@ async def generate_ai_slide_stream(jwt_token: str, data: AiSlideGenerateRequest)
                     outline_items.append(oi)
                 yield _sse("outline", {"slides": outline_items})
 
-            # Phase 2: 디자인 스타일 생성
-            yield _sse("delta", {"text": "\n디자인 스타일을 생성하는 중...\n"})
-            design_style = {}
-            try:
-                auto_system = await get_prompt_content("auto_template_system")
-                auto_user_tpl = await get_prompt_content("auto_template_user")
-                resource_excerpt = combined_text[:3000]
-                auto_user = auto_user_tpl.format(
-                    resources_text=resource_excerpt,
-                    instructions=data.instructions or "없음",
-                )
-                auto_model = await get_prompt_model("auto_template_system")
-                effective_auto_model = auto_model or "claude-sonnet-4-6"
-                auto_result = await _call_claude_api(auto_system, auto_user, model=effective_auto_model)
-
-                import re as _re
-                json_match = _re.search(r'```json\s*(.*?)\s*```', auto_result, _re.DOTALL)
-                if json_match:
-                    design_style = json.loads(json_match.group(1))
-                else:
-                    design_style = json.loads(auto_result)
-
-                if design_style.get("style_prompt"):
-                    style_hint = design_style["style_prompt"]
-
-                yield _sse("auto_template_result", {
-                    "style_name": design_style.get("style_name", ""),
-                    "style": design_style,
-                })
-            except Exception as e:
-                print(f"[AI Slide] 디자인 스타일 생성 실패: {e}")
-                yield _sse("delta", {"text": "디자인 분석 실패 (기본 스타일로 진행)\n"})
-
-            if await _check_cancelled(db, data.project_id, generation_id):
-                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
-                await _set_stopped(db, data.project_id)
-                return
-
-            # Phase 3: 레이아웃 설계
-            yield _sse("delta", {"text": "슬라이드 레이아웃을 설계하는 중...\n"})
-
+            # Phase 2: 텍스트 없는 인포그래픽 이미지 생성 + 텍스트 오브젝트 오버레이
             llm_slides = raw_slides if raw_slides else llm_result.get("slides", [])
-            outline_json = json.dumps(llm_slides, ensure_ascii=False)
-            design_style_str = json.dumps(design_style, ensure_ascii=False) if design_style else "{}"
-
-            lang_instruction = ""
-            if data.lang:
-                lang_instruction = f"모든 텍스트를 {data.lang} 언어로 작성하세요."
-
-            layout_system = await get_prompt_content("ai_slide_layout_system")
-            layout_user_tpl = await get_prompt_content("ai_slide_layout_user")
-
-            layout_system = layout_system.replace("{lang_instruction}", lang_instruction)
-            layout_user = layout_user_tpl.format(
-                outline_json=outline_json,
-                design_style=design_style_str,
-                lang_instruction=lang_instruction,
-            )
-
-            layout_model = await get_prompt_model("ai_slide_layout_system")
-            effective_layout_model = layout_model or "claude-sonnet-4-6"
-
-            layout_result = await _call_claude_api(layout_system, layout_user, model=effective_layout_model)
-
-            # JSON 파싱
-            layout_data = None
-            try:
-                import re as _re
-                json_match = _re.search(r'```json\s*(.*?)\s*```', layout_result, _re.DOTALL)
-                if json_match:
-                    layout_data = json.loads(json_match.group(1))
-                else:
-                    layout_data = json.loads(layout_result)
-            except Exception as e:
-                print(f"[AI Slide] 레이아웃 JSON 파싱 실패: {e}")
-                yield _sse("error", {"message": "레이아웃 설계 실패"})
-                return
-
-            layout_slides = layout_data.get("slides", [])
-            total_slides = len(layout_slides)
-
-            if total_slides == 0:
-                yield _sse("error", {"message": "레이아웃 설계 결과가 비어있습니다"})
-                return
+            total_slides = len(llm_slides)
 
             yield _sse("ai_slide_start", {
                 "total": total_slides,
-                "message": "배경 이미지를 생성하고 있습니다..."
+                "message": "슬라이드 이미지를 생성하고 있습니다..."
             })
 
-            # Phase 4: 배경 이미지 생성 + 오브젝트 조립
-            reference_bg_bytes = None
+            # 텍스트 금지 지시를 style_hint에 추가
+            no_text_override = (
+                "\n\n⚠️ ABSOLUTE HIGHEST PRIORITY — NO TEXT IN IMAGE:\n"
+                "Do NOT render ANY text, letters, numbers, labels, titles, subtitles, "
+                "bullet points, headings, captions, or ANY written content in the image.\n"
+                "The image must contain ONLY:\n"
+                "- Background graphics, gradients, patterns\n"
+                "- Icons (without labels), decorative shapes, abstract visuals\n"
+                "- Infographic elements: arrows, connectors, card outlines, chart shapes (WITHOUT any text/numbers inside)\n"
+                "- Empty placeholder areas (dark semi-transparent cards/boxes) where text will be overlaid separately\n"
+                "Think of this as a TEMPLATE IMAGE — all visual design but ZERO text.\n"
+                "If you include even a single letter or number, the image is REJECTED.\n"
+            )
+            effective_style_hint = (style_hint or "") + no_text_override
 
-            for idx, layout_slide in enumerate(layout_slides):
+            # 인포그래픽 배치 생성 (텍스트 없는 이미지)
+            async for img_result in generate_infographic_batch(
+                llm_slides,
+                style_hint=effective_style_hint,
+                aspect_ratio="16:9",
+                infographic_ratio=40,
+            ):
                 if await _check_cancelled(db, data.project_id, generation_id):
                     yield _sse("stopped", {"message": "생성이 중단되었습니다."})
                     await _set_stopped(db, data.project_id)
                     return
 
-                bg_prompt = layout_slide.get("background_prompt", "Abstract dark gradient background, professional, modern")
-                slide_type = layout_slide.get("slide_type", "content")
-                objects = layout_slide.get("objects", [])
+                idx = img_result["index"]
+                image_url = img_result["image_url"]
+                title = img_result["title"]
+                subtitle = img_result.get("subtitle", "")
+                slide_type = img_result.get("slide_type", "content")
+                orig_slide = llm_slides[idx] if idx < len(llm_slides) else {}
 
-                # 배경 이미지 생성
-                bg_url, bg_bytes = await generate_bg_image(
-                    bg_prompt=bg_prompt,
-                    style_hint=style_hint,
-                    aspect_ratio="16:9",
-                    reference_image=reference_bg_bytes if idx > 1 else None,
-                )
-
-                # 두 번째 슬라이드의 배경을 참조 이미지로 보관
-                if idx == 1 and bg_bytes:
-                    reference_bg_bytes = bg_bytes
-
-                # 오브젝트 조립
+                # 이미지 오브젝트 (전체 영역 배경)
                 gen_objects = []
+                if image_url:
+                    gen_objects.append({
+                        "obj_type": "image",
+                        "x": 0, "y": 0,
+                        "width": 960, "height": 540,
+                        "image_url": image_url,
+                        "image_fit": "cover",
+                        "z_index": 1,
+                    })
 
-                # z_index 부여
-                z = 1
-                for obj in objects:
-                    obj_type = obj.get("obj_type", "text")
-                    gen_obj = {
-                        "obj_type": obj_type,
-                        "x": obj.get("x", 0),
-                        "y": obj.get("y", 0),
-                        "width": obj.get("width", 100),
-                        "height": obj.get("height", 50),
-                        "z_index": z,
-                    }
+                # ── 편집 가능한 텍스트 오브젝트 배치 ──
+                z = 10
+
+                def _add_text(role, x, y, w, h, text, style):
+                    nonlocal z
+                    gen_objects.append({
+                        "obj_type": "text", "role": role,
+                        "x": x, "y": y, "width": w, "height": h,
+                        "generated_text": text, "text_content": text,
+                        "placeholder": role, "z_index": z,
+                        "text_style": style,
+                    })
                     z += 1
 
-                    if obj_type == "text":
-                        gen_obj["role"] = obj.get("role", "")
-                        gen_obj["generated_text"] = obj.get("generated_text", "")
-                        gen_obj["text_content"] = obj.get("generated_text", "")
-                        gen_obj["text_style"] = obj.get("text_style", {
-                            "font_size": 14,
-                            "color": "#FFFFFF",
-                            "align": "left",
+                if slide_type == "title" or idx == 0:
+                    _add_text("title", 80, 200, 800, 80, title, {
+                        "font_size": 36, "bold": True, "color": "#FFFFFF",
+                        "align": "center", "font_family": "Pretendard",
+                    })
+                    if subtitle:
+                        _add_text("subtitle", 120, 290, 720, 50, subtitle, {
+                            "font_size": 18, "bold": False, "color": "#E0E0E0",
+                            "align": "center", "font_family": "Pretendard",
                         })
-                        # placeholder 매핑
-                        role = obj.get("role", "")
-                        if role:
-                            gen_obj["placeholder"] = role
-                    elif obj_type == "shape":
-                        gen_obj["shape_style"] = obj.get("shape_style", {
-                            "type": "rect",
-                            "fill": "#00000040",
-                        })
-                    elif obj_type == "chart":
-                        gen_obj["chart_style"] = obj.get("chart_style", {})
 
-                    gen_objects.append(gen_obj)
+                elif slide_type == "section":
+                    section_num = orig_slide.get("section_num", "")
+                    section_title = orig_slide.get("section_title", title)
+                    if section_num:
+                        _add_text("governance", 80, 190, 800, 50, section_num, {
+                            "font_size": 48, "bold": True, "color": "#FFFFFF",
+                            "align": "center", "font_family": "Pretendard",
+                        })
+                    _add_text("title", 80, 245, 800, 70, section_title, {
+                        "font_size": 32, "bold": True, "color": "#FFFFFF",
+                        "align": "center", "font_family": "Pretendard",
+                    })
+
+                elif slide_type == "closing":
+                    _add_text("title", 80, 220, 800, 80, title, {
+                        "font_size": 36, "bold": True, "color": "#FFFFFF",
+                        "align": "center", "font_family": "Pretendard",
+                    })
+                    closing_msg = orig_slide.get("message", "")
+                    if closing_msg:
+                        _add_text("subtitle", 120, 310, 720, 40, closing_msg, {
+                            "font_size": 16, "bold": False, "color": "#E0E0E0",
+                            "align": "center", "font_family": "Pretendard",
+                        })
+
+                elif slide_type == "toc":
+                    _add_text("title", 60, 30, 840, 50, title, {
+                        "font_size": 24, "bold": True, "color": "#FFFFFF",
+                        "align": "left", "font_family": "Pretendard",
+                    })
+                    # 목차 항목
+                    toc_items = orig_slide.get("items", [])
+                    y_pos = 110
+                    for ti, toc_item in enumerate(toc_items):
+                        if isinstance(toc_item, dict):
+                            num = toc_item.get("num", f"{ti+1:02d}")
+                            text = toc_item.get("text", "")
+                            _add_text(f"subtitle", 100, y_pos, 700, 36, f"{num}  {text}", {
+                                "font_size": 18, "bold": False, "color": "#FFFFFF",
+                                "align": "left", "font_family": "Pretendard",
+                            })
+                            y_pos += 48
+
+                else:
+                    # 본문 (content): 제목 + 거버넌스 + items(heading+detail)
+                    _add_text("title", 60, 30, 840, 50, title, {
+                        "font_size": 24, "bold": True, "color": "#FFFFFF",
+                        "align": "left", "font_family": "Pretendard",
+                    })
+                    governance = orig_slide.get("governance", "")
+                    if governance:
+                        _add_text("governance", 60, 80, 840, 28, governance, {
+                            "font_size": 12, "bold": False, "color": "#B0B0B0",
+                            "align": "left", "font_family": "Pretendard",
+                        })
+                    # items → heading(부제목) + detail(설명) 텍스트 오브젝트
+                    content_items = orig_slide.get("items", [])
+                    n_items = len(content_items)
+                    if n_items > 0:
+                        start_y = 120
+                        avail_h = 400
+                        item_h = min(avail_h // n_items, 100)
+                        for ii, item in enumerate(content_items):
+                            if not isinstance(item, dict):
+                                continue
+                            heading = item.get("heading", "")
+                            detail = item.get("detail", "")
+                            y_base = start_y + ii * item_h
+                            if heading:
+                                _add_text("subtitle", 80, y_base, 800, 26, heading, {
+                                    "font_size": 16, "bold": True, "color": "#FFFFFF",
+                                    "align": "left", "font_family": "Pretendard",
+                                })
+                            if detail:
+                                _add_text("description", 80, y_base + 28, 800, 40, detail, {
+                                    "font_size": 12, "bold": False, "color": "#D0D0D0",
+                                    "align": "left", "font_family": "Pretendard",
+                                })
 
                 # items 추출 (heading/detail 쌍)
                 items = []
-                if idx < len(llm_slides):
-                    orig_items = llm_slides[idx].get("items", [])
-                    for item in orig_items:
-                        if isinstance(item, dict):
-                            items.append({
-                                "heading": item.get("heading", ""),
-                                "detail": item.get("detail", ""),
-                            })
+                for item in orig_slide.get("items", []):
+                    if isinstance(item, dict):
+                        items.append({
+                            "heading": item.get("heading", ""),
+                            "detail": item.get("detail", ""),
+                        })
 
                 gen_slide = {
                     "project_id": data.project_id,
@@ -1305,7 +1308,7 @@ async def generate_ai_slide_stream(jwt_token: str, data: AiSlideGenerateRequest)
                     "order": idx + 1,
                     "objects": gen_objects,
                     "items": items,
-                    "background_image": bg_url,
+                    "background_image": None,
                     "ai_slide": True,
                     "created_at": datetime.utcnow(),
                 }
@@ -1313,13 +1316,12 @@ async def generate_ai_slide_stream(jwt_token: str, data: AiSlideGenerateRequest)
                 result = await db.generated_slides.insert_one(gen_slide)
                 gen_slide["_id"] = str(result.inserted_id)
 
-                # 클라이언트로 슬라이드 전송
                 slide_data = {
                     "_id": gen_slide["_id"],
                     "order": idx + 1,
                     "objects": gen_objects,
                     "items": items,
-                    "background_image": bg_url,
+                    "background_image": None,
                     "ai_slide": True,
                 }
 
@@ -1345,6 +1347,96 @@ async def generate_ai_slide_stream(jwt_token: str, data: AiSlideGenerateRequest)
             )
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/{jwt_token}/api/generate/fix-slide-text/{slide_id}")
+async def fix_slide_text(jwt_token: str, slide_id: str):
+    """인포그래픽 슬라이드의 깨진 텍스트를 수정하여 이미지 재생성"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    # 슬라이드 조회
+    slide = await db.generated_slides.find_one({"_id": ObjectId(slide_id)})
+    if not slide:
+        raise HTTPException(status_code=404, detail="슬라이드를 찾을 수 없습니다")
+
+    # 이미지 URL 찾기 (인포그래픽 슬라이드는 objects[0]에 전체 이미지)
+    image_url = None
+    image_obj_index = -1
+    for i, obj in enumerate(slide.get("objects", [])):
+        if obj.get("obj_type") == "image" and obj.get("width", 0) >= 900:
+            image_url = obj.get("image_url")
+            image_obj_index = i
+            break
+
+    if not image_url:
+        raise HTTPException(status_code=400, detail="이미지를 찾을 수 없습니다")
+
+    # 이미지 파일 로드
+    image_path = Path(settings.UPLOAD_DIR).resolve() / image_url.lstrip("/uploads/")
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="이미지 파일을 찾을 수 없습니다")
+
+    image_bytes = image_path.read_bytes()
+
+    # Gemini로 텍스트 수정 이미지 재생성
+    new_url, new_bytes = await fix_slide_text_image(image_bytes)
+    if not new_url:
+        raise HTTPException(status_code=500, detail="텍스트 수정에 실패했습니다. 다시 시도해주세요.")
+
+    # DB 업데이트 — 해당 이미지 오브젝트의 image_url 교체
+    update_path = f"objects.{image_obj_index}.image_url"
+    await db.generated_slides.update_one(
+        {"_id": ObjectId(slide_id)},
+        {"$set": {update_path: new_url, "updated_at": datetime.utcnow()}}
+    )
+
+    return {"success": True, "image_url": new_url}
+
+
+@router.post("/{jwt_token}/api/generate/edit-slide-image/{slide_id}")
+async def edit_slide_image_endpoint(jwt_token: str, slide_id: str, body: dict):
+    """사용자 지침에 따라 인포그래픽 슬라이드 이미지를 수정하여 재생성"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    instruction = body.get("instruction", "").strip()
+    if not instruction:
+        raise HTTPException(status_code=400, detail="수정 지침을 입력하세요")
+
+    slide = await db.generated_slides.find_one({"_id": ObjectId(slide_id)})
+    if not slide:
+        raise HTTPException(status_code=404, detail="슬라이드를 찾을 수 없습니다")
+
+    # 전체 이미지 오브젝트 찾기
+    image_url = None
+    image_obj_index = -1
+    for i, obj in enumerate(slide.get("objects", [])):
+        if obj.get("obj_type") == "image" and obj.get("width", 0) >= 900:
+            image_url = obj.get("image_url")
+            image_obj_index = i
+            break
+
+    if not image_url:
+        raise HTTPException(status_code=400, detail="이미지를 찾을 수 없습니다")
+
+    image_path = Path(settings.UPLOAD_DIR).resolve() / image_url.lstrip("/uploads/")
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="이미지 파일을 찾을 수 없습니다")
+
+    image_bytes = image_path.read_bytes()
+
+    new_url, new_bytes = await edit_slide_image(image_bytes, instruction)
+    if not new_url:
+        raise HTTPException(status_code=500, detail="이미지 수정에 실패했습니다. 다시 시도해주세요.")
+
+    update_path = f"objects.{image_obj_index}.image_url"
+    await db.generated_slides.update_one(
+        {"_id": ObjectId(slide_id)},
+        {"$set": {update_path: new_url, "updated_at": datetime.utcnow()}}
+    )
+
+    return {"success": True, "image_url": new_url}
 
 
 @router.post("/{jwt_token}/api/generate/manual-slide")

@@ -13,7 +13,7 @@ import os
 import io
 import httpx
 from PIL import Image
-from config import settings
+from config import settings, anthropic_key_rotator
 from routers.prompt import get_prompt_content, get_prompt_model
 
 
@@ -85,7 +85,7 @@ async def _call_claude_api(system_prompt: str, user_prompt: str, model: str = ""
     """Claude API 호출 (httpx 비동기)"""
     url = "https://api.anthropic.com/v1/messages"
     headers = {
-        "x-api-key": settings.ANTHROPIC_API_KEY,
+        "x-api-key": anthropic_key_rotator.next(),
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
@@ -105,7 +105,7 @@ async def _call_claude_api(system_prompt: str, user_prompt: str, model: str = ""
     else:
         payload["max_tokens"] = 4096  # 기본값
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=300.0) as client:
         response = await client.post(url, json=payload, headers=headers)
         response.raise_for_status()
         data = response.json()
@@ -172,7 +172,7 @@ async def analyze_image_content(file_path: str, original_filename: str = "") -> 
         )
 
         headers = {
-            "x-api-key": settings.ANTHROPIC_API_KEY,
+            "x-api-key": anthropic_key_rotator.next(),
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
@@ -1461,7 +1461,7 @@ async def _stream_claude_api(system_prompt: str, user_prompt: str, model: str = 
     """Claude API 스트리밍 호출 - text delta를 async yield"""
     url = "https://api.anthropic.com/v1/messages"
     headers = {
-        "x-api-key": settings.ANTHROPIC_API_KEY,
+        "x-api-key": anthropic_key_rotator.next(),
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }

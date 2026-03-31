@@ -22,15 +22,21 @@ class Settings:
     JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
     JWT_EXPIRE_HOURS: int = int(os.getenv("JWT_EXPIRE_HOURS", "24"))
 
-    # Claude API
+    # Claude API (콤마 구분으로 여러 키 등록 가능 → 라운드 로빈)
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+    ANTHROPIC_API_KEYS: list = [
+        k.strip() for k in os.getenv("ANTHROPIC_API_KEY", "").split(",") if k.strip()
+    ]
     ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-6")
     ANTHROPIC_OUTLINE_MODEL: str = os.getenv("ANTHROPIC_OUTLINE_MODEL", "claude-sonnet-4-6")
     ANTHROPIC_MAX_TOKENS: int = int(os.getenv("ANTHROPIC_MAX_TOKENS", "0"))  # 0이면 API 기본값 사용
     ANTHROPIC_OUTLINE_MAX_TOKENS: int = int(os.getenv("ANTHROPIC_OUTLINE_MAX_TOKENS", "0"))  # Outline(Sonnet) 전용
 
-    # Google AI (Gemini image generation)
+    # Google AI (콤마 구분으로 여러 키 등록 가능 → 라운드 로빈)
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
+    GOOGLE_API_KEYS: list = [
+        k.strip() for k in os.getenv("GOOGLE_API_KEY", "").split(",") if k.strip()
+    ]
 
     # Perplexity
     PERPLEXITY_API_KEY: str = os.getenv("PERPLEXITY_API_KEY", "")
@@ -72,3 +78,27 @@ class Settings:
 
 
 settings = Settings()
+
+
+# ── API 키 라운드 로빈 ──
+import itertools
+import threading
+
+class _KeyRotator:
+    """Thread-safe 라운드 로빈 키 로테이터"""
+    def __init__(self, keys: list):
+        self._keys = keys or [""]
+        self._cycle = itertools.cycle(self._keys)
+        self._lock = threading.Lock()
+
+    def next(self) -> str:
+        with self._lock:
+            return next(self._cycle)
+
+    @property
+    def count(self) -> int:
+        return len(self._keys)
+
+
+anthropic_key_rotator = _KeyRotator(settings.ANTHROPIC_API_KEYS)
+google_key_rotator = _KeyRotator(settings.GOOGLE_API_KEYS)
