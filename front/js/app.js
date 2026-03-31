@@ -70,6 +70,10 @@ const state = {
     // 인포그래픽 모드
     infographicMode: false,
     _infographicRatio: 40,
+    // AI 자동 디자인 모드
+    autoTemplateMode: false,
+    // AI 슬라이드 모드
+    aiSlideMode: false,
 };
 
 let _animationCancelled = false;
@@ -1089,9 +1093,11 @@ async function initApp() {
     if (state.isAdmin) {
         $('#btnAdminHeader').show();
         $('#btnAdminMain').show();
+        $('#btnGenerateStyleSamples').show();
     } else {
         $('#btnAdminHeader').hide();
         $('#btnAdminMain').hide();
+        $('#btnGenerateStyleSamples').hide();
     }
 
     applyI18n();
@@ -1830,6 +1836,14 @@ function renderProjectWorkspace() {
         state.customTemplateInfo = null;
         if (state.customTemplateId) {
             _loadCustomPptxInfo();
+        }
+        // AI 자동 디자인 모드 복원
+        state.autoTemplateMode = !!state.currentProject.auto_template;
+        // AI 슬라이드 모드 복원
+        state.aiSlideMode = !!state.currentProject.ai_slide_mode;
+        // 인포그래픽 모드 복원 (auto_template도 infographic 기반)
+        if (state.currentProject.infographic_mode) {
+            state.infographicMode = true;
         }
         // 템플릿 slide_size 복원
         const _tmpl = state.templates.find(t => t._id === state.selectedTemplateId);
@@ -2878,6 +2892,21 @@ function updateTemplateButtonLabel() {
         return;
     }
 
+    // AI 슬라이드 모드
+    if (state.aiSlideMode) {
+        const styleName = state._selectedStyleName || 'AI 슬라이드';
+        $('#templateSelectLabel').text(styleName);
+        $('#templateSelectBtn').addClass('has-value');
+        return;
+    }
+
+    // AI 자동 디자인 모드
+    if (state.autoTemplateMode) {
+        $('#templateSelectLabel').text('AI 자동 디자인');
+        $('#templateSelectBtn').addClass('has-value');
+        return;
+    }
+
     // 인포그래픽 모드
     if (state.infographicMode) {
         const styleName = state._selectedStyleName || 'AI 이미지 슬라이드';
@@ -2926,8 +2955,12 @@ function openTemplatePickerModal() {
     // Hide skill grid
     $('#skillPickerGrid').hide();
 
-    // 인포그래픽 모드면 인포그래픽 탭, 아니면 표준 탭을 기본 활성화
-    if (state.infographicMode && isSlideType) {
+    // 현재 모드에 맞는 탭을 기본 활성화
+    if (state.aiSlideMode && isSlideType) {
+        switchTemplatePicker('aislide');
+    } else if (state.autoTemplateMode && isSlideType) {
+        switchTemplatePicker('autodesign');
+    } else if (state.infographicMode && isSlideType) {
         switchTemplatePicker('infographic');
     } else {
         switchTemplatePicker('standard');
@@ -2944,14 +2977,31 @@ function switchTemplatePicker(tab) {
     if (tab === 'standard') {
         $('#templatePickerGrid').show();
         $('#infographicStyleGrid').hide();
+        $('#autoDesignGrid').hide();
+        $('#aiSlideStyleGrid').hide();
         $('#templatePickerTitle').text('표준 템플릿');
         _renderStandardTemplateGrid();
-    } else {
+    } else if (tab === 'infographic') {
         $('#templatePickerGrid').hide();
         $('#infographicStyleGrid').show();
+        $('#autoDesignGrid').hide();
+        $('#aiSlideStyleGrid').hide();
         $('#templatePickerTitle').text('AI 이미지 슬라이드');
         _loadAndRenderSlideStyles();
         setTimeout(initInfographicRatioSlider, 50);
+    } else if (tab === 'aislide') {
+        $('#templatePickerGrid').hide();
+        $('#infographicStyleGrid').hide();
+        $('#autoDesignGrid').hide();
+        $('#aiSlideStyleGrid').show();
+        $('#templatePickerTitle').text('AI 슬라이드');
+        _loadAndRenderAiSlideStyles();
+    } else if (tab === 'autodesign') {
+        $('#templatePickerGrid').hide();
+        $('#infographicStyleGrid').hide();
+        $('#autoDesignGrid').show();
+        $('#aiSlideStyleGrid').hide();
+        $('#templatePickerTitle').text('AI 자동 디자인');
     }
 }
 
@@ -3068,7 +3118,10 @@ function _renderSlideStyleCards(styles) {
                 </div>
                 <div class="style-card-name">${escapeHtml(style.name)}</div>
                 <div class="style-card-name-en">${escapeHtml(style.name_en)}</div>
-                <div class="style-card-prompt">${escapeHtml(style.prompt)}</div>
+                ${style.sample_image
+                    ? `<div class="style-card-preview"><img src="${style.sample_image}" alt="${escapeHtml(style.name_en)}" loading="lazy" /></div>`
+                    : `<div class="style-card-prompt">${escapeHtml(style.prompt)}</div>`
+                }
                 ${isSelected ? '<div class="style-card-check"><svg width="18" height="18" viewBox="0 0 16 16" fill="#8b5cf6"><path d="M8 0a8 8 0 110 16A8 8 0 018 0zm3.78 5.22a.75.75 0 00-1.06 0L7 8.94 5.28 7.22a.75.75 0 10-1.06 1.06l2.25 2.25a.75.75 0 001.06 0l4.25-4.25a.75.75 0 000-1.06z"/></svg></div>' : ''}
             </div>
         `);
@@ -3081,6 +3134,42 @@ function filterSlideStyles(category) {
     $(`.style-filter-btn[data-cat="${category}"]`).addClass('active');
     if (_slideStylesCache) {
         _renderSlideStyleCards(_slideStylesCache);
+    }
+}
+
+async function generateStyleSamples() {
+    const btn = $('#btnGenerateStyleSamples');
+    btn.prop('disabled', true).text('생성 중...');
+    try {
+        const res = await fetch('/api/slide-styles/generate-samples', { method: 'POST' });
+        if (!res.ok) throw new Error('Failed');
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const evt = JSON.parse(line.slice(6));
+                        if (evt.done !== undefined && evt.total !== undefined) {
+                            btn.text(`생성 중... (${evt.done}/${evt.total})`);
+                        }
+                    } catch (_) {}
+                }
+            }
+        }
+        _slideStylesCache = null;
+        await _loadAndRenderSlideStyles();
+        btn.text('샘플 생성 완료');
+        setTimeout(() => btn.text('샘플 생성').prop('disabled', false), 2000);
+    } catch (e) {
+        console.error('generateStyleSamples error:', e);
+        btn.text('샘플 생성 실패').prop('disabled', false);
     }
 }
 
@@ -3157,13 +3246,150 @@ function applyCustomStylePrompt() {
     showToast('커스텀 스타일이 적용되었습니다', 'success');
 }
 
+// ============ AI 슬라이드 스타일 ============
+let _aiSlideStylesCache = null;
+
+async function _loadAndRenderAiSlideStyles() {
+    const grid = $('#aiSlideCardsGrid');
+    if (!_aiSlideStylesCache) {
+        grid.html('<div style="text-align:center;padding:40px;color:var(--text-muted);">스타일을 불러오는 중...</div>');
+        try {
+            const res = await fetch('/api/slide-styles');
+            const data = await res.json();
+            _aiSlideStylesCache = data.styles || [];
+        } catch (e) {
+            grid.html('<div style="text-align:center;padding:40px;color:var(--text-muted);">스타일을 불러올 수 없습니다</div>');
+            return;
+        }
+    }
+    _renderAiSlideStyleCards(_aiSlideStylesCache);
+}
+
+function _renderAiSlideStyleCards(styles) {
+    const grid = $('#aiSlideCardsGrid');
+    grid.empty();
+
+    const currentFilter = $('#aiSlideFilterBar .style-filter-btn.active').data('cat') || 'all';
+    const filtered = currentFilter === 'all' ? styles : styles.filter(s => s.category === currentFilter);
+
+    const categoryIcons = {
+        business: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>',
+        modern: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>',
+        creative: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/></svg>',
+        artistic: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13.5" cy="6.5" r="2.5"/><path d="M17.5 15.5a4 4 0 10-8 0"/><path d="M3 19.5A9 9 0 0121 19.5"/></svg>',
+        retro: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+    };
+    const categoryLabels = { business: '비즈니스', modern: '모던', creative: '크리에이티브', artistic: '아티스틱', retro: '레트로' };
+
+    if (filtered.length === 0) {
+        grid.html('<div style="text-align:center;padding:40px;color:var(--text-muted);">해당 카테고리에 스타일이 없습니다</div>');
+        return;
+    }
+
+    filtered.forEach(style => {
+        const isSelected = state.aiSlideMode && state._selectedStyleId === style.style_id;
+        const catIcon = categoryIcons[style.category] || '';
+        const catLabel = categoryLabels[style.category] || style.category;
+
+        // Reuse the same style-card markup as infographic
+        const card = $(`
+            <div class="style-card ${isSelected ? 'selected' : ''}" onclick="selectAiSlideStyle(${style.style_id})" data-style-id="${style.style_id}" data-category="${style.category}">
+                <div class="style-card-header">
+                    <span class="style-card-num">${style.style_id}</span>
+                    <span class="style-card-cat">${catIcon} ${catLabel}</span>
+                </div>
+                <div class="style-card-name">${escapeHtml(style.name)}</div>
+                <div class="style-card-desc">${escapeHtml(style.description || '')}</div>
+                ${style.sample_url ? `<div class="style-card-sample"><img src="${style.sample_url}" alt="sample" loading="lazy"></div>` : ''}
+                <div class="style-card-badge">AI 슬라이드</div>
+            </div>
+        `);
+        grid.append(card);
+    });
+}
+
+function filterAiSlideStyles(category) {
+    $('#aiSlideFilterBar .style-filter-btn').removeClass('active');
+    $(`#aiSlideFilterBar .style-filter-btn[data-cat="${category}"]`).addClass('active');
+    if (_aiSlideStylesCache) _renderAiSlideStyleCards(_aiSlideStylesCache);
+}
+
+function selectAiSlideStyle(styleId) {
+    const style = (_aiSlideStylesCache || []).find(s => s.style_id === styleId);
+    if (!style) return;
+
+    if (state.customTemplateId) _clearCustomPptxState();
+    state.selectedTemplateId = null;
+    state.infographicMode = false;
+    state.autoTemplateMode = false;
+    state.aiSlideMode = true;
+    state._selectedStyleId = styleId;
+    state._selectedStylePrompt = style.prompt;
+    state._selectedStyleName = style.name;
+    state._templateSlideSize = '16:9';
+    updateSlideCanvasAspect();
+    updateTemplateButtonLabel();
+    closeModal('templatePickerModal');
+
+    if (state.currentProject && state.currentProject._id) {
+        state.currentProject.ai_slide_mode = true;
+        state.currentProject.template_id = null;
+        apiPut('/api/projects/' + state.currentProject._id, {
+            template_id: null,
+            ai_slide_mode: true,
+        }).catch(() => {});
+    }
+}
+
+function toggleAiSlideCustomPrompt() {
+    const body = $('#aiSlideCustomPromptBody');
+    const chevron = $('#aiSlideCustomPromptChevron');
+    if (body.is(':visible')) {
+        body.slideUp(200);
+        chevron.css('transform', 'rotate(0deg)');
+    } else {
+        body.slideDown(200);
+        chevron.css('transform', 'rotate(180deg)');
+    }
+}
+
+function applyAiSlideCustomPrompt() {
+    const prompt = $('#aiSlideCustomStylePrompt').val().trim();
+    if (!prompt) { showToast('스타일을 입력하세요', 'error'); return; }
+
+    if (state.customTemplateId) _clearCustomPptxState();
+    state.selectedTemplateId = null;
+    state.infographicMode = false;
+    state.autoTemplateMode = false;
+    state.aiSlideMode = true;
+    state._selectedStyleId = 'custom';
+    state._selectedStylePrompt = prompt;
+    state._selectedStyleName = '커스텀 AI 슬라이드';
+    state._templateSlideSize = '16:9';
+    updateSlideCanvasAspect();
+    updateTemplateButtonLabel();
+    closeModal('templatePickerModal');
+
+    if (state.currentProject && state.currentProject._id) {
+        state.currentProject.ai_slide_mode = true;
+        state.currentProject.template_id = null;
+        apiPut('/api/projects/' + state.currentProject._id, {
+            template_id: null,
+            ai_slide_mode: true,
+        }).catch(() => {});
+    }
+    showToast('커스텀 AI 슬라이드 스타일이 적용되었습니다', 'success');
+}
+
 function selectInfographicMode() {
-    // 인포그래픽 모드 선택 → 기존 템플릿/커스텀 PPTX 해제
+    // 인포그래픽 모드 선택 → 기존 템플릿/커스텀 PPTX/자동 디자인 해제
     if (state.customTemplateId) {
         _clearCustomPptxState();
     }
     state.selectedTemplateId = null;
     state.infographicMode = true;
+    state.autoTemplateMode = false;
+    state.aiSlideMode = false;
     state._selectedStyleId = null;
     state._selectedStylePrompt = '';
     state._selectedStyleName = null;
@@ -3183,14 +3409,46 @@ function selectInfographicMode() {
     }
 }
 
+function selectAutoTemplate() {
+    // AI 자동 디자인 모드 선택 → 기존 템플릿/커스텀/인포그래픽 해제
+    if (state.customTemplateId) {
+        _clearCustomPptxState();
+    }
+    state.selectedTemplateId = null;
+    state.infographicMode = true;
+    state.autoTemplateMode = true;
+    state.aiSlideMode = false;
+    state._selectedStyleId = null;
+    state._selectedStylePrompt = '';
+    state._selectedStyleName = null;
+    state._templateSlideSize = '16:9';
+    updateSlideCanvasAspect();
+    updateTemplateButtonLabel();
+    closeModal('templatePickerModal');
+
+    // 프로젝트에 AI 자동 디자인 모드 저장
+    if (state.currentProject && state.currentProject._id) {
+        state.currentProject.infographic_mode = true;
+        state.currentProject.auto_template = true;
+        state.currentProject.template_id = null;
+        apiPut('/api/projects/' + state.currentProject._id, {
+            template_id: null,
+            infographic_mode: true,
+            auto_template: true,
+        }).catch(() => {});
+    }
+}
+
 function selectTemplateFromPicker(templateId) {
     // Mutual exclusion: clear custom PPTX when admin template selected
     if (state.customTemplateId) {
         _clearCustomPptxState();
     }
 
-    // 인포그래픽 모드 해제
+    // 인포그래픽 모드 및 자동 디자인 모드 해제
     state.infographicMode = false;
+    state.autoTemplateMode = false;
+    state.aiSlideMode = false;
     state._selectedStyleId = null;
     state._selectedStylePrompt = '';
     state._selectedStyleName = null;
@@ -3310,6 +3568,11 @@ async function generatePPT() {
     const instructions = $('#instructionsInput').val().trim();
     const lang = $('#langSelect').val();
     const slideCount = $('#slideCountSelect').val();
+
+    // AI 슬라이드 모드 → 전용 생성 함수 호출
+    if (state.aiSlideMode) {
+        return generateAiSlide();
+    }
 
     // 인포그래픽 모드 → 전용 생성 함수 호출
     if (state.infographicMode) {
@@ -4641,6 +4904,251 @@ async function _processContentQueue() {
     }
 }
 
+// ============ AI 슬라이드 생성 ============
+async function generateAiSlide() {
+    const instructions = $('#instructionsInput').val().trim();
+    const lang = $('#langSelect').val();
+    const slideCount = $('#slideCountSelect').val();
+
+    if (state.resources.length === 0 && !instructions) {
+        showToast(t('msgEnterInstructions', '지침을 입력하세요'), 'error');
+        return;
+    }
+
+    _isGenerating = true;
+    _animationCancelled = true;
+    state.generatedSlides = [];
+    state.currentSlideIndex = 0;
+    state._contentQueue = [];
+    state._generationComplete = false;
+
+    _showStopButton();
+
+    $('#slideEmpty').hide();
+    $('#slidePreview').css('display', 'flex');
+    $('#wsSlideTools').css('display', 'flex');
+    _setSlideToolsDisabled(true);
+    switchPanelTab('outline');
+
+    $('#slideTextList').addClass('streaming-active').empty().append(`
+        <div id="streamingProgress" class="streaming-progress">
+            <div class="streaming-progress-header">
+                <div class="streaming-spinner-sm"></div>
+                <span id="streamingStatus">AI가 편집 가능한 슬라이드를 설계하고 있습니다...</span>
+            </div>
+            <div id="streamingContent" class="streaming-content"></div>
+        </div>
+    `);
+
+    $('#slideThumbnails').empty();
+    $('#slideThumbList').empty();
+    $('#slideCounter').text('0 / 0');
+    $('#slideCounterInline').text('0 / 0');
+
+    $('#previewCanvas .preview-obj').remove();
+    $('#previewBg').css('background-image', 'none');
+    $('#canvasLoadingOverlay').remove();
+    $('#previewCanvas').append(`
+        <div class="canvas-loading-overlay" id="canvasLoadingOverlay">
+            <div class="canvas-loading-animation">
+                <div class="canvas-loading-ring"></div>
+                <div class="loading-slide"></div>
+                <div class="loading-slide"></div>
+                <div class="loading-slide"></div>
+            </div>
+            <div class="canvas-loading-text">
+                <div class="canvas-loading-title">AI 슬라이드를 만들고 있습니다</div>
+                <div class="canvas-loading-sub">배경 이미지와 레이아웃을 설계하는 중<span class="canvas-loading-dots"><span>.</span><span>.</span><span>.</span></span></div>
+            </div>
+        </div>
+    `);
+
+    _abortController = new AbortController();
+
+    try {
+        const response = await fetch(`/${state.jwtToken}/api/generate/ai-slide/stream`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                project_id: state.currentProject._id,
+                instructions: instructions,
+                lang: lang,
+                slide_count: slideCount,
+                style_hint: state._selectedStylePrompt || '',
+            }),
+            signal: _abortController.signal,
+        });
+
+        if (!response.ok) {
+            let errMsg = '생성 실패';
+            try { const err = await response.json(); errMsg = err.detail || errMsg; } catch (_) {}
+            throw new Error(errMsg);
+        }
+
+        _streamReader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await _streamReader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split('\n\n');
+            buffer = parts.pop() || '';
+
+            for (const part of parts) {
+                for (const line of part.split('\n')) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        _handleAiSlideStreamEvent(data);
+                    } catch (e) {
+                        console.warn('SSE parse error:', e);
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            console.log('AI Slide generation aborted by user');
+        } else {
+            showToast(e.message || 'AI 슬라이드 생성 중 오류가 발생했습니다.', 'error');
+            console.error('AI Slide stream error:', e);
+        }
+        if (state.generatedSlides.length === 0) {
+            $('#slideEmpty').show();
+            $('#slidePreview').hide();
+            $('#wsSlideTools').hide();
+        }
+    } finally {
+        _isGenerating = false;
+        _streamReader = null;
+        _abortController = null;
+        $('#canvasLoadingOverlay').remove();
+        $('#streamingProgress').remove();
+        $('#slideTextList').removeClass('streaming-active');
+        _showGenerateOrRestartButton();
+        _setSlideToolsDisabled(false);
+        if (state.currentProject) {
+            initCollaboration(state.currentProject._id);
+        }
+        updateCollabUI();
+    }
+}
+
+function _handleAiSlideStreamEvent(data) {
+    switch (data.event) {
+        case 'start':
+            $('#streamingStatus').text(data.message || 'AI 슬라이드를 설계하고 있습니다...');
+            break;
+
+        case 'delta': {
+            const el = document.getElementById('streamingContent');
+            if (el) {
+                el.textContent += (data.text || '');
+                el.scrollTop = el.scrollHeight;
+            }
+            break;
+        }
+
+        case 'parsing':
+            $('#streamingStatus').text(data.message || '아웃라인을 분석하고 있습니다...');
+            $('#streamingContent').css('opacity', '0.4');
+            break;
+
+        case 'outline': {
+            // 아웃라인 표시 (인포그래픽과 동일 구조)
+            const outlineSlides = data.slides || [];
+            const typeLabelsMap = {
+                title: 'Cover', toc: 'Contents',
+                section: 'Chapter', content: 'Body', closing: 'Closing',
+            };
+            let outlineHtml = '<div class="inf-outline">';
+            outlineHtml += '<div class="inf-outline-header"><span class="inf-outline-title">슬라이드 아웃라인</span><span class="inf-outline-count">' + outlineSlides.length + '장</span></div>';
+            outlineSlides.forEach((s, i) => {
+                const badge = typeLabelsMap[s.type] || s.type;
+                outlineHtml += `<div class="inf-outline-card">`;
+                outlineHtml += `<div class="inf-outline-card-header">`;
+                outlineHtml += `<span class="inf-outline-num">${i + 1}</span>`;
+                outlineHtml += `<span class="inf-outline-card-title">${escapeHtml(s.title || '슬라이드 ' + (i + 1))}</span>`;
+                outlineHtml += `<span class="slide-type-badge">${badge}</span>`;
+                outlineHtml += `</div></div>`;
+            });
+            outlineHtml += '</div>';
+            $('#streamingContent').html(outlineHtml);
+            break;
+        }
+
+        case 'auto_template_result': {
+            const styleName = data.style_name || 'AI 디자인';
+            const style = data.style || {};
+            $('#streamingStatus').text(`스타일 "${styleName}" 생성 완료! 레이아웃을 설계하는 중...`);
+            const colors = style.colors || {};
+            let styleHtml = `<div class="auto-template-result">`;
+            styleHtml += `<div class="auto-template-style-name">${escapeHtml(styleName)}</div>`;
+            if (style.style_description) {
+                styleHtml += `<div class="auto-template-style-desc">${escapeHtml(style.style_description)}</div>`;
+            }
+            if (colors.background || colors.accent1) {
+                styleHtml += `<div class="auto-template-colors">`;
+                if (colors.background) styleHtml += `<span class="auto-template-color-chip" style="background:${colors.background.hex}"></span>`;
+                if (colors.text) styleHtml += `<span class="auto-template-color-chip" style="background:${colors.text.hex}"></span>`;
+                if (colors.accent1) styleHtml += `<span class="auto-template-color-chip" style="background:${colors.accent1.hex}"></span>`;
+                if (colors.accent2) styleHtml += `<span class="auto-template-color-chip" style="background:${colors.accent2.hex}"></span>`;
+                styleHtml += `</div>`;
+            }
+            if (style.tone_keywords && style.tone_keywords.length > 0) {
+                styleHtml += `<div class="auto-template-keywords">${style.tone_keywords.map(k => `<span class="auto-template-keyword">${escapeHtml(k)}</span>`).join('')}</div>`;
+            }
+            styleHtml += `</div>`;
+            const el = document.getElementById('streamingContent');
+            if (el) el.innerHTML = styleHtml;
+            break;
+        }
+
+        case 'ai_slide_start':
+            $('#streamingStatus').text(data.message || '배경 이미지를 생성하고 있습니다...');
+            $('#infographicLoadingTitle').text('배경 이미지를 생성하고 있습니다');
+            break;
+
+        case 'slide': {
+            const slideData = data.slide;
+            const idx = data.index;
+            const total = data.total;
+
+            state.generatedSlides.push(slideData);
+            state.currentSlideIndex = state.generatedSlides.length - 1;
+
+            renderSlideThumbnails();
+            renderSlideThumbList();
+            renderSlideTextPanel();
+            navigateSlide(state.currentSlideIndex);
+
+            $('#slideCounter').text(`${state.generatedSlides.length} / ${total}`);
+            $('#slideCounterInline').text(`${state.generatedSlides.length} / ${total}`);
+            $('#streamingStatus').text(`슬라이드 생성 중... (${state.generatedSlides.length}/${total})`);
+            break;
+        }
+
+        case 'complete':
+            showToast(data.message || 'AI 슬라이드 생성 완료', 'success');
+            if (state.generatedSlides.length > 0) {
+                state.currentSlideIndex = 0;
+                navigateSlide(0);
+            }
+            break;
+
+        case 'stopped':
+            showToast(data.message || '생성이 중단되었습니다.', 'info');
+            break;
+
+        case 'error':
+            showToast(data.message || '슬라이드 생성 중 오류 발생', 'error');
+            break;
+    }
+}
+
 // ============ 인포그래픽 슬라이드 생성 ============
 async function generateInfographic() {
     const instructions = $('#instructionsInput').val().trim();
@@ -4669,11 +5177,14 @@ async function generateInfographic() {
     switchPanelTab('outline');
 
     // 스트리밍 프로그레스 UI 표시
+    const statusMsg = state.autoTemplateMode
+        ? 'AI가 최적의 디자인 스타일을 분석하고 있습니다...'
+        : 'AI가 인포그래픽 아웃라인을 설계하고 있습니다...';
     $('#slideTextList').addClass('streaming-active').empty().append(`
         <div id="streamingProgress" class="streaming-progress">
             <div class="streaming-progress-header">
                 <div class="streaming-spinner-sm"></div>
-                <span id="streamingStatus">AI가 인포그래픽 아웃라인을 설계하고 있습니다...</span>
+                <span id="streamingStatus">${statusMsg}</span>
             </div>
             <div id="streamingContent" class="streaming-content"></div>
         </div>
@@ -4704,9 +5215,9 @@ async function generateInfographic() {
                 </div>
             </div>
             <div class="canvas-loading-text">
-                <div class="canvas-loading-title" id="infographicLoadingTitle">인포그래픽을 준비하고 있습니다</div>
+                <div class="canvas-loading-title" id="infographicLoadingTitle">${state.autoTemplateMode ? 'AI 자동 디자인을 준비하고 있습니다' : '인포그래픽을 준비하고 있습니다'}</div>
                 <div class="canvas-loading-sub" id="infographicLoadingSub">
-                    AI가 아웃라인을 설계하는 중<span class="canvas-loading-dots"><span>.</span><span>.</span><span>.</span></span>
+                    ${state.autoTemplateMode ? 'AI가 최적의 스타일을 분석하는 중' : 'AI가 아웃라인을 설계하는 중'}<span class="canvas-loading-dots"><span>.</span><span>.</span><span>.</span></span>
                 </div>
                 <div class="infographic-progress-bar" id="infographicProgressBar" style="display:none;">
                     <div class="infographic-progress-fill" id="infographicProgressFill"></div>
@@ -4719,17 +5230,22 @@ async function generateInfographic() {
     _abortController = new AbortController();
 
     try {
+        const requestBody = {
+            project_id: state.currentProject._id,
+            instructions: instructions,
+            lang: lang,
+            slide_count: slideCount,
+            style_hint: state._selectedStylePrompt || '',
+            infographic_ratio: state._infographicRatio || 40,
+        };
+        if (state.autoTemplateMode) {
+            requestBody.auto_template = true;
+        }
+
         const response = await fetch(`/${state.jwtToken}/api/generate/infographic/stream`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                project_id: state.currentProject._id,
-                instructions: instructions,
-                lang: lang,
-                slide_count: slideCount,
-                style_hint: state._selectedStylePrompt || '',
-                infographic_ratio: state._infographicRatio || 40,
-            }),
+            body: JSON.stringify(requestBody),
             signal: _abortController.signal,
         });
 
@@ -4802,6 +5318,37 @@ function _handleInfographicStreamEvent(data) {
                 el.textContent += (data.text || '');
                 el.scrollTop = el.scrollHeight;
             }
+            break;
+        }
+
+        case 'auto_template_result': {
+            const styleName = data.style_name || 'AI 자동 디자인';
+            const style = data.style || {};
+            $('#streamingStatus').text(`스타일 "${styleName}" 생성 완료! 아웃라인을 설계하는 중...`);
+            // 스타일 정보 요약 표시
+            const colors = style.colors || {};
+            let styleHtml = `<div class="auto-template-result">`;
+            styleHtml += `<div class="auto-template-style-name">${escapeHtml(styleName)}</div>`;
+            if (style.style_description) {
+                styleHtml += `<div class="auto-template-style-desc">${escapeHtml(style.style_description)}</div>`;
+            }
+            if (colors.background || colors.accent1 || colors.accent2) {
+                styleHtml += `<div class="auto-template-colors">`;
+                if (colors.background) styleHtml += `<span class="auto-template-color-chip" style="background:${colors.background.hex}" title="${escapeHtml(colors.background.name || '')}"></span>`;
+                if (colors.text) styleHtml += `<span class="auto-template-color-chip" style="background:${colors.text.hex}" title="${escapeHtml(colors.text.name || '')}"></span>`;
+                if (colors.accent1) styleHtml += `<span class="auto-template-color-chip" style="background:${colors.accent1.hex}" title="${escapeHtml(colors.accent1.name || '')}"></span>`;
+                if (colors.accent2) styleHtml += `<span class="auto-template-color-chip" style="background:${colors.accent2.hex}" title="${escapeHtml(colors.accent2.name || '')}"></span>`;
+                styleHtml += `</div>`;
+            }
+            if (style.tone_keywords && style.tone_keywords.length > 0) {
+                styleHtml += `<div class="auto-template-keywords">${style.tone_keywords.map(k => `<span class="auto-template-keyword">${escapeHtml(k)}</span>`).join('')}</div>`;
+            }
+            styleHtml += `</div>`;
+            const el = document.getElementById('streamingContent');
+            if (el) el.innerHTML = styleHtml;
+            // 캔버스 로딩 텍스트 업데이트
+            $('#infographicLoadingTitle').text(`"${styleName}" 스타일로 생성 중`);
+            $('#infographicLoadingSub').html('아웃라인을 설계하는 중<span class="canvas-loading-dots"><span>.</span><span>.</span><span>.</span></span>');
             break;
         }
 

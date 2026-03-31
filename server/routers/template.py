@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
+from fastapi.responses import FileResponse, StreamingResponse
 from bson import ObjectId
 from datetime import datetime, timedelta
 from models.template import (
@@ -11,8 +12,11 @@ from services.auth_service import decode_jwt_token, get_user_flexible, is_admin
 from services.template_service import invalidate_template_cache
 from config import settings
 import aiofiles
+import asyncio
+import json
 import os
 import uuid
+from pathlib import Path
 
 router = APIRouter(tags=["templates"])
 
@@ -756,7 +760,148 @@ async def list_slide_styles():
     db = get_db()
     cursor = db.slide_styles.find(
         {"is_active": True},
-        {"_id": 0, "style_id": 1, "name": 1, "name_en": 1, "prompt": 1, "category": 1}
+        {"_id": 0, "style_id": 1, "name": 1, "name_en": 1, "prompt": 1, "category": 1, "sample_image": 1}
     ).sort("style_id", 1)
     styles = await cursor.to_list(length=100)
+    # sample_image가 없는 스타일에는 null 반환
+    for style in styles:
+        if "sample_image" not in style:
+            style["sample_image"] = None
     return {"styles": styles}
+
+
+@router.get("/api/slide-styles/{style_id}/sample")
+async def get_style_sample_image(style_id: int):
+    """스타일 샘플 이미지 파일 반환"""
+    upload_dir = Path(settings.UPLOAD_DIR).resolve()
+    image_path = upload_dir / "style_samples" / f"{style_id}.png"
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="샘플 이미지가 없습니다")
+    return FileResponse(str(image_path), media_type="image/png")
+
+
+@router.post("/api/slide-styles/generate-samples")
+async def generate_style_samples():
+    """모든 스타일의 샘플 이미지를 생성 (SSE 스트림)"""
+    from google import genai
+    from google.genai import types
+
+    db = get_db()
+
+    # 활성 스타일 목록 조회
+    cursor = db.slide_styles.find({"is_active": True}).sort("style_id", 1)
+    all_styles = await cursor.to_list(length=100)
+
+    # 샘플 이미지 디렉토리 생성
+    upload_dir = Path(settings.UPLOAD_DIR).resolve()
+    sample_dir = upload_dir / "style_samples"
+    sample_dir.mkdir(parents=True, exist_ok=True)
+
+    # 이미 샘플 이미지가 있는 스타일 제외
+    styles_to_generate = []
+    for style in all_styles:
+        image_path = sample_dir / f"{style['style_id']}.png"
+        if not image_path.exists():
+            styles_to_generate.append(style)
+
+    async def event_generator():
+        if not settings.GOOGLE_API_KEY:
+            yield f"data: {json.dumps({'status': 'error', 'message': 'GOOGLE_API_KEY not configured'})}\n\n"
+            return
+
+        client = genai.Client(api_key=settings.GOOGLE_API_KEY)
+        success_count = 0
+        fail_count = 0
+        total = len(styles_to_generate)
+
+        if total == 0:
+            yield f"data: {json.dumps({'status': 'complete', 'total': 0, 'success': 0, 'failed': 0, 'message': 'All styles already have sample images'})}\n\n"
+            return
+
+        for style in styles_to_generate:
+            style_id = style["style_id"]
+            style_name = style.get("name_en", style.get("name", ""))
+            style_prompt = style.get("prompt", "")
+            aspect_ratio = "16:9"
+
+            prompt = f"""Generate a presentation slide image about "NVIDIA's Next-Gen GPU Technology Innovation".
+
+This is a SAMPLE PREVIEW image showcasing the "{style_name}" style.
+
+Slide content summary:
+- NVIDIA's next-generation GPU architecture
+- Revolutionary performance improvements
+- AI and deep learning acceleration capabilities
+- Key specifications and benchmarks
+
+{style_prompt}
+
+Design this as a single complete presentation slide in {aspect_ratio} widescreen format.
+The image should clearly demonstrate the visual style described above.
+Include relevant infographic elements, icons, and data visualizations.
+"""
+
+            try:
+                # Gemini API 호출 (동기 SDK를 비동기로)
+                def _sync_generate():
+                    parts = [types.Part.from_text(text=prompt)]
+                    contents = [
+                        types.Content(role="user", parts=parts),
+                    ]
+                    generate_config = types.GenerateContentConfig(
+                        thinking_config=types.ThinkingConfig(thinking_level="HIGH"),
+                        image_config=types.ImageConfig(aspect_ratio="16:9", image_size="1K"),
+                        response_modalities=["IMAGE", "TEXT"],
+                    )
+                    data_buffer = None
+                    for chunk in client.models.generate_content_stream(
+                        model="gemini-3.1-flash-image-preview",
+                        contents=contents,
+                        config=generate_config,
+                    ):
+                        if chunk.parts is None:
+                            continue
+                        for part in chunk.parts:
+                            if part.inline_data and part.inline_data.data:
+                                data_buffer = part.inline_data.data
+                            elif part.text:
+                                print(f"[StyleSample] Gemini text for style {style_id}: {part.text[:200]}")
+                    return data_buffer
+
+                loop = asyncio.get_event_loop()
+                image_bytes = await loop.run_in_executor(None, _sync_generate)
+
+                if image_bytes:
+                    # 이미지 저장
+                    image_path = sample_dir / f"{style_id}.png"
+                    image_path.write_bytes(image_bytes)
+
+                    # MongoDB 업데이트
+                    image_url = f"/uploads/style_samples/{style_id}.png"
+                    await db.slide_styles.update_one(
+                        {"style_id": style_id},
+                        {"$set": {"sample_image": image_url, "sample_generated_at": datetime.utcnow()}}
+                    )
+
+                    success_count += 1
+                    done_count = success_count + fail_count
+                    print(f"[StyleSample] Style {style_id} ({style_name}) 샘플 이미지 생성 완료")
+                    yield f"data: {json.dumps({'style_id': style_id, 'status': 'done', 'image_url': image_url, 'done': done_count, 'total': total})}\n\n"
+                else:
+                    fail_count += 1
+                    done_count = success_count + fail_count
+                    print(f"[StyleSample] Style {style_id} ({style_name}) 이미지 데이터 없음")
+                    yield f"data: {json.dumps({'style_id': style_id, 'status': 'error', 'image_url': None, 'done': done_count, 'total': total})}\n\n"
+
+            except Exception as e:
+                fail_count += 1
+                done_count = success_count + fail_count
+                print(f"[StyleSample] Style {style_id} ({style_name}) 생성 실패: {e}")
+                import traceback
+                traceback.print_exc()
+                yield f"data: {json.dumps({'style_id': style_id, 'status': 'error', 'image_url': None, 'done': done_count, 'total': total})}\n\n"
+
+        # 완료 이벤트
+        yield f"data: {json.dumps({'status': 'complete', 'total': total, 'success': success_count, 'failed': fail_count})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

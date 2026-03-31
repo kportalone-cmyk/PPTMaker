@@ -1434,6 +1434,55 @@ $(window).on('resize', function () {
     scaleCanvas();
 });
 
+// ============ AI 스타일 샘플 생성 ============
+async function generateStyleSamplesAdmin() {
+    const btn = document.getElementById('btnGenStyleSamples');
+    if (!btn || btn.disabled) return;
+
+    const svgHtml = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 2.5l2.5 4h-5L8 3.5zM4.5 9h7l-1 3.5h-5L4.5 9z"/></svg>';
+
+    if (!confirm('49개 AI 이미지 스타일의 샘플 이미지를 생성합니다.\n이미 생성된 스타일은 건너뜁니다.\n\n진행하시겠습니까?')) return;
+
+    btn.disabled = true;
+    btn.innerHTML = svgHtml + ' 생성 중...';
+
+    try {
+        const res = await fetch('/api/slide-styles/generate-samples', { method: 'POST' });
+        if (!res.ok) throw new Error('API 호출 실패');
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const evt = JSON.parse(line.slice(6));
+                        if (evt.done !== undefined && evt.total !== undefined) {
+                            btn.innerHTML = svgHtml + ` ${evt.done}/${evt.total} 생성 중...`;
+                        }
+                        if (evt.status === 'complete') {
+                            alert(`샘플 생성 완료!\n성공: ${evt.success}개, 실패: ${evt.failed}개`);
+                        }
+                    } catch (_) {}
+                }
+            }
+        }
+    } catch (e) {
+        console.error('generateStyleSamplesAdmin error:', e);
+        alert('샘플 생성 중 오류가 발생했습니다: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = svgHtml + ' AI 샘플 생성';
+    }
+}
+
 // ============ 격자 ============
 const GRID_LEVELS = [
     { size: 50, cls: 'grid-50', label: '격자 50' },

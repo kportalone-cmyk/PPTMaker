@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from bson import ObjectId
 from datetime import datetime
-from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest, DocxModifyRequest, DocxPrepareRequest, RewriteRequest, TranslateProjectRequest, HtmlReportGenerateRequest, InfographicGenerateRequest
+from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest, DocxModifyRequest, DocxPrepareRequest, RewriteRequest, TranslateProjectRequest, HtmlReportGenerateRequest, InfographicGenerateRequest, AiSlideGenerateRequest
 from services.mongo_service import get_db
 from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible, get_user_by_key
 from services import redis_service
@@ -11,12 +11,12 @@ from services.template_service import recommend_slide, get_template_slides
 from services.ppt_service import generate_pptx
 from services.excel_service import generate_xlsx, auto_generate_chart_definition
 from services.word_service import generate_docx, create_empty_docx, extract_docx_template_structure
-from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content, generate_excel_content_stream, modify_excel_content_stream, generate_docx_content_stream, rewrite_text_stream, generate_html_report_stream, generate_html_report_outline_stream, generate_html_report_css_stream, generate_html_page_content
+from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content, generate_excel_content_stream, modify_excel_content_stream, generate_docx_content_stream, rewrite_text_stream, generate_html_report_stream, generate_html_report_outline_stream, generate_html_report_css_stream, generate_html_page_content, _call_claude_api
 from services.search_service import search_web
-from services.infographic_service import generate_infographic_image, generate_infographic_batch
+from services.infographic_service import generate_infographic_image, generate_infographic_batch, generate_bg_image
 from services.onlyoffice_service import create_onlyoffice_document
 from services.file_service import extract_excel_structure
-from routers.prompt import get_prompt_content
+from routers.prompt import get_prompt_content, get_prompt_model
 from config import settings
 import os
 import uuid
@@ -716,23 +716,30 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
     await redis_service.clear_generation_cancel(data.project_id)
 
     # 프로젝트 상태 업데이트
+    update_proj = {
+        "instructions": data.instructions,
+        "status": "generating",
+        "generation_id": generation_id,
+        "infographic_mode": True,
+        "updated_at": datetime.utcnow(),
+    }
+    if data.auto_template:
+        update_proj["auto_template"] = True
     await db.projects.update_one(
         {"_id": ObjectId(data.project_id)},
-        {"$set": {
-            "instructions": data.instructions,
-            "status": "generating",
-            "generation_id": generation_id,
-            "infographic_mode": True,
-            "updated_at": datetime.utcnow(),
-        }}
+        {"$set": update_proj}
     )
 
     def _sse(event: str, payload: dict) -> str:
         return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False, default=str)}\n\n"
 
     async def event_stream():
+        style_hint = data.style_hint or ""
+
         try:
-            if web_search_performed:
+            if data.auto_template:
+                yield _sse("start", {"message": "AI가 최적의 디자인 스타일을 분석하고 있습니다..."})
+            elif web_search_performed:
                 yield _sse("start", {"message": "웹 검색으로 자료를 수집하여 아웃라인을 설계하고 있습니다..."})
             else:
                 yield _sse("start", {"message": "AI가 인포그래픽 아웃라인을 설계하고 있습니다..."})
@@ -742,6 +749,52 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
                 yield _sse("stopped", {"message": "생성이 중단되었습니다."})
                 await _set_stopped(db, data.project_id)
                 return
+
+            # Phase 0 (auto_template): AI 자동 디자인 스타일 생성
+            if data.auto_template:
+                yield _sse("delta", {"text": "디자인 스타일을 생성하는 중...\n"})
+                try:
+                    auto_system = await get_prompt_content("auto_template_system")
+                    auto_user_tpl = await get_prompt_content("auto_template_user")
+                    # 리소스 텍스트는 최대 3000자로 제한 (디자인 분석용)
+                    resource_excerpt = combined_text[:3000]
+                    auto_user = auto_user_tpl.format(
+                        resources_text=resource_excerpt,
+                        instructions=data.instructions or "없음",
+                    )
+                    auto_model = await get_prompt_model("auto_template_system")
+                    effective_auto_model = auto_model or "claude-sonnet-4-6"
+                    auto_result = await _call_claude_api(auto_system, auto_user, model=effective_auto_model)
+
+                    # JSON 파싱
+                    import re
+                    json_match = re.search(r'```json\s*(.*?)\s*```', auto_result, re.DOTALL)
+                    if json_match:
+                        auto_json = json.loads(json_match.group(1))
+                    else:
+                        auto_json = json.loads(auto_result)
+
+                    # style_prompt 추출 → style_hint로 사용
+                    generated_style = auto_json.get("style_prompt", "")
+                    style_name = auto_json.get("style_name", "")
+                    if generated_style:
+                        style_hint = generated_style
+                    yield _sse("auto_template_result", {
+                        "style_name": style_name,
+                        "style": auto_json,
+                    })
+                    print(f"[AutoTemplate] 디자인 스타일 생성 완료: {style_name}")
+                except Exception as e:
+                    print(f"[AutoTemplate] 디자인 생성 실패 (기본 스타일로 진행): {e}")
+                    yield _sse("delta", {"text": f"디자인 분석 실패 (기본 스타일로 진행)\n"})
+
+                # 취소 체크
+                if await _check_cancelled(db, data.project_id, generation_id):
+                    yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                    await _set_stopped(db, data.project_id)
+                    return
+
+                yield _sse("delta", {"text": "아웃라인을 설계하는 중...\n"})
 
             # Phase 1: Claude로 아웃라인 생성 (스트리밍)
             # 인포그래픽 전용 지침 추가: 첫 번째 아웃라인은 전체 대표 타이틀, 나머지는 보고서 형태 요약
@@ -820,7 +873,7 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
             generated = []
             async for img_result in generate_infographic_batch(
                 llm_slides,
-                style_hint=data.style_hint,
+                style_hint=style_hint,
                 aspect_ratio="16:9",
                 infographic_ratio=data.infographic_ratio,
             ):
@@ -928,6 +981,370 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
             "Connection": "keep-alive",
         }
     )
+
+
+@router.post("/{jwt_token}/api/generate/ai-slide/stream")
+async def generate_ai_slide_stream(jwt_token: str, data: AiSlideGenerateRequest):
+    """AI 슬라이드 생성 - 편집 가능한 개별 오브젝트 구성 SSE 스트리밍"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    # 기존 생성 슬라이드 삭제
+    await db.generated_slides.delete_many({"project_id": data.project_id})
+    await db.slide_locks.delete_many({"project_id": data.project_id})
+    await db.slide_history.delete_many({"project_id": data.project_id})
+    await redis_service.delete_project_locks(data.project_id)
+
+    # 리소스 텍스트 수집
+    cursor = db.resources.find({"project_id": data.project_id})
+    all_content = []
+    async for r in cursor:
+        if r.get("resource_type") == "image":
+            img_desc = r.get("content", "")
+            if img_desc:
+                img_title = r.get("title") or r.get("original_filename") or "이미지"
+                all_content.append(f"[이미지: {img_title}]\n{img_desc}")
+            continue
+        if r.get("content"):
+            all_content.append(r["content"])
+        elif r.get("title"):
+            all_content.append(f"[{r['title']}]")
+    combined_text = "\n\n".join(all_content)
+
+    # 리소스가 없으면 지침으로 자동 웹 검색
+    web_search_performed = False
+    if not combined_text.strip():
+        if not data.instructions.strip():
+            raise HTTPException(status_code=400, detail="리소스 또는 지침을 입력하세요.")
+        search_result = await search_web(data.instructions)
+        pages = search_result.get("pages", [])
+        if pages:
+            search_contents = []
+            search_sources = []
+            for page in pages:
+                title = page.get("title", "")
+                content = page.get("content", "")
+                url = page.get("url", "")
+                if content:
+                    search_contents.append(f"[{title}]\n{content}")
+                    if url:
+                        search_sources.append(url)
+            combined_text = "\n\n".join(search_contents)
+            if combined_text.strip():
+                await db.resources.insert_one({
+                    "project_id": data.project_id,
+                    "resource_type": "web",
+                    "title": f"자동 웹 검색: {data.instructions[:50]}",
+                    "content": combined_text,
+                    "sources": search_sources,
+                    "created_at": datetime.utcnow(),
+                })
+                web_search_performed = True
+
+    if not combined_text.strip():
+        raise HTTPException(status_code=400, detail="리소스에 텍스트 내용이 없습니다.")
+
+    # 인포그래픽용 간이 아웃라인 메타
+    dummy_meta = [{
+        "slide_index": 0,
+        "slide_meta": {"content_type": "body", "has_title": True},
+        "placeholders": [
+            {"placeholder": "auto_title_0", "role": "title"},
+            {"placeholder": "auto_description_0", "role": "description"},
+        ],
+    }]
+
+    generation_id = str(uuid.uuid4())
+    await redis_service.clear_generation_cancel(data.project_id)
+
+    style_hint = data.style_hint or ""
+
+    # 프로젝트 상태 업데이트
+    await db.projects.update_one(
+        {"_id": ObjectId(data.project_id)},
+        {"$set": {
+            "instructions": data.instructions,
+            "status": "generating",
+            "generation_id": generation_id,
+            "ai_slide_mode": True,
+            "updated_at": datetime.utcnow(),
+        }}
+    )
+
+    def _sse(event: str, payload: dict) -> str:
+        return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False, default=str)}\n\n"
+
+    async def event_stream():
+        try:
+            yield _sse("start", {"message": "AI가 슬라이드를 설계하고 있습니다..."})
+
+            # 취소 체크
+            if await _check_cancelled(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            # Phase 1: 아웃라인 생성 (스트리밍)
+            infographic_instruction = await get_prompt_content("infographic_outline_instruction")
+            ai_slide_instructions = (data.instructions or "") + infographic_instruction
+
+            llm_result = None
+            chunk_count = 0
+            cancelled = False
+            async for event_type, event_data in generate_slide_content_stream(
+                combined_text, ai_slide_instructions, dummy_meta, data.lang,
+                slide_count=data.slide_count,
+            ):
+                if event_type == "delta":
+                    yield _sse("delta", {"text": event_data})
+                    chunk_count += 1
+                    if chunk_count % 50 == 0:
+                        if await _check_cancelled(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
+                elif event_type == "result":
+                    llm_result = event_data
+
+            if cancelled:
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            if not llm_result:
+                yield _sse("error", {"message": "아웃라인 생성 실패"})
+                return
+
+            yield _sse("parsing", {"message": "아웃라인을 분석하고 있습니다..."})
+
+            raw_slides = llm_result.get("raw_slides", [])
+            if raw_slides:
+                outline_items = []
+                for rs in raw_slides:
+                    slide_type = rs.get("type", "content")
+                    title = rs.get("title", "") or rs.get("section_title", "")
+                    items = rs.get("items", [])
+                    oi = {
+                        "type": slide_type,
+                        "title": title,
+                        "items_count": len(items),
+                        "items": items,
+                        "subtitle": rs.get("subtitle", ""),
+                    }
+                    outline_items.append(oi)
+                yield _sse("outline", {"slides": outline_items})
+
+            # Phase 2: 디자인 스타일 생성
+            yield _sse("delta", {"text": "\n디자인 스타일을 생성하는 중...\n"})
+            design_style = {}
+            try:
+                auto_system = await get_prompt_content("auto_template_system")
+                auto_user_tpl = await get_prompt_content("auto_template_user")
+                resource_excerpt = combined_text[:3000]
+                auto_user = auto_user_tpl.format(
+                    resources_text=resource_excerpt,
+                    instructions=data.instructions or "없음",
+                )
+                auto_model = await get_prompt_model("auto_template_system")
+                effective_auto_model = auto_model or "claude-sonnet-4-6"
+                auto_result = await _call_claude_api(auto_system, auto_user, model=effective_auto_model)
+
+                import re as _re
+                json_match = _re.search(r'```json\s*(.*?)\s*```', auto_result, _re.DOTALL)
+                if json_match:
+                    design_style = json.loads(json_match.group(1))
+                else:
+                    design_style = json.loads(auto_result)
+
+                if design_style.get("style_prompt"):
+                    style_hint = design_style["style_prompt"]
+
+                yield _sse("auto_template_result", {
+                    "style_name": design_style.get("style_name", ""),
+                    "style": design_style,
+                })
+            except Exception as e:
+                print(f"[AI Slide] 디자인 스타일 생성 실패: {e}")
+                yield _sse("delta", {"text": "디자인 분석 실패 (기본 스타일로 진행)\n"})
+
+            if await _check_cancelled(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            # Phase 3: 레이아웃 설계
+            yield _sse("delta", {"text": "슬라이드 레이아웃을 설계하는 중...\n"})
+
+            llm_slides = raw_slides if raw_slides else llm_result.get("slides", [])
+            outline_json = json.dumps(llm_slides, ensure_ascii=False)
+            design_style_str = json.dumps(design_style, ensure_ascii=False) if design_style else "{}"
+
+            lang_instruction = ""
+            if data.lang:
+                lang_instruction = f"모든 텍스트를 {data.lang} 언어로 작성하세요."
+
+            layout_system = await get_prompt_content("ai_slide_layout_system")
+            layout_user_tpl = await get_prompt_content("ai_slide_layout_user")
+
+            layout_system = layout_system.replace("{lang_instruction}", lang_instruction)
+            layout_user = layout_user_tpl.format(
+                outline_json=outline_json,
+                design_style=design_style_str,
+                lang_instruction=lang_instruction,
+            )
+
+            layout_model = await get_prompt_model("ai_slide_layout_system")
+            effective_layout_model = layout_model or "claude-sonnet-4-6"
+
+            layout_result = await _call_claude_api(layout_system, layout_user, model=effective_layout_model)
+
+            # JSON 파싱
+            layout_data = None
+            try:
+                import re as _re
+                json_match = _re.search(r'```json\s*(.*?)\s*```', layout_result, _re.DOTALL)
+                if json_match:
+                    layout_data = json.loads(json_match.group(1))
+                else:
+                    layout_data = json.loads(layout_result)
+            except Exception as e:
+                print(f"[AI Slide] 레이아웃 JSON 파싱 실패: {e}")
+                yield _sse("error", {"message": "레이아웃 설계 실패"})
+                return
+
+            layout_slides = layout_data.get("slides", [])
+            total_slides = len(layout_slides)
+
+            if total_slides == 0:
+                yield _sse("error", {"message": "레이아웃 설계 결과가 비어있습니다"})
+                return
+
+            yield _sse("ai_slide_start", {
+                "total": total_slides,
+                "message": "배경 이미지를 생성하고 있습니다..."
+            })
+
+            # Phase 4: 배경 이미지 생성 + 오브젝트 조립
+            reference_bg_bytes = None
+
+            for idx, layout_slide in enumerate(layout_slides):
+                if await _check_cancelled(db, data.project_id, generation_id):
+                    yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                    await _set_stopped(db, data.project_id)
+                    return
+
+                bg_prompt = layout_slide.get("background_prompt", "Abstract dark gradient background, professional, modern")
+                slide_type = layout_slide.get("slide_type", "content")
+                objects = layout_slide.get("objects", [])
+
+                # 배경 이미지 생성
+                bg_url, bg_bytes = await generate_bg_image(
+                    bg_prompt=bg_prompt,
+                    style_hint=style_hint,
+                    aspect_ratio="16:9",
+                    reference_image=reference_bg_bytes if idx > 1 else None,
+                )
+
+                # 두 번째 슬라이드의 배경을 참조 이미지로 보관
+                if idx == 1 and bg_bytes:
+                    reference_bg_bytes = bg_bytes
+
+                # 오브젝트 조립
+                gen_objects = []
+
+                # z_index 부여
+                z = 1
+                for obj in objects:
+                    obj_type = obj.get("obj_type", "text")
+                    gen_obj = {
+                        "obj_type": obj_type,
+                        "x": obj.get("x", 0),
+                        "y": obj.get("y", 0),
+                        "width": obj.get("width", 100),
+                        "height": obj.get("height", 50),
+                        "z_index": z,
+                    }
+                    z += 1
+
+                    if obj_type == "text":
+                        gen_obj["role"] = obj.get("role", "")
+                        gen_obj["generated_text"] = obj.get("generated_text", "")
+                        gen_obj["text_content"] = obj.get("generated_text", "")
+                        gen_obj["text_style"] = obj.get("text_style", {
+                            "font_size": 14,
+                            "color": "#FFFFFF",
+                            "align": "left",
+                        })
+                        # placeholder 매핑
+                        role = obj.get("role", "")
+                        if role:
+                            gen_obj["placeholder"] = role
+                    elif obj_type == "shape":
+                        gen_obj["shape_style"] = obj.get("shape_style", {
+                            "type": "rect",
+                            "fill": "#00000040",
+                        })
+                    elif obj_type == "chart":
+                        gen_obj["chart_style"] = obj.get("chart_style", {})
+
+                    gen_objects.append(gen_obj)
+
+                # items 추출 (heading/detail 쌍)
+                items = []
+                if idx < len(llm_slides):
+                    orig_items = llm_slides[idx].get("items", [])
+                    for item in orig_items:
+                        if isinstance(item, dict):
+                            items.append({
+                                "heading": item.get("heading", ""),
+                                "detail": item.get("detail", ""),
+                            })
+
+                gen_slide = {
+                    "project_id": data.project_id,
+                    "template_slide_id": "ai_slide",
+                    "order": idx + 1,
+                    "objects": gen_objects,
+                    "items": items,
+                    "background_image": bg_url,
+                    "ai_slide": True,
+                    "created_at": datetime.utcnow(),
+                }
+
+                result = await db.generated_slides.insert_one(gen_slide)
+                gen_slide["_id"] = str(result.inserted_id)
+
+                # 클라이언트로 슬라이드 전송
+                slide_data = {
+                    "_id": gen_slide["_id"],
+                    "order": idx + 1,
+                    "objects": gen_objects,
+                    "items": items,
+                    "background_image": bg_url,
+                    "ai_slide": True,
+                }
+
+                yield _sse("slide", {"slide": slide_data, "index": idx, "total": total_slides})
+
+            # 완료
+            await db.projects.update_one(
+                {"_id": ObjectId(data.project_id)},
+                {"$set": {"status": "generated", "updated_at": datetime.utcnow()}}
+            )
+            yield _sse("complete", {
+                "message": f"{total_slides}장의 AI 슬라이드가 생성되었습니다.",
+                "total": total_slides,
+            })
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            yield _sse("error", {"message": f"슬라이드 생성 중 오류: {str(e)}"})
+            await db.projects.update_one(
+                {"_id": ObjectId(data.project_id)},
+                {"$set": {"status": "error", "updated_at": datetime.utcnow()}}
+            )
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.post("/{jwt_token}/api/generate/manual-slide")

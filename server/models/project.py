@@ -110,6 +110,16 @@ class InfographicGenerateRequest(BaseModel):
     slide_count: str = "auto"
     style_hint: str = ""  # 인포그래픽 스타일 힌트
     infographic_ratio: int = 40  # 인포그래픽 비율 (%) - 기본 40%
+    auto_template: bool = False  # AI 자동 디자인 모드
+
+
+class AiSlideGenerateRequest(BaseModel):
+    project_id: str
+    instructions: str = ""
+    lang: str = ""
+    slide_count: str = "auto"
+    style_hint: str = ""
+    ai_slide_style_id: Optional[int] = None  # 선택한 스타일 ID
 
 
 class HtmlReportGenerateRequest(BaseModel):

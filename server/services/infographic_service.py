@@ -103,23 +103,21 @@ async def _build_image_prompt(
     # 콘텐츠 요약 (이미지 생성에 적합한 분량으로 제한)
     content_summary = content[:600] if content else ""
 
-    # 첫 번째 슬라이드: 배경/장식용 인포그래픽 이미지 (텍스트 없음, 타이틀은 별도 오브젝트로 오버레이)
+    # 첫 번째 슬라이드: 심플한 인포그래픽 커버 (제목+부제목만 포함)
     if slide_number == 1:
         infographic_ratio = (
-            "⚡ THIS IS A COVER SLIDE BACKGROUND IMAGE — it must contain ABSOLUTELY NO TEXT whatsoever. "
-            "No title, no subtitle, no labels, no captions, no numbers, no letters — ZERO text of any kind. "
-            "Design requirements for this background image: "
-            "- This image will be used as a BACKGROUND behind separately overlaid title/subtitle text objects. "
-            "- The CENTER and UPPER area (top 50-60%) should be relatively CLEAN with only subtle, dark-toned "
-            "  design elements (soft gradients, gentle geometric patterns, faint abstract shapes) so that white text "
-            "  overlaid on top remains highly readable. "
-            "- The LOWER portion (bottom 30-40%) and EDGES can have rich, vibrant infographic visual elements: "
-            "  abstract data visualization graphics, geometric shapes, icon clusters, flowing lines, "
-            "  gradient overlays, circuit-like patterns, and decorative design accents. "
-            "- Use a dark, professional color scheme (deep navy, dark blue-gray gradients) as the base. "
-            "- The overall feel should be a premium, professional presentation cover slide background. "
-            "- Think of it as a high-end corporate keynote backdrop — elegant, modern, and visually striking "
-            "  but designed to let overlaid text be the focal point."
+            "⚡ THIS IS A COVER SLIDE — a simple, clean infographic style. "
+            "Design requirements: "
+            "- Include ONLY the presentation title and subtitle text — no other text content. "
+            "- Use simple, minimal infographic visual elements: a few clean icons, subtle geometric shapes, "
+            "  thin divider lines, and gentle gradient backgrounds. "
+            "- Keep the layout spacious and uncluttered — lots of whitespace/breathing room. "
+            "- The title should be prominently displayed in the center-upper area. "
+            "- The subtitle should appear below the title in a smaller, lighter style. "
+            "- Add a few tasteful decorative elements (abstract shapes, simple icons related to the topic) "
+            "  but keep them minimal and non-distracting. "
+            "- Professional, modern, corporate presentation feel — think elegant simplicity. "
+            "- Dark or gradient background with clean white/light text."
         )
     else:
         text_pct = 100 - infographic_pct
@@ -135,12 +133,13 @@ async def _build_image_prompt(
 
     pres_context = f' for a presentation about "{presentation_title}"' if presentation_title else ""
 
-    # 첫 번째 슬라이드는 완전히 다른 프롬프트 사용 (순수 배경 이미지)
+    # 첫 번째 슬라이드: 심플한 인포그래픽 커버 (제목+부제목)
     if slide_number == 1:
         prompt_template = await get_prompt_content("infographic_cover_image")
         prompt = prompt_template.format(
             pres_context=pres_context,
             title=title,
+            content_summary=content_summary,
             infographic_ratio=infographic_ratio,
             aspect_ratio=aspect_ratio,
         )
@@ -206,7 +205,7 @@ async def _call_gemini_image_api(prompt: str, reference_image: bytes | None = No
 
     generate_config = types.GenerateContentConfig(
         thinking_config=types.ThinkingConfig(
-            thinking_level="MINIMAL",
+            thinking_level="HIGH",
         ),
         image_config=types.ImageConfig(
             aspect_ratio="16:9",
@@ -417,3 +416,52 @@ async def generate_infographic_batch(
             next_yield += 1
 
     print(f"[Infographic] 전체 {total}장 생성 완료")
+
+
+async def generate_bg_image(
+    bg_prompt: str,
+    style_hint: str = "",
+    aspect_ratio: str = "16:9",
+    reference_image: bytes | None = None,
+) -> tuple[str | None, bytes | None]:
+    """
+    배경 이미지만 생성 (텍스트 없이 추상적/테마 배경).
+    AI 슬라이드 모드에서 사용.
+    """
+    if not settings.GOOGLE_API_KEY:
+        return None, None
+
+    prompt_template = await get_prompt_content("ai_slide_bg_image")
+    style_section = ""
+    if style_hint:
+        style_section = f"\nStyle guide: {style_hint}"
+
+    prompt = prompt_template.format(
+        bg_prompt=bg_prompt,
+        style_hint=style_section,
+        aspect_ratio=aspect_ratio,
+    )
+
+    if reference_image:
+        prompt += (
+            "\n\n⚠️ STYLE REFERENCE: A reference background image is attached. "
+            "Match its color palette, mood, and visual style exactly. "
+            "Only change the specific visual elements described above."
+        )
+
+    print(f"[AI Slide BG] 배경 이미지 생성: {bg_prompt[:80]}...")
+
+    try:
+        image_bytes, file_ext = await _call_gemini_image_api(prompt, reference_image=reference_image)
+        if not image_bytes:
+            return None, None
+
+        ext = file_ext or ".png"
+        filename = f"bg_{uuid.uuid4().hex}{ext}"
+        filepath = INFOGRAPHIC_DIR / filename
+        filepath.write_bytes(image_bytes)
+
+        return f"/uploads/infographics/{filename}", image_bytes
+    except Exception as e:
+        print(f"[AI Slide BG] 배경 이미지 생성 실패: {e}")
+        return None, None

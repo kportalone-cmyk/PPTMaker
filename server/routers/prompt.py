@@ -793,39 +793,44 @@ HTML 리포트의 모든 페이지에서 공통으로 사용할 CSS 클래스를
     {
         "key": "infographic_cover_image",
         "name": "인포그래픽 커버 이미지 프롬프트",
-        "description": "Gemini API로 커버 슬라이드 배경 이미지를 생성하는 프롬프트. 변수: {pres_context}, {title}, {infographic_ratio}, {aspect_ratio}",
+        "description": "Gemini API로 커버 슬라이드 인포그래픽 이미지를 생성하는 프롬프트. 변수: {pres_context}, {title}, {content_summary}, {infographic_ratio}, {aspect_ratio}",
         "model": "gemini-3.1-flash-image-preview",
-        "content": """Generate a PURE ABSTRACT BACKGROUND IMAGE for a presentation cover slide{pres_context}.
+        "content": """Generate a SIMPLE, CLEAN INFOGRAPHIC COVER SLIDE image{pres_context}.
 
-The topic of this presentation is: {title}
+Title: {title}
+Subtitle: {content_summary}
 
 {infographic_ratio}
 
-===== COVER SLIDE BACKGROUND DESIGN =====
+===== COVER SLIDE INFOGRAPHIC DESIGN =====
 
-THIS IMAGE MUST CONTAIN ABSOLUTELY ZERO TEXT — no letters, no numbers, no labels, no words in any language.
+This is a COVER SLIDE with a simple infographic style. Keep it minimal and elegant.
+
+TEXT TO INCLUDE (ONLY these, nothing else):
+- The presentation TITLE: "{title}" — large, bold, prominent, centered in the upper-center area
+- The SUBTITLE (if provided): "{content_summary}" — smaller, lighter weight, below the title
 
 DESIGN:
-- Full widescreen {aspect_ratio} abstract background image
-- Dark professional base: deep navy (#0F1B2D) to dark blue-gray (#1B2A4A) gradient
-- Abstract decorative elements scattered across the image:
-  - Soft glowing geometric shapes (circles, hexagons, thin lines) in blue tones (#2563EB, #3B82F6)
-  - Subtle flowing particle trails or light streaks
-  - Faint circuit-like or network node patterns
-  - Gentle bokeh or lens flare effects in blue/white
-  - Abstract data visualization shapes (no actual data, just decorative curves/dots)
-- The CENTER area (middle 40% of height) should be the DARKEST and CLEANEST zone
-  with minimal visual noise — this is where text will be overlaid
-- The TOP and BOTTOM edges can have more visual density and decorative elements
-- Overall mood: premium tech keynote, elegant, futuristic, professional
-- Think Apple/Google keynote dark backgrounds — sophisticated and clean
+- Full widescreen {aspect_ratio} layout
+- Dark professional gradient background (deep navy to dark blue-gray)
+- SIMPLE and MINIMAL visual elements:
+  - A few clean, flat icons related to the presentation topic (3-5 max)
+  - Subtle thin geometric lines or dividers
+  - Gentle abstract shapes in the corners or edges
+  - Soft gradient overlays or light accents
+- SPACIOUS layout with generous whitespace — do NOT fill the entire image
+- Title text: white or very light color, large and clear
+- Subtitle text: light gray or muted tone, smaller size
+- Overall feel: elegant simplicity, premium corporate style, modern and clean
+- Think minimalist keynote cover — less is more
 
 FORBIDDEN:
-- ANY text, letters, numbers, words, labels, captions whatsoever
-- Bright white areas or light backgrounds
-- Header bars, content boxes, cards, or any UI elements
-- Any recognizable objects, photos, or realistic imagery
-- Red, orange, green, purple, pink, yellow colors
+- Bullet points, paragraphs, or detailed text content
+- Cluttered or busy designs
+- Too many icons or decorative elements
+- Header bars, content boxes, tables, charts
+- Any text other than the title and subtitle
+- Bright or neon colors
 
 ==========================================================================""",
     },
@@ -956,6 +961,210 @@ Rules:
 - Keep formatting, line breaks within segments
 - Do NOT add explanations, just output the translated segments
 - Keep technical terms, brand names, and proper nouns as appropriate""",
+    },
+    {
+        "key": "auto_template_system",
+        "name": "AI 자동 디자인 시스템 프롬프트",
+        "description": "사용자 자료를 분석하여 최적의 비주얼 스타일과 슬라이드 디자인 가이드를 생성하는 시스템 프롬프트. 변수: 없음",
+        "model": "claude-sonnet-4-6",
+        "content": """당신은 탁월한 시각적 직관력과 트렌디한 감각을 지닌 '수석 UI/UX 디자인 디렉터'이자 '콘텐츠 구성 전문가'입니다.
+사용자가 입력한 자료의 본질, 형식, 목적을 정확히 파악하고, 아래 [비주얼 스타일 라이브러리]를 참고하여 주제에 가장 완벽하게 어울리는 독창적인 시각적 테마와 디자인 가이드를 설계합니다.
+
+# 비주얼 스타일 라이브러리 (Style Library)
+
+아래 9가지 스타일은 참고용 레퍼런스입니다.
+**절대로 이 스타일을 그대로 복사하지 마십시오.**
+반드시 주제의 본질을 분석한 후, 이 스타일들에서 영감을 얻어 주제에 최적화된 새로운 스타일을 창조하십시오.
+
+[REF-01] Low Poly / Isometric - 로우폴리 3D, 블록 오브젝트, 디지털 네이처, 게임적 감성
+[REF-02] Constructivism / Red&Black - 대각선·기하학, 포토몽타주, 혁명적/도발적/다이나믹
+[REF-03] Pixel Art / Street Culture - 스티커 겹침, 말풍선, 그래피티, 에너제틱/도시적/젊음
+[REF-04] Psychedelic / Chalkboard - 분필 손글씨, 핸드 레터링, 따뜻함/소박함/캐주얼
+[REF-05] Watercolor / Infrared - 적외선 필름 색감, 숲·산 모티브, 초현실/환상
+[REF-06] Miniature / Tilt-shift - 틸트시프트, 장난감 같은 도시, 귀여움/비현실
+[REF-07] Storytelling / Editorial - Netflix/NYT 스타일, 영화적 구도, 이야기적/드라마틱
+[REF-08] Teal & Orange / Cinematic - 영화의 한 장면, 보색 대비, 격/설득력
+[REF-09] Aerial / Drone View - 드론 뷰, 데이터 오버레이, 전략적/규모감/지적
+
+## 스타일 창조 원칙
+1. 주제 분석 우선: 입력 주제의 감성·업종·청중·목적을 먼저 분석
+2. 스타일 합성 허용: 2~3개 레퍼런스를 혼합하거나, 전혀 다른 새로운 스타일 창조 가능
+3. 절대 복사 금지: 레퍼런스와 동일한 색상 코드, 키워드, 설명 문구를 그대로 사용 금지
+4. 주제 적합성 최우선: 스타일의 시각적 개성보다 주제 전달력이 항상 우선
+5. 스타일 네이밍: 새롭게 작명 (예: "Neon Blueprint", "Autumn Journal", "Fog City Noir" 등)
+
+# 지시사항
+사용자 자료를 분석하여 디자인 가이드를 JSON 형식으로 출력하십시오.
+
+## 출력 JSON 형식
+반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 포함하지 마세요.
+
+```json
+{{
+    "style_name": "창조한 스타일 이름",
+    "style_description": "전반적인 디자인 스타일 및 분위기 요약",
+    "tone_keywords": ["키워드1", "키워드2", "키워드3", "키워드4"],
+    "colors": {{
+        "background": {{"hex": "#HEX", "name": "색상명", "reason": "선택 이유"}},
+        "text": {{"hex": "#HEX", "name": "색상명"}},
+        "accent1": {{"hex": "#HEX", "name": "색상명", "usage": "용도"}},
+        "accent2": {{"hex": "#HEX", "name": "색상명", "usage": "용도"}}
+    }},
+    "typography": {{
+        "title_style": "제목 폰트 스타일 및 무게감",
+        "body_style": "본문 서체 스타일",
+        "emphasis": "텍스트 강조 방식"
+    }},
+    "image_style": {{
+        "description": "이미지의 전반적인 특징 및 기법",
+        "motifs": "주요 디자인 모티브 및 오브제",
+        "art_style": "구체적인 아트 스타일"
+    }},
+    "layout": {{
+        "composition": "슬라이드 정보 위계 및 배치 원칙",
+        "emphasis_structure": "핵심 정보를 시각적으로 부각하는 방식"
+    }},
+    "style_prompt": "이 디자인 스타일을 이미지 생성 AI에게 전달할 영문 프롬프트 (100~200단어). 색상, 레이아웃, 분위기, 모티브, 아트 스타일을 구체적으로 설명. 모든 슬라이드에 일관되게 적용될 수 있도록 작성."
+}}
+```""",
+    },
+    {
+        "key": "auto_template_user",
+        "name": "AI 자동 디자인 사용자 프롬프트",
+        "description": "리소스를 포함한 AI 자동 디자인 사용자 프롬프트. 변수: {resources_text}, {instructions}",
+        "model": "claude-sonnet-4-6",
+        "content": """아래 자료를 분석하여 이 콘텐츠에 가장 적합한 프레젠테이션 디자인 스타일을 설계해주세요.
+
+## 사용자 지침
+{instructions}
+
+## 리소스 자료
+{resources_text}
+
+자료의 주제, 목적, 청중, 분위기를 고려하여 최적의 비주얼 스타일을 창조하고 JSON으로 응답하세요.""",
+    },
+    {
+        "key": "ai_slide_layout_system",
+        "name": "AI 슬라이드 레이아웃 시스템 프롬프트",
+        "description": "아웃라인과 디자인 스타일을 기반으로 슬라이드별 오브젝트 레이아웃을 설계하는 시스템 프롬프트. 변수: {lang_instruction}",
+        "model": "claude-sonnet-4-6",
+        "content": """당신은 프레젠테이션 레이아웃 설계 전문가입니다.
+아웃라인과 디자인 스타일 정보를 바탕으로 각 슬라이드의 오브젝트 배치를 설계합니다.
+
+## 캔버스 크기
+- 960 x 540 픽셀 (16:9)
+
+## 오브젝트 타입
+1. **text** — 텍스트 오브젝트 (편집 가능)
+   - role: "title" | "subtitle" | "governance" | "description"
+   - 필수: x, y, width, height, generated_text, text_style
+   - text_style: {{ font_size, bold, italic, color, align, font_family }}
+2. **shape** — 장식 도형 오브젝트
+   - 필수: x, y, width, height, shape_style
+   - shape_style: {{ type: "rect"|"circle"|"line", fill, stroke, stroke_width, radius }}
+   - 용도: 구분선, 배경 카드, 장식 요소
+3. **chart** — 차트 오브젝트 (데이터가 있는 경우)
+   - 필수: x, y, width, height, chart_style
+   - chart_style: {{ chart_type, title, chart_data: {{ labels, datasets }} }}
+
+## 레이아웃 설계 원칙
+1. **여백**: 좌우 최소 60px, 상하 최소 40px
+2. **제목 영역**: 상단 40~100px 구간에 배치
+3. **본문 영역**: 120~500px 구간에 배치
+4. **거버넌스/부제**: 제목 아래, 본문 위에 배치
+5. **장식 도형**: 제목과 본문 사이 구분선, 강조 배경 카드 등
+6. **텍스트 크기 가이드**:
+   - title: 28~36px, bold
+   - governance: 12~14px
+   - subtitle (heading): 16~20px, bold
+   - description (detail): 12~14px
+7. **색상**: 디자인 스타일의 colors를 활용. 배경 이미지 위에 올라가므로 가독성 확보 필수.
+8. **카드 구성**: 여러 항목이 있으면 반투명 카드(shape)를 깔고 그 위에 텍스트 배치
+
+## 슬라이드 타입별 가이드
+- **title (표지)**: 중앙 또는 좌측 정렬의 큰 제목 + 부제. 장식 최소화.
+- **content (본문)**: 제목 + 거버넌스 + items(subtitle+description 쌍). 카드형 또는 리스트형.
+- **section (간지)**: 큰 섹션 번호 + 섹션 제목. 중앙 배치.
+- **toc (목차)**: 제목 + 번호 매긴 항목 리스트.
+- **closing (마무리)**: 감사 인사 중앙 배치.
+
+{lang_instruction}
+
+## 출력 형식
+반드시 JSON 형식으로만 응답하세요.
+
+```json
+{{
+  "slides": [
+    {{
+      "slide_index": 0,
+      "slide_type": "title",
+      "background_prompt": "영문 배경 이미지 생성 프롬프트 (텍스트 없이 추상적/테마 배경만). 100단어 이내.",
+      "objects": [
+        {{
+          "obj_type": "text",
+          "role": "title",
+          "x": 80, "y": 200,
+          "width": 800, "height": 70,
+          "generated_text": "슬라이드 제목 텍스트",
+          "text_style": {{ "font_size": 36, "bold": true, "color": "#FFFFFF", "align": "center", "font_family": "Pretendard" }}
+        }},
+        {{
+          "obj_type": "shape",
+          "x": 380, "y": 280,
+          "width": 200, "height": 3,
+          "shape_style": {{ "type": "rect", "fill": "#8B5CF6" }}
+        }}
+      ]
+    }}
+  ]
+}}
+```""",
+    },
+    {
+        "key": "ai_slide_layout_user",
+        "name": "AI 슬라이드 레이아웃 사용자 프롬프트",
+        "description": "아웃라인과 디자인 스타일 정보를 포함한 레이아웃 설계 사용자 프롬프트. 변수: {outline_json}, {design_style}, {lang_instruction}",
+        "model": "claude-sonnet-4-6",
+        "content": """아래 아웃라인과 디자인 스타일을 기반으로 각 슬라이드의 오브젝트 레이아웃을 설계해주세요.
+
+## 출력 언어
+{lang_instruction}
+
+## 디자인 스타일
+{design_style}
+
+## 슬라이드 아웃라인
+{outline_json}
+
+## 중요 규칙
+1. 모든 슬라이드에 background_prompt를 포함하세요. 배경은 텍스트 없이 추상적/테마 이미지만.
+2. background_prompt는 영어로 작성하세요.
+3. 디자인 스타일의 색상 팔레트를 텍스트와 도형에 적용하세요.
+4. 배경 이미지 위에 텍스트가 올라가므로 반투명 카드나 오버레이로 가독성을 확보하세요.
+5. 같은 프레젠테이션의 모든 슬라이드는 일관된 레이아웃 패턴을 유지하세요.
+6. items의 heading은 subtitle role로, detail은 description role로 매핑하세요.
+7. 반드시 JSON 형식으로만 응답하세요.""",
+    },
+    {
+        "key": "ai_slide_bg_image",
+        "name": "AI 슬라이드 배경 이미지 프롬프트",
+        "description": "슬라이드 배경 이미지를 생성하는 Gemini 프롬프트. 변수: {bg_prompt}, {style_hint}, {aspect_ratio}",
+        "model": "gemini-3.1-flash-image-preview",
+        "content": """Generate a BACKGROUND IMAGE for a presentation slide. This is ONLY a background — NO text, NO icons, NO UI elements, NO charts, NO labels, NO numbers.
+
+Background description: {bg_prompt}
+
+Requirements:
+- Widescreen {aspect_ratio} layout
+- ABSOLUTELY NO TEXT of any kind — no titles, no labels, no watermarks, no letters
+- ABSOLUTELY NO UI elements — no buttons, no icons, no charts, no diagrams
+- This is a pure visual/artistic background that will have text overlaid on top
+- Subtle, professional, suitable for a business presentation
+- Slightly dark or with areas where white/light text will be readable
+- High quality, smooth gradients, professional aesthetics
+
+{style_hint}""",
     },
     {
         "key": "infographic_outline_instruction",
