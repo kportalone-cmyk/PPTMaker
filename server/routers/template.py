@@ -905,3 +905,53 @@ Include relevant infographic elements, icons, and data visualizations.
         yield f"data: {json.dumps({'status': 'complete', 'total': total, 'success': success_count, 'failed': fail_count})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+# ============ 외부 API 대시보드 ============
+
+@router.get("/{jwt_token}/api/admin/dashboard/external")
+async def dashboard_external(jwt_token: str, page: int = 1, limit: int = 20,
+                              search: str = "", date_from: str = "", date_to: str = ""):
+    """외부 API로 생성된 프로젝트 목록 조회"""
+    await verify_admin(jwt_token)
+    db = get_db()
+
+    query = {"auto_template": True, "infographic_mode": True}
+
+    if search:
+        query["$or"] = [
+            {"name": {"$regex": search, "$options": "i"}},
+            {"user_key": {"$regex": search, "$options": "i"}},
+        ]
+    if date_from:
+        query.setdefault("created_at", {})["$gte"] = datetime.fromisoformat(date_from)
+    if date_to:
+        query.setdefault("created_at", {})["$lte"] = datetime.fromisoformat(date_to + "T23:59:59")
+
+    total = await db.projects.count_documents(query)
+    skip = (page - 1) * limit
+
+    projects = []
+    async for p in db.projects.find(query).skip(skip).limit(limit).sort("created_at", -1):
+        pid = str(p["_id"])
+        slide_count = await db.generated_slides.count_documents({"project_id": pid})
+
+        share_token = p.get("share_token", "")
+        share_url = ""
+        if share_token:
+            base_url = settings.SERVER_BASE_URL.rstrip("/") if settings.SERVER_BASE_URL else ""
+            share_url = f"{base_url}/shared/{share_token}"
+
+        projects.append({
+            "project_id": pid,
+            "name": p.get("name", ""),
+            "user_key": p.get("user_key", ""),
+            "status": p.get("status", "draft"),
+            "slide_count": slide_count,
+            "share_token": share_token,
+            "share_url": share_url,
+            "created_at": p.get("created_at"),
+            "updated_at": p.get("updated_at"),
+        })
+
+    return {"projects": projects, "total": total, "page": page, "limit": limit}

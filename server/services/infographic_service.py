@@ -108,12 +108,7 @@ async def _build_image_prompt(
     if slide_number == 1:
         infographic_ratio = await get_prompt_content("infographic_cover_ratio")
     else:
-        text_pct = 100 - infographic_pct
-        ratio_template = await get_prompt_content("infographic_content_ratio")
-        infographic_ratio = ratio_template.format(
-            infographic_pct=infographic_pct,
-            text_pct=text_pct,
-        )
+        infographic_ratio = await get_prompt_content("infographic_content_ratio")
 
     pres_context = f' for a presentation about "{presentation_title}"' if presentation_title else ""
 

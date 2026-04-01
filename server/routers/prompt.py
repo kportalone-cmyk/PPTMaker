@@ -795,15 +795,15 @@ HTML 리포트의 모든 페이지에서 공통으로 사용할 CSS 클래스를
         "name": "인포그래픽 커버 슬라이드 비율/지침",
         "description": "커버 슬라이드 이미지 생성 시 {infographic_ratio} 변수에 삽입되는 디자인 지침. 변수: 없음",
         "model": "",
-        "content": """⚡ THIS IS A COVER SLIDE — a simple, clean infographic style.
+        "content": """⚡ THIS IS A COVER SLIDE — with a WHITE background and infographic visuals.
 Design requirements:
-- Include ONLY the presentation title and subtitle text — no other text content.
-- Use simple, minimal infographic visual elements: a few clean icons, subtle geometric shapes, thin divider lines, and gentle gradient backgrounds.
-- Keep the layout spacious and uncluttered — lots of whitespace/breathing room.
-- The title should be prominently displayed in the center-upper area.
-- The subtitle should appear below the title in a smaller, lighter style.
-- Add a few tasteful decorative elements (abstract shapes, simple icons related to the topic) but keep them minimal and non-distracting.
-- Professional, modern, corporate presentation feel — think elegant simplicity.""",
+- Background MUST be pure WHITE (#FFFFFF) — no dark backgrounds, no gradients, no colored backgrounds.
+- LEFT SIDE (about half): Display the presentation TITLE in large bold dark text (#1B2A4A) and a SUBTITLE below it summarizing the entire presentation content in one concise phrase, in dark gray (#334155).
+- RIGHT SIDE (about half): Display infographic visual elements that represent the overall content of the presentation — relevant icons, mini-diagrams, process flows, or conceptual illustrations related to the topic.
+- The infographic visuals should give viewers a quick visual overview of what the entire presentation covers.
+- Use clean, flat, professional icons and illustrations — sharp edges, no blur.
+- ALL visuals must be SHARP and CRISP — absolutely NO blur, NO bokeh, NO frosted glass, NO out-of-focus effects.
+- Professional, modern, corporate presentation feel — clean and elegant on white background.""",
     },
     {
         "key": "infographic_content_ratio",
@@ -811,55 +811,63 @@ Design requirements:
         "description": "본문 슬라이드 이미지 생성 시 {infographic_ratio} 변수에 삽입되는 디자인 지침. 변수: {infographic_pct}, {text_pct}",
         "model": "",
         "content": """This is a REPORT-STYLE summary slide. Design it as a concise executive briefing page:
-- Use ~{infographic_pct}% infographic visual elements (icons, mini-charts, process arrows, comparison cards, callout boxes, key metric highlights) and ~{text_pct}% text content.
+- Balance infographic visual elements (icons, mini-charts, process arrows, comparison cards, callout boxes, key metric highlights) with text content.
 - Text content must be CONCISE and SUMMARIZED — use bullet points, short phrases, and key numbers.
 - Do NOT write long paragraphs or detailed explanations.
 - Present information in a structured, scannable report format: headings + short bullet points + visual data.
-- Emphasize key figures, percentages, and conclusions with visual callouts or bold formatting.""",
+- Emphasize key figures and conclusions with visual callouts or bold formatting.
+- Do NOT render any percentage labels, margin annotations, measurement numbers, or layout guide text in the image.""",
     },
     {
         "key": "infographic_cover_image",
         "name": "인포그래픽 커버 이미지 프롬프트",
         "description": "Gemini API로 커버 슬라이드 인포그래픽 이미지를 생성하는 프롬프트. 변수: {pres_context}, {title}, {content_summary}, {infographic_ratio}, {aspect_ratio}",
         "model": "gemini-3.1-flash-image-preview",
-        "content": """Generate a SIMPLE, CLEAN INFOGRAPHIC COVER SLIDE image{pres_context}.
+        "content": """Generate an INFOGRAPHIC COVER SLIDE image with a WHITE background{pres_context}.
 
 Title: {title}
 Subtitle: {content_summary}
 
 {infographic_ratio}
 
-===== COVER SLIDE INFOGRAPHIC DESIGN =====
+===== COVER SLIDE DESIGN — WHITE BACKGROUND =====
 
-This is a COVER SLIDE with a simple infographic style. Keep it minimal and elegant.
+This is a COVER SLIDE. The background MUST be pure WHITE (#FFFFFF).
 
-TEXT TO INCLUDE (ONLY these, nothing else):
-- The presentation TITLE: "{title}" — large, bold, prominent, centered in the upper-center area
-- The SUBTITLE (if provided): "{content_summary}" — smaller, lighter weight, below the title
+TEXT TO INCLUDE:
+- The presentation TITLE: "{title}" — large (24-28pt), bold, dark color (#1B2A4A or black)
+- The SUBTITLE/SUMMARY: "{content_summary}" — a concise phrase that summarizes the ENTIRE presentation's scope and purpose. Smaller (14-16pt), dark gray (#334155).
+
+LAYOUT (LEFT-RIGHT SPLIT):
+- Full widescreen {aspect_ratio} layout on pure WHITE background
+- LEFT SIDE (about half the width):
+  - Title text: upper-left area, large and bold
+  - Subtitle text: below the title, clearly readable
+  - Clean spacing, left-aligned text
+- RIGHT SIDE (about half the width):
+  - Infographic visuals that represent the OVERALL CONTENT of the presentation
+  - Use relevant icons, mini-diagrams, process flow illustrations, conceptual graphics
+  - These visuals should give viewers a QUICK OVERVIEW of what the presentation covers
+  - Examples: data flow diagrams, technology stack icons, process arrows, feature icons
+- Text and visuals must NOT overlap — each has its own zone
 
 DESIGN:
-- Full widescreen {aspect_ratio} layout
-- Clean, professional background (light or white preferred, or soft gradient)
-- SIMPLE and MINIMAL visual elements:
-  - A few clean, flat icons related to the presentation topic (3-5 max)
-  - Subtle thin geometric lines or dividers
-  - Gentle abstract shapes in the corners or edges
-  - Soft gradient overlays or light accents
-- SPACIOUS layout with generous whitespace — do NOT fill the entire image
-- Title text: dark color (#1B2A4A or black), large, bold, and clear
-- Subtitle text: dark gray (#334155), smaller size
-- Overall feel: elegant simplicity, premium corporate style, modern and clean
-- Think minimalist keynote cover — less is more
+- Background: pure WHITE (#FFFFFF) — absolutely NO dark backgrounds, NO gradients, NO colored backgrounds
+- Infographic visuals: clean, flat, professional, sharp-edged icons and illustrations
+- Use a consistent accent color (e.g., #2563EB blue or #6366F1 indigo) for icons and visual elements
+- Thin geometric lines or dividers to separate sections
+- ALL elements must be SHARP and CRISP — no blur, no bokeh, no frosted effects
+- Overall feel: professional white-background corporate pitch deck cover
 
 FORBIDDEN:
-- Bullet points, paragraphs, or detailed text content
+- Dark or colored backgrounds (background MUST be white)
 - Cluttered or busy designs
-- Too many icons or decorative elements
+- Too many decorative elements
 - Header bars, content boxes, tables, charts
 - Any text other than the title and subtitle
-- Bright or neon colors
-- Page numbers, slide numbers, "Page X", footer text, or any navigation elements
-- Company names, brand names, logos, or solution names (e.g. no "KMSLab", no company logos in corners or footer)
+- Page numbers, footer text, navigation elements
+- Company names, brand names, logos
+- Blur, bokeh, frosted glass effects
 
 ==========================================================================""",
     },
@@ -880,12 +888,13 @@ Slide content:
 ===== MANDATORY TEMPLATE — EVERY SLIDE MUST USE THIS EXACT SAME DESIGN =====
 
 LAYOUT (identical on ALL slides):
-- Full-width dark navy (#1B2A4A) header bar at the very top, ~12% of slide height
+- Full-width dark navy (#1B2A4A) header bar at the very top, about one-eighth of slide height
 - Slide title displayed inside the header bar in white (#FFFFFF) bold sans-serif text
 - Thin #E2E8F0 separator line directly below the header bar
 - White (#FFFFFF) content area below — NO gradients, NO patterns, NO textures, NO colored backgrounds
-- Left/right margins: 5%, bottom margin: 5%
-- ABSOLUTELY NO slide numbers, page numbers, "Slide X/Y" text, or any footer text anywhere
+- Comfortable margins on all sides
+- ABSOLUTELY NO slide numbers, page numbers, percentage labels, margin indicators, or any footer text anywhere
+- Do NOT render any technical annotations like percentages, measurements, or layout guides as visible text
 
 COLOR PALETTE (use ONLY these exact colors on ALL slides — NO exceptions):
 - #1B2A4A — header bar background, section headings
@@ -903,9 +912,10 @@ TYPOGRAPHY (same on ALL slides — USE SMALL, COMPACT TEXT):
 - Content headings/subtitles: 13-15pt bold #1B2A4A (NOT larger than 15pt)
 - Body text / bullet points: 10-12pt regular #334155 (NOT larger than 12pt)
 - Labels/captions: 8-9pt #64748B
-- ⚠️ TEXT MUST BE SMALL AND COMPACT — this is a data-dense slide, not a billboard
-- ⚠️ Leave enough room for infographic visuals on the right side (at least 40% of width)
-- ⚠️ Text area should occupy at most 55-60% of slide width (left side)
+- TEXT MUST BE SMALL AND COMPACT — this is a data-dense slide, not a billboard
+- Leave enough room for infographic visuals on the right side (nearly half of slide width)
+- Text area should occupy slightly more than half of slide width (left side)
+- Do NOT render any percentage values, measurement numbers, or layout annotations as visible text in the image
 
 VISUAL ELEMENTS (same style on ALL slides):
 - Icons: flat monoline, 2px stroke, #2563EB color only
@@ -1302,43 +1312,27 @@ def _content_hash(content: str) -> str:
 
 
 async def ensure_default_prompts():
-    """DB에 기본 프롬프트가 없으면 삽입, content가 변경되었으면 업데이트"""
+    """DB에 기본 프롬프트가 없으면 최초 삽입만 수행. DB에 이미 있으면 절대 덮어쓰지 않음.
+    DB의 프롬프트가 항상 우선이며, 관리자가 DB에서 수정한 내용이 즉시 적용됨.
+    서버 시작 시 모든 프롬프트의 Redis 캐시를 무효화하여 DB 최신 내용이 바로 반영되도록 함."""
     db = get_db()
     for prompt in DEFAULT_PROMPTS:
-        new_hash = _content_hash(prompt["content"])
         existing = await db.prompts.find_one({"key": prompt["key"]})
         if not existing:
+            # 최초 등록만 수행
             doc = {
                 **prompt,
-                "content_hash": new_hash,
+                "content_hash": _content_hash(prompt["content"]),
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow(),
             }
             await db.prompts.insert_one(doc)
             print(f"[Prompt] 기본 프롬프트 등록: {prompt['key']}")
-        else:
-            update_fields = {}
-            # content 변경 감지 (관리자가 수동 수정하지 않은 경우에만 업데이트)
-            old_hash = existing.get("content_hash", "")
-            existing_content_hash = _content_hash(existing.get("content", ""))
-            # 관리자가 수동 수정한 경우: old_hash != existing_content_hash
-            # 기본값 그대로인 경우: old_hash == existing_content_hash (또는 old_hash 없음)
-            admin_modified = old_hash and old_hash != existing_content_hash
-            if not admin_modified and old_hash != new_hash:
-                update_fields["content"] = prompt["content"]
-                update_fields["content_hash"] = new_hash
-                print(f"[Prompt] content 업데이트: {prompt['key']}")
-            # model 필드 동기화
-            if "model" not in existing or existing.get("model") != prompt.get("model", ""):
-                update_fields["model"] = prompt.get("model", "")
-            if update_fields:
-                update_fields["updated_at"] = datetime.utcnow()
-                await db.prompts.update_one(
-                    {"_id": existing["_id"]},
-                    {"$set": update_fields},
-                )
-                # Redis 캐시 무효화
-                await redis_service.cache_delete(f"prompt:{prompt['key']}")
+        # DB에 이미 존재하면 아무것도 하지 않음 — DB 내용이 항상 우선
+
+        # Redis 캐시 무효화 (서버 시작 시 DB 최신 내용 반영)
+        await redis_service.cache_delete(f"prompt:{prompt['key']}")
+        await redis_service.cache_delete(f"prompt_model:{prompt['key']}")
 
 
 async def get_prompt_content(key: str) -> str:

@@ -1564,7 +1564,7 @@ function renderProjectList(skipAutoNav) {
     });
     const folderHeaderRows = Math.min(folders.length, 5); // 최대 5개 폴더 헤더 표시
     const usedRows = folderHeaderRows + expandedItemCount + (folders.length > 0 ? 1 : 0); // +1 미분류 라벨
-    const pageSize = Math.max(3, 10 - usedRows); // 최소 3개, 최대 10개
+    const pageSize = Math.max(4, 11 - usedRows); // 최소 4개, 최대 11개
     const totalPages = Math.max(1, Math.ceil(totalUnfiled / pageSize));
 
     if (state.projectPage >= totalPages) state.projectPage = totalPages - 1;

@@ -242,6 +242,10 @@
                                 <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a3 3 0 004.25.46l1.38-1.38a3 3 0 00-4.24-4.24L6.18 4.06"/><path d="M8 6a3 3 0 00-4.25-.46L2.37 6.92a3 3 0 004.24 4.24l1.22-1.22"/></svg>
                                 <span class="i18n-copyShareLink">공유</span>
                             </button>
+                            <button class="slide-tool-btn" id="btnTranslate" onclick="showTranslateModal()">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>
+                                <span class="i18n-translateBtn">언어 전환</span>
+                            </button>
                             <div style="width:1px;height:20px;background:var(--border);margin:0 4px;"></div>
                             <button class="slide-tool-btn edit-toggle-btn" id="btnEditToggle" onclick="toggleEditMode()">
                                 <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 1.5l2.5 2.5L5 12.5H2.5V10z"/></svg>
@@ -432,6 +436,10 @@
                                         <button class="btn-slide-ai" id="btnSlideAI" onclick="generateSlideText()">
                                             <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 1L3 6l8 5V1z"/></svg>
                                             AI 수정 요청
+                                        </button>
+                                        <button class="btn-fix-text" id="btnFixSlideText" onclick="fixCurrentSlideText()" style="display:none;" title="이미지의 깨진 텍스트를 AI로 수정합니다">
+                                            <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+                                            텍스트 재정리
                                         </button>
                                     </div>
                                 </div>
@@ -742,14 +750,6 @@
                             <button class="btn-modify-excel" id="btnModifyExcel" onclick="modifyExcel()" style="display:none">
                                 <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                                 <span class="i18n-modifyExcelBtn">엑셀 수정</span>
-                            </button>
-                            <button class="btn-bottom-tool" id="btnTranslate" onclick="showTranslateModal()">
-                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>
-                                <span class="i18n-translateBtn">언어 전환</span>
-                            </button>
-                            <button class="btn-bottom-tool" id="btnFixSlideText" onclick="fixCurrentSlideText()" style="display:none;" title="이미지의 깨진 텍스트를 AI로 수정합니다">
-                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
-                                <span>텍스트 재정리</span>
                             </button>
                             <button class="btn-generate" id="btnGenerate" onclick="handleGenerate()">
                                 <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 3L5 8.5l8 5.5V3z"/></svg>

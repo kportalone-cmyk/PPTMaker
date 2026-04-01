@@ -4259,6 +4259,7 @@ function switchDashboardSection(section) {
         case 'users': loadDashboardUsers(); break;
         case 'projects': loadDashboardProjects(); break;
         case 'activity': loadDashboardActivity(); break;
+        case 'external': loadDashboardExternal(); break;
     }
 }
 
@@ -4532,6 +4533,151 @@ function renderDashActivityList(activities) {
         </div>`;
     });
     $('#dashActivityList').html(html);
+}
+
+// ---- 외부 API 생성 내역 ----
+async function loadDashboardExternal(page) {
+    dashState.external = dashState.external || { page: 1, total: 0 };
+    dashState.external.page = page || 1;
+    const search = $('#dashExternalSearch').val() || '';
+    const dateFrom = $('#dashExternalDateFrom').val() || '';
+    const dateTo = $('#dashExternalDateTo').val() || '';
+    try {
+        const data = await apiGet(`/api/admin/dashboard/external?search=${encodeURIComponent(search)}&date_from=${dateFrom}&date_to=${dateTo}&page=${dashState.external.page}&limit=20`);
+        dashState.external.total = data.total;
+        renderDashExternalList(data.projects);
+        renderDashPagination('dashExternalPagination', data.total, dashState.external.page, 20, 'loadDashboardExternal');
+    } catch (e) {
+        showToast('외부 API 내역 로딩 실패', 'error');
+    }
+}
+
+function renderDashExternalList(projects) {
+    if (!projects || !projects.length) {
+        $('#dashExternalList').html('<div class="dashboard-empty">외부 API로 생성된 프로젝트가 없습니다</div>');
+        return;
+    }
+    const statusMap = { draft: '초안', generating: '생성 중', generated: '완료', error: '오류', stopped: '중단' };
+    const statusCls = { draft: 'type-slide', generating: 'type-oo', generated: 'type-excel', error: 'type-docx', stopped: 'type-docx' };
+
+    let html = '';
+    projects.forEach(p => {
+        const createdAt = p.created_at
+            ? new Date(p.created_at).toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+            : '-';
+        const status = p.status || 'draft';
+        const slideCount = p.slide_count || 0;
+        const shareUrl = p.share_url || '';
+        const shareLink = shareUrl
+            ? `<a href="${escapeHtml(shareUrl)}" target="_blank" style="color:#6366f1;font-size:12px;text-decoration:none;">공유 링크 열기</a>`
+            : '<span style="color:#999;font-size:12px;">-</span>';
+        const userKey = p.user_key || 'external_api';
+
+        html += `<div class="dashboard-list-item" style="gap:12px;">
+            <div style="min-width:90px;">
+                <div style="font-weight:500;font-size:13px;">${escapeHtml(userKey)}</div>
+            </div>
+            <div style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                <span style="color:#333;font-weight:500;">${escapeHtml(p.name || '제목 없음')}</span>
+            </div>
+            <div style="width:60px;text-align:center;font-size:12px;color:#666;">${slideCount}장</div>
+            <div style="width:70px;text-align:center;"><span class="dash-badge ${statusCls[status] || ''}">${statusMap[status] || status}</span></div>
+            <div style="width:120px;text-align:center;">${shareLink}</div>
+            <div style="width:130px;text-align:right;font-size:12px;color:#888;">${createdAt}</div>
+        </div>`;
+    });
+    $('#dashExternalList').html(html);
+}
+
+// ---- 외부 API 테스트 요청 ----
+async function sendExtApiRequest() {
+    const fileInput = document.getElementById('extApiFile');
+    const instructions = $('#extApiInstructions').val().trim();
+    const lang = $('#extApiLang').val();
+    const slideCount = $('#extApiSlideCount').val();
+    const userKey = $('#extApiUserKey').val().trim() || 'external_api';
+
+    if (!instructions && (!fileInput.files || fileInput.files.length === 0)) {
+        showToast('지침 또는 파일을 입력해주세요', 'error');
+        return;
+    }
+
+    const btn = $('#btnExtApiSend');
+    btn.prop('disabled', true).html(
+        '<svg class="spin-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 1a7 7 0 106.93 6"/></svg> 생성 중...'
+    );
+
+    // 진행 상태 표시
+    $('#extApiResult').show().html(`
+        <div class="ext-api-result-loading">
+            <div class="ext-api-result-spinner"></div>
+            <div class="ext-api-result-status">슬라이드를 생성하고 있습니다...<br><span style="font-size:12px;color:#999;">파일 분석 → 아웃라인 설계 → 디자인 스타일 생성 → 이미지 생성 순서로 진행됩니다</span></div>
+        </div>
+    `);
+
+    try {
+        const formData = new FormData();
+        formData.append('instructions', instructions);
+        formData.append('lang', lang);
+        formData.append('slide_count', slideCount);
+        formData.append('user_key', userKey);
+        if (fileInput.files && fileInput.files.length > 0) {
+            formData.append('file', fileInput.files[0]);
+        }
+
+        const res = await fetch('/api/external/generate', {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!res.ok) {
+            let errMsg = '요청 실패';
+            try { const err = await res.json(); errMsg = err.detail || errMsg; } catch (_) {}
+            throw new Error(errMsg);
+        }
+
+        const data = await res.json();
+
+        if (data.success) {
+            $('#extApiResult').html(`
+                <div class="ext-api-result-success">
+                    <div class="ext-api-result-icon">
+                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                    </div>
+                    <div class="ext-api-result-info">
+                        <div class="ext-api-result-title">슬라이드 생성 완료</div>
+                        <div class="ext-api-result-meta">
+                            <span>프로젝트 ID: <code>${data.project_id}</code></span>
+                            <span>슬라이드: <strong>${data.slide_count}장</strong></span>
+                        </div>
+                        <div class="ext-api-result-link">
+                            <a href="${escapeHtml(data.share_url)}" target="_blank">${escapeHtml(data.share_url)}</a>
+                            <button class="ext-api-copy-btn" onclick="navigator.clipboard.writeText('${escapeHtml(data.share_url)}');showToast('URL이 복사되었습니다','success')">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                                복사
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `);
+
+            // 생성 내역 새로고침
+            loadDashboardExternal();
+        } else {
+            throw new Error('생성 실패');
+        }
+    } catch (e) {
+        $('#extApiResult').html(`
+            <div class="ext-api-result-error">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                <span>${escapeHtml(e.message || '요청 중 오류가 발생했습니다')}</span>
+            </div>
+        `);
+    } finally {
+        btn.prop('disabled', false).html(
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg> 요청 전송'
+        );
+    }
 }
 
 // ---- 사용자 상세 대시보드 ----

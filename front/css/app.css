@@ -2574,6 +2574,27 @@ body {
 .btn-slide-ai:active { transform: scale(0.98); }
 .btn-slide-ai:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 
+.btn-fix-text {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 12px;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    flex-shrink: 0;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: inherit;
+    white-space: nowrap;
+}
+.btn-fix-text:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+.btn-fix-text:disabled { opacity: 0.4; cursor: not-allowed; }
+
 .btn-stop {
     display: flex;
     align-items: center;
@@ -7106,12 +7127,12 @@ body {
     font-weight: 600;
     color: rgba(255, 255, 255, 0.9);
     margin-bottom: 8px;
-    max-width: 80%;
+    max-width: 90%;
     margin-left: auto;
     margin-right: auto;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    text-align: center;
+    word-break: keep-all;
+    line-height: 1.4;
 }
 
 .infographic-gen-status {

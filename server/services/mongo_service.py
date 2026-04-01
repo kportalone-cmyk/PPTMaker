@@ -79,6 +79,9 @@ async def init_indexes():
     await db.project_folders.create_index([("user_key", 1), ("order", 1)])
     await db.project_folders.create_index([("user_key", 1), ("name", 1)], unique=True)
 
+    # file_text_cache 컬렉션 (SHA-256 해시 기반 파일 텍스트 캐시)
+    await db.file_text_cache.create_index("file_hash", unique=True)
+
     # fonts 컬렉션
     await db.fonts.create_index("name", unique=True)
 
