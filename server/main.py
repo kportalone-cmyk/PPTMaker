@@ -126,10 +126,8 @@ app.include_router(external_api.router)
 # 정적 파일 서빙
 project_root = Path(__file__).resolve().parent.parent
 
-# 업로드 파일
+# 업로드 파일 (config.py에서 절대경로로 해석됨)
 uploads_path = Path(settings.UPLOAD_DIR)
-if not uploads_path.is_absolute():
-    uploads_path = Path(__file__).resolve().parent / settings.UPLOAD_DIR
 uploads_path.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(uploads_path)), name="uploads")
 
@@ -179,9 +177,9 @@ def inject_version(html_content: str, base_dir: str) -> str:
         html_content
     )
 
-    # 솔루션명 주입 (window.__SOLUTION_NAME__ 전역 변수)
-    solution_script = f'<script>window.__SOLUTION_NAME__="{settings.SOLUTION_NAME}";</script>'
-    html_content = html_content.replace("</head>", f"{solution_script}\n</head>", 1)
+    # 전역 변수 주입
+    inject_script = f'<script>window.__SOLUTION_NAME__="{settings.SOLUTION_NAME}";window.__DEFAULT_INFOGRAPHIC_RATIO__={settings.DEFAULT_INFOGRAPHIC_RATIO};</script>'
+    html_content = html_content.replace("</head>", f"{inject_script}\n</head>", 1)
 
     return html_content
 
@@ -342,11 +340,28 @@ if __name__ == "__main__":
     import platform
 
     # Windows에서 Ctrl+C 시 깔끔하게 종료되도록 시그널 핸들러 설정
+    _exit_state = {"triggered": False}
     def _force_exit(signum, frame):
         """Ctrl+C 시 Redis/MongoDB 연결 정리 후 강제 종료"""
+        if _exit_state["triggered"]:
+            # 두 번째 Ctrl+C → 즉시 강제 종료
+            os._exit(1)
+        _exit_state["triggered"] = True
+        print("\n서버 종료 중...")
+
+        # 진행 중인 asyncio 태스크 모두 취소
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                for task in asyncio.all_tasks(loop):
+                    task.cancel()
+        except Exception:
+            pass
+
         try:
             close_redis_sync()
-            print("\nRedis 연결 해제")
+            print("Redis 연결 해제")
         except Exception:
             pass
         try:

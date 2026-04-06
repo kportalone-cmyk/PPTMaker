@@ -70,16 +70,19 @@ const state = {
     htmlSkills: [],
     // 인포그래픽 모드
     infographicMode: false,
-    _infographicRatio: 40,
+    _infographicRatio: window.__DEFAULT_INFOGRAPHIC_RATIO__ || 60,
     // AI 자동 디자인 모드
     autoTemplateMode: false,
     // AI 슬라이드 모드
     aiSlideMode: false,
+    // 한장 요약 인포그래픽 모드
+    summaryInfographicMode: false,
 };
 
 let _animationCancelled = false;
 let _isAnimating = false;
 let _isGenerating = false;
+let _isPaused = false;
 let _abortController = null;
 let _streamReader = null;
 
@@ -2061,10 +2064,16 @@ function renderProjectWorkspace() {
         state.autoTemplateMode = !!state.currentProject.auto_template;
         // AI 슬라이드 모드 복원
         state.aiSlideMode = !!state.currentProject.ai_slide_mode;
+        // 한장 요약 인포그래픽 모드 복원
+        state.summaryInfographicMode = !!state.currentProject.summary_infographic;
         // 인포그래픽 모드 복원 (auto_template도 infographic 기반)
         if (state.currentProject.infographic_mode) {
             state.infographicMode = true;
         }
+        // 선택한 스타일 복원
+        state._selectedStyleId = state.currentProject.selected_style_id || null;
+        state._selectedStyleName = state.currentProject.selected_style_name || null;
+        state._selectedStylePrompt = state.currentProject.selected_style_prompt || '';
         // 템플릿 slide_size 복원
         const _tmpl = state.templates.find(t => t._id === state.selectedTemplateId);
         state._templateSlideSize = (_tmpl && _tmpl.slide_size) || '16:9';
@@ -2661,6 +2670,15 @@ async function deleteAllResources() {
     }
 }
 
+async function _refreshResources() {
+    if (!state.currentProject) return;
+    try {
+        const res = await apiGet('/api/projects/' + state.currentProject._id);
+        state.resources = res.resources || [];
+        renderResourceChips();
+    } catch (_) {}
+}
+
 // ============ 수동 생성 모드 ============
 
 async function openAddSlideModal() {
@@ -2688,6 +2706,18 @@ function updateManualModeUI() {
 }
 
 async function showTemplateSlidePickerModal() {
+    // 인포그래픽/AI슬라이드 모드: 내용 입력 → AI 이미지 생성 → 슬라이드 추가
+    if (state.infographicMode || state.aiSlideMode) {
+        const content = await showPrompt(
+            t('addSlide'),
+            '추가할 슬라이드 내용을 입력하세요',
+            ''
+        );
+        if (!content) return;
+        await addInfographicSlide(content);
+        return;
+    }
+
     if (!state.selectedTemplateId) {
         showToast(t('msgSelectTemplate'), 'error');
         return;
@@ -2786,6 +2816,47 @@ async function addManualSlide(templateSlideId) {
     } catch (e) {
         hideLoading();
         showToast(e.message, 'error');
+    }
+}
+
+async function addInfographicSlide(content) {
+    if (!state.currentProject) return;
+
+    let insertAfterOrder = null;
+    if (state.currentSlideIndex >= 0 && state.currentSlideIndex < state.generatedSlides.length) {
+        const selectedSlide = state.generatedSlides[state.currentSlideIndex];
+        if (selectedSlide && selectedSlide.order != null) {
+            insertAfterOrder = selectedSlide.order;
+        }
+    }
+
+    try {
+        showLoading('AI 이미지 슬라이드를 생성하고 있습니다...');
+        const res = await apiPost('/api/generate/infographic-slide', {
+            project_id: state.currentProject._id,
+            content: content,
+            style_hint: state._selectedStylePrompt || '',
+            insert_after_order: insertAfterOrder,
+        });
+
+        // 전체 슬라이드 재로딩
+        const slidesRes = await apiGet('/api/generate/' + state.currentProject._id + '/slides');
+        state.generatedSlides = slidesRes.slides || [];
+
+        // 새로 추가된 슬라이드로 이동
+        const newSlideIndex = state.generatedSlides.findIndex(s => s._id === res.slide._id);
+        state.currentSlideIndex = newSlideIndex >= 0 ? newSlideIndex : state.generatedSlides.length - 1;
+
+        renderSlideThumbList();
+        renderSlideThumbnails();
+        renderSlideTextPanel();
+        goToSlide(state.currentSlideIndex);
+
+        hideLoading();
+        showToast(t('msgSlideAdded'), 'success');
+    } catch (e) {
+        hideLoading();
+        showToast(e.message || '슬라이드 추가 실패', 'error');
     }
 }
 
@@ -3188,6 +3259,13 @@ function updateTemplateButtonLabel() {
         return;
     }
 
+    // 한장 요약 인포그래픽 모드
+    if (state.summaryInfographicMode) {
+        $('#templateSelectLabel').text('한장 요약');
+        $('#templateSelectBtn').addClass('has-value');
+        return;
+    }
+
     // AI 자동 디자인 모드
     if (state.autoTemplateMode) {
         $('#templateSelectLabel').text('AI 자동 디자인');
@@ -3244,7 +3322,9 @@ function openTemplatePickerModal() {
     $('#skillPickerGrid').hide();
 
     // 현재 모드에 맞는 탭을 기본 활성화
-    if (state.aiSlideMode && isSlideType) {
+    if (state.summaryInfographicMode && isSlideType) {
+        switchTemplatePicker('summary');
+    } else if (state.aiSlideMode && isSlideType) {
         switchTemplatePicker('aislide');
     } else if (state.autoTemplateMode && isSlideType) {
         switchTemplatePicker('autodesign');
@@ -3267,6 +3347,7 @@ function switchTemplatePicker(tab) {
         $('#infographicStyleGrid').hide();
         $('#autoDesignGrid').hide();
         $('#aiSlideStyleGrid').hide();
+        $('#summaryInfographicGrid').hide();
         $('#templatePickerTitle').text('표준 템플릿');
         _renderStandardTemplateGrid();
     } else if (tab === 'infographic') {
@@ -3274,6 +3355,7 @@ function switchTemplatePicker(tab) {
         $('#infographicStyleGrid').show();
         $('#autoDesignGrid').hide();
         $('#aiSlideStyleGrid').hide();
+        $('#summaryInfographicGrid').hide();
         $('#templatePickerTitle').text('AI 이미지 슬라이드');
         _loadAndRenderSlideStyles();
         setTimeout(initInfographicRatioSlider, 50);
@@ -3282,6 +3364,7 @@ function switchTemplatePicker(tab) {
         $('#infographicStyleGrid').hide();
         $('#autoDesignGrid').hide();
         $('#aiSlideStyleGrid').show();
+        $('#summaryInfographicGrid').hide();
         $('#templatePickerTitle').text('AI 슬라이드');
         _loadAndRenderAiSlideStyles();
     } else if (tab === 'autodesign') {
@@ -3289,26 +3372,67 @@ function switchTemplatePicker(tab) {
         $('#infographicStyleGrid').hide();
         $('#autoDesignGrid').show();
         $('#aiSlideStyleGrid').hide();
+        $('#summaryInfographicGrid').hide();
         $('#templatePickerTitle').text('AI 자동 디자인');
+        setTimeout(initAutoDesignRatioSlider, 50);
+    } else if (tab === 'summary') {
+        $('#templatePickerGrid').hide();
+        $('#infographicStyleGrid').hide();
+        $('#autoDesignGrid').hide();
+        $('#aiSlideStyleGrid').hide();
+        $('#summaryInfographicGrid').show();
+        $('#templatePickerTitle').text('한장으로 요약 만들기');
+        _loadSummaryStyleCards();
+        setTimeout(initSummaryRatioSlider, 50);
+    }
+}
+
+function _initRatioSlider(sliderId, valueId) {
+    const slider = document.getElementById(sliderId);
+    if (!slider) return;
+    slider.value = state._infographicRatio;
+    _updateRatioSliderUI(slider, valueId);
+    slider.addEventListener('input', function() {
+        state._infographicRatio = parseInt(this.value, 10);
+        _updateRatioSliderUI(this, valueId);
+        // 다른 슬라이더도 동기화
+        _syncRatioSliders(sliderId);
+    });
+}
+
+function _syncRatioSliders(sourceId) {
+    const ids = [
+        { slider: 'infographicRatioSlider', value: 'infographicRatioValue' },
+        { slider: 'autoDesignRatioSlider', value: 'autoDesignRatioValue' },
+        { slider: 'summaryRatioSlider', value: 'summaryRatioValue' },
+    ];
+    for (const item of ids) {
+        if (item.slider === sourceId) continue;
+        const el = document.getElementById(item.slider);
+        if (el) {
+            el.value = state._infographicRatio;
+            _updateRatioSliderUI(el, item.value);
+        }
     }
 }
 
 function initInfographicRatioSlider() {
-    const slider = document.getElementById('infographicRatioSlider');
-    if (!slider) return;
-    slider.value = state._infographicRatio;
-    _updateRatioSliderUI(slider);
-    slider.addEventListener('input', function() {
-        state._infographicRatio = parseInt(this.value, 10);
-        _updateRatioSliderUI(this);
-    });
+    _initRatioSlider('infographicRatioSlider', 'infographicRatioValue');
 }
 
-function _updateRatioSliderUI(slider) {
+function initAutoDesignRatioSlider() {
+    _initRatioSlider('autoDesignRatioSlider', 'autoDesignRatioValue');
+}
+
+function initSummaryRatioSlider() {
+    _initRatioSlider('summaryRatioSlider', 'summaryRatioValue');
+}
+
+function _updateRatioSliderUI(slider, valueId) {
     const val = parseInt(slider.value, 10);
     const pct = ((val - 10) / 80) * 100;
     slider.style.background = `linear-gradient(to right, #8b5cf6 0%, #8b5cf6 ${pct}%, var(--border-primary) ${pct}%, var(--border-primary) 100%)`;
-    const valueEl = document.getElementById('infographicRatioValue');
+    const valueEl = document.getElementById(valueId || 'infographicRatioValue');
     if (valueEl) valueEl.textContent = val + '%';
 }
 
@@ -3471,6 +3595,9 @@ function selectSlideStyle(styleId) {
     }
     state.selectedTemplateId = null;
     state.infographicMode = true;
+    state.autoTemplateMode = false;
+    state.summaryInfographicMode = false;
+    state.aiSlideMode = false;
     state._selectedStyleId = styleId;
     state._selectedStylePrompt = style.prompt;
     state._selectedStyleName = style.name;
@@ -3481,10 +3608,21 @@ function selectSlideStyle(styleId) {
 
     if (state.currentProject && state.currentProject._id) {
         state.currentProject.infographic_mode = true;
+        state.currentProject.auto_template = false;
+        state.currentProject.summary_infographic = false;
         state.currentProject.template_id = null;
+        state.currentProject.selected_style_id = styleId;
+        state.currentProject.selected_style_name = style.name;
+        state.currentProject.selected_style_prompt = style.prompt;
         apiPut('/api/projects/' + state.currentProject._id, {
             template_id: null,
             infographic_mode: true,
+            ai_slide_mode: false,
+            auto_template: false,
+            summary_infographic: false,
+            selected_style_id: styleId,
+            selected_style_name: style.name,
+            selected_style_prompt: style.prompt,
         }).catch(() => {});
     }
 }
@@ -3514,6 +3652,9 @@ function applyCustomStylePrompt() {
     }
     state.selectedTemplateId = null;
     state.infographicMode = true;
+    state.autoTemplateMode = false;
+    state.summaryInfographicMode = false;
+    state.aiSlideMode = false;
     state._selectedStyleId = 'custom';
     state._selectedStylePrompt = prompt;
     state._selectedStyleName = '커스텀 스타일';
@@ -3524,10 +3665,21 @@ function applyCustomStylePrompt() {
 
     if (state.currentProject && state.currentProject._id) {
         state.currentProject.infographic_mode = true;
+        state.currentProject.auto_template = false;
+        state.currentProject.summary_infographic = false;
         state.currentProject.template_id = null;
+        state.currentProject.selected_style_id = 'custom';
+        state.currentProject.selected_style_name = '커스텀 스타일';
+        state.currentProject.selected_style_prompt = prompt;
         apiPut('/api/projects/' + state.currentProject._id, {
             template_id: null,
             infographic_mode: true,
+            ai_slide_mode: false,
+            auto_template: false,
+            summary_infographic: false,
+            selected_style_id: 'custom',
+            selected_style_name: '커스텀 스타일',
+            selected_style_prompt: prompt,
         }).catch(() => {});
     }
 
@@ -3622,9 +3774,17 @@ function selectAiSlideStyle(styleId) {
     if (state.currentProject && state.currentProject._id) {
         state.currentProject.ai_slide_mode = true;
         state.currentProject.template_id = null;
+        state.currentProject.selected_style_id = styleId;
+        state.currentProject.selected_style_name = style.name;
+        state.currentProject.selected_style_prompt = style.prompt;
         apiPut('/api/projects/' + state.currentProject._id, {
             template_id: null,
+            infographic_mode: false,
             ai_slide_mode: true,
+            auto_template: false,
+            selected_style_id: styleId,
+            selected_style_name: style.name,
+            selected_style_prompt: style.prompt,
         }).catch(() => {});
     }
 }
@@ -3661,9 +3821,17 @@ function applyAiSlideCustomPrompt() {
     if (state.currentProject && state.currentProject._id) {
         state.currentProject.ai_slide_mode = true;
         state.currentProject.template_id = null;
+        state.currentProject.selected_style_id = 'custom';
+        state.currentProject.selected_style_name = '커스텀 AI 슬라이드';
+        state.currentProject.selected_style_prompt = prompt;
         apiPut('/api/projects/' + state.currentProject._id, {
             template_id: null,
+            infographic_mode: false,
             ai_slide_mode: true,
+            auto_template: false,
+            selected_style_id: 'custom',
+            selected_style_name: '커스텀 AI 슬라이드',
+            selected_style_prompt: prompt,
         }).catch(() => {});
     }
     showToast('커스텀 AI 슬라이드 스타일이 적용되었습니다', 'success');
@@ -3690,9 +3858,17 @@ function selectInfographicMode() {
     if (state.currentProject && state.currentProject._id) {
         state.currentProject.infographic_mode = true;
         state.currentProject.template_id = null;
+        state.currentProject.selected_style_id = null;
+        state.currentProject.selected_style_name = null;
+        state.currentProject.selected_style_prompt = '';
         apiPut('/api/projects/' + state.currentProject._id, {
             template_id: null,
             infographic_mode: true,
+            ai_slide_mode: false,
+            auto_template: false,
+            selected_style_id: null,
+            selected_style_name: null,
+            selected_style_prompt: '',
         }).catch(() => {});
     }
 }
@@ -3706,6 +3882,7 @@ function selectAutoTemplate() {
     state.infographicMode = true;
     state.autoTemplateMode = true;
     state.aiSlideMode = false;
+    state.summaryInfographicMode = false;
     state._selectedStyleId = null;
     state._selectedStylePrompt = '';
     state._selectedStyleName = null;
@@ -3719,11 +3896,232 @@ function selectAutoTemplate() {
         state.currentProject.infographic_mode = true;
         state.currentProject.auto_template = true;
         state.currentProject.template_id = null;
+        state.currentProject.selected_style_id = null;
+        state.currentProject.selected_style_name = null;
+        state.currentProject.selected_style_prompt = '';
         apiPut('/api/projects/' + state.currentProject._id, {
             template_id: null,
             infographic_mode: true,
             auto_template: true,
+            ai_slide_mode: false,
+            selected_style_id: null,
+            selected_style_name: null,
+            selected_style_prompt: '',
         }).catch(() => {});
+    }
+}
+
+// ============ 한장 요약 인포그래픽 ============
+const _summaryStylePresets = [
+    { id: 'clean', name: 'Clean & Modern', prompt: 'Clean, modern, minimalist infographic with white background, flat icons, and blue accent colors' },
+    { id: 'dark', name: 'Dark Theme', prompt: 'Dark background infographic with vibrant accent colors, glowing elements, modern tech feel' },
+    { id: 'colorful', name: 'Colorful', prompt: 'Bright, colorful infographic with multiple vibrant colors, playful icons, engaging visual style' },
+    { id: 'corporate', name: 'Corporate', prompt: 'Professional corporate infographic, navy and gold tones, structured layout, executive summary style' },
+    { id: 'gradient', name: 'Gradient', prompt: 'Modern gradient backgrounds, smooth color transitions, glassmorphism cards, contemporary design' },
+    { id: 'sketch', name: 'Hand-drawn', prompt: 'Hand-drawn sketch style infographic, pencil illustrations, warm natural tones, organic feel' },
+];
+
+function _loadSummaryStyleCards() {
+    const container = $('#summaryStyleCards');
+    if (container.children().length > 0) return;
+
+    container.empty();
+    _summaryStylePresets.forEach(style => {
+        container.append(`
+            <div class="summary-style-card" data-style-id="${style.id}" onclick="toggleSummaryStyle('${style.id}')">
+                <span class="summary-style-name">${style.name}</span>
+            </div>
+        `);
+    });
+}
+
+function toggleSummaryStyle(styleId) {
+    const card = $(`.summary-style-card[data-style-id="${styleId}"]`);
+    if (card.hasClass('selected')) {
+        card.removeClass('selected');
+        state._summaryStyleHint = '';
+    } else {
+        $('.summary-style-card').removeClass('selected');
+        card.addClass('selected');
+        const style = _summaryStylePresets.find(s => s.id === styleId);
+        state._summaryStyleHint = style ? style.prompt : '';
+        $('#summaryCustomStyle').val('');
+    }
+}
+
+function selectSummaryInfographic() {
+    if (state.customTemplateId) {
+        _clearCustomPptxState();
+    }
+    state.selectedTemplateId = null;
+    state.infographicMode = false;
+    state.autoTemplateMode = false;
+    state.aiSlideMode = false;
+    state.summaryInfographicMode = true;
+    state._selectedStyleId = null;
+    state._selectedStylePrompt = '';
+    state._selectedStyleName = null;
+    state._templateSlideSize = '16:9';
+
+    // 커스텀 스타일 입력 확인
+    const customStyle = $('#summaryCustomStyle').val().trim();
+    if (customStyle) {
+        state._summaryStyleHint = customStyle;
+    }
+
+    updateSlideCanvasAspect();
+    updateTemplateButtonLabel();
+    closeModal('templatePickerModal');
+
+    if (state.currentProject && state.currentProject._id) {
+        state.currentProject.summary_infographic = true;
+        state.currentProject.infographic_mode = false;
+        state.currentProject.template_id = null;
+        apiPut('/api/projects/' + state.currentProject._id, {
+            template_id: null,
+            infographic_mode: false,
+            ai_slide_mode: false,
+            auto_template: false,
+            summary_infographic: true,
+            selected_style_id: null,
+            selected_style_name: null,
+            selected_style_prompt: '',
+        }).catch(() => {});
+    }
+}
+
+async function generateSummaryInfographic() {
+    const instructions = $('#instructionsInput').val().trim();
+
+    if (state.resources.length === 0 && !instructions) {
+        showToast(t('msgEnterInstructions', '리소스가 없으면 지침을 입력하세요 (인터넷 검색으로 자료를 수집합니다)'), 'error');
+        return;
+    }
+
+    _isGenerating = true;
+    _isPaused = false;
+    _animationCancelled = true;
+    state.generatedSlides = [];
+    state.currentSlideIndex = 0;
+    state._contentQueue = [];
+    state._generationComplete = false;
+
+    _showStopButton();
+
+    // 슬라이드 프리뷰 영역 표시
+    $('#slideEmpty').hide();
+    $('#slidePreview').css('display', 'flex');
+    $('#wsSlideTools').css('display', 'flex');
+    _setSlideToolsDisabled(true);
+    switchPanelTab('outline');
+
+    // 스트리밍 프로그레스 UI
+    $('#slideTextList').addClass('streaming-active').empty().append(`
+        <div id="streamingProgress" class="streaming-progress">
+            <div class="streaming-progress-header">
+                <div class="streaming-spinner-sm"></div>
+                <span id="streamingStatus">AI가 자료를 분석하여 요약하고 있습니다...</span>
+            </div>
+            <div id="streamingContent" class="streaming-content"></div>
+        </div>
+    `);
+
+    // 이전 결과 초기화
+    $('#slideThumbnails').empty();
+    $('#slideThumbList').empty();
+    $('#slideCounter').text('0 / 0');
+    $('#slideCounterInline').text('0 / 0');
+
+    // 캔버스 영역에 로딩 애니메이션
+    $('#previewCanvas .preview-obj').remove();
+    $('#previewBg').css('background-image', 'none');
+    $('#canvasLoadingOverlay').remove();
+    $('#previewCanvas').append(`
+        <div class="canvas-loading-overlay infographic-loading" id="canvasLoadingOverlay">
+            <div class="infographic-loading-animation">
+                <div class="infographic-pulse-ring"></div>
+                <div class="infographic-pulse-ring delay-1"></div>
+                <div class="infographic-pulse-ring delay-2"></div>
+                <div class="infographic-icon-container">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="infographic-icon-spin">
+                        <rect x="3" y="3" width="18" height="18" rx="2"/>
+                        <path d="M7 8h10"/>
+                        <path d="M7 12h7"/>
+                        <path d="M7 16h10"/>
+                    </svg>
+                </div>
+            </div>
+            <div class="canvas-loading-text">
+                <div class="canvas-loading-title" id="infographicLoadingTitle">한장 요약 인포그래픽을 생성하고 있습니다</div>
+                <div class="canvas-loading-sub" id="infographicLoadingSub">
+                    AI가 자료를 분석하는 중<span class="canvas-loading-dots"><span>.</span><span>.</span><span>.</span></span>
+                </div>
+            </div>
+        </div>
+    `);
+
+    _abortController = new AbortController();
+
+    try {
+        const requestBody = {
+            project_id: state.currentProject._id,
+            instructions: instructions,
+            lang: $('#langSelect').val(),
+            style_hint: state._summaryStyleHint || '',
+            infographic_ratio: state._infographicRatio || 60,
+        };
+
+        const response = await fetch(`/${state.jwtToken}/api/generate/summary-infographic/stream`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody),
+            signal: _abortController.signal,
+        });
+
+        if (!response.ok) {
+            let errMsg = '생성 실패';
+            try { const err = await response.json(); errMsg = err.detail || errMsg; } catch (_) {}
+            throw new Error(errMsg);
+        }
+
+        _streamReader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await _streamReader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split('\n\n');
+            buffer = parts.pop() || '';
+
+            for (const part of parts) {
+                for (const line of part.split('\n')) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                        const data = JSON.parse(line.substring(6));
+                        _handleInfographicStreamEvent(data);
+                    } catch (e) {
+                        console.warn('SSE parse error:', e);
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        if (err.name !== 'AbortError') {
+            showToast(err.message || '한장 요약 생성 실패', 'error');
+        }
+    } finally {
+        _isGenerating = false;
+        _isPaused = false;
+        _streamReader = null;
+        _abortController = null;
+        $('#canvasLoadingOverlay').remove();
+        $('#streamingProgress').remove();
+        $('#slideTextList').removeClass('streaming-active');
+        _showGenerateOrRestartButton();
+        _setSlideToolsDisabled(false);
     }
 }
 
@@ -3737,6 +4135,7 @@ function selectTemplateFromPicker(templateId) {
     state.infographicMode = false;
     state.autoTemplateMode = false;
     state.aiSlideMode = false;
+    state.summaryInfographicMode = false;
     state._selectedStyleId = null;
     state._selectedStylePrompt = '';
     state._selectedStyleName = null;
@@ -3774,6 +4173,7 @@ async function loadSupportedLangs() {
 // ============ 이미지 슬라이드 생성 ============
 async function generateImageSlides(templateId) {
     _isGenerating = true;
+    _isPaused = false;
     _animationCancelled = true;
     state.generatedSlides = [];
     state.currentSlideIndex = 0;
@@ -3842,6 +4242,7 @@ async function generateImageSlides(templateId) {
         }
     } finally {
         _isGenerating = false;
+        _isPaused = false;
         $('#canvasLoadingOverlay').remove();
         _showGenerateOrRestartButton();
         _setSlideToolsDisabled(false);
@@ -3939,6 +4340,11 @@ async function generatePPT() {
         return generateAiSlide();
     }
 
+    // 한장 요약 인포그래픽 모드
+    if (state.summaryInfographicMode) {
+        return generateSummaryInfographic();
+    }
+
     // 인포그래픽 모드 → 전용 생성 함수 호출
     if (state.infographicMode) {
         return generateInfographic();
@@ -3957,6 +4363,7 @@ async function generatePPT() {
     }
 
     _isGenerating = true;
+    _isPaused = false;
     _animationCancelled = true;
     state.generatedSlides = [];
     state.currentSlideIndex = 0;
@@ -4073,6 +4480,7 @@ async function generatePPT() {
         }
     } finally {
         _isGenerating = false;
+        _isPaused = false;
         _streamReader = null;
         _abortController = null;
         $('#canvasLoadingOverlay').remove();
@@ -4207,6 +4615,7 @@ function _handleStreamEvent(data) {
             const skeletonSlides = data.slides || [];
             state.generatedSlides = skeletonSlides;
             state.currentSlideIndex = 0;
+            state._userNavigatedDuringGen = false;
 
             // 로딩 오버레이 제거
             $('#canvasLoadingOverlay').remove();
@@ -4251,6 +4660,8 @@ function _handleStreamEvent(data) {
         }
 
         case 'complete':
+            state.currentProject.status = 'generated';
+            $('#wsProjectStatus').text(t('statusGenerated')).attr('class', 'ws-status generated');
             renderSlideTextPanel();
             if (!_isAnimating) {
                 // 타이핑이 이미 끝난 경우 최종 처리
@@ -4268,6 +4679,10 @@ function _handleStreamEvent(data) {
             break;
 
         case 'stopped':
+            if (state.generatedSlides.length > 0) {
+                state.currentProject.status = 'generated';
+                $('#wsProjectStatus').text(t('statusGenerated')).attr('class', 'ws-status generated');
+            }
             showToast(data.message || t('msgStopped'), 'info');
             if (state.generatedSlides.length > 0) {
                 state.currentSlideIndex = 0;
@@ -4289,11 +4704,74 @@ function _handleStreamEvent(data) {
 async function stopGeneration() {
     if (!_isGenerating) return;
 
-    // 중복 클릭 방지
-    $('#btnStop').prop('disabled', true);
+    // 이미 일시 중단 상태면 완전 중단 확인
+    if (_isPaused) {
+        const confirmed = await showConfirm('생성 중단', '생성을 완전히 중단하시겠습니까?', { danger: true, confirmText: '완전 중단', cancelText: '취소' });
+        if (confirmed) {
+            _isPaused = false;
+            await _doFullStop();
+        }
+        return;
+    }
 
+    // 일시 중단 / 완전 중단 선택 다이얼로그
+    const result = await _showPauseStopDialog();
+    if (result === 'pause') {
+        await _doPause();
+    } else if (result === 'stop') {
+        await _doFullStop();
+    }
+    // 'cancel' → do nothing
+}
+
+function _showPauseStopDialog() {
+    return new Promise(resolve => {
+        $('#pauseStopDialog').remove();
+        const html = `
+            <div id="pauseStopDialog" class="modal-overlay" style="z-index:10000;">
+                <div class="dialog-card" style="max-width:400px;">
+                    <div class="dialog-title">생성 중단</div>
+                    <div class="dialog-message">진행 중인 생성을 어떻게 하시겠습니까?</div>
+                    <div style="margin:12px 0 20px; font-size:13px; color:var(--text-secondary); line-height:1.7;">
+                        <div>• <b>일시 중단</b>: 생성을 잠시 멈추고 나중에 이어서 진행</div>
+                        <div>• <b>완전 중단</b>: 생성을 완전히 종료</div>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:8px;">
+                        <button id="psdPause" class="dialog-btn" style="background:var(--accent); color:#fff; border:none; padding:10px 18px; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer; transition:background 0.15s;">일시 중단</button>
+                        <button id="psdStop" class="dialog-btn" style="background:#ef4444; color:#fff; border:none; padding:10px 18px; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer; transition:background 0.15s;">완전 중단</button>
+                        <button id="psdCancel" class="dialog-btn" style="background:transparent; color:var(--text-secondary); border:1px solid var(--border-primary); padding:10px 18px; border-radius:8px; font-size:14px; font-weight:500; cursor:pointer; transition:background 0.15s;">취소</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        $('body').append(html);
+        const $dialog = $('#pauseStopDialog');
+
+        $('#psdPause').on('click', () => { $dialog.remove(); resolve('pause'); });
+        $('#psdStop').on('click', () => { $dialog.remove(); resolve('stop'); });
+        $('#psdCancel').on('click', () => { $dialog.remove(); resolve('cancel'); });
+        $dialog.on('click', e => {
+            if (e.target === $dialog[0]) { $dialog.remove(); resolve('cancel'); }
+        });
+    });
+}
+
+async function _doPause() {
+    _isPaused = true;
     try {
-        // 1. 서버에 중단 요청 (MongoDB 상태 변경)
+        await fetch(`/${state.jwtToken}/api/generate/pause/${state.currentProject._id}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+    } catch (e) {
+        console.warn('Pause request failed:', e);
+    }
+    _showResumeButton();
+}
+
+async function _doFullStop() {
+    $('#btnStop').prop('disabled', true);
+    try {
         await fetch(`/${state.jwtToken}/api/generate/stop/${state.currentProject._id}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -4301,14 +4779,41 @@ async function stopGeneration() {
     } catch (e) {
         console.warn('Stop request failed:', e);
     }
-
-    // 2. 프론트엔드 연결 즉시 끊기
     if (_abortController) {
         _abortController.abort();
     }
     if (_streamReader) {
         try { await _streamReader.cancel(); } catch (_) {}
     }
+}
+
+function _showResumeButton() {
+    const $btn = $('#btnStop');
+    $btn.attr('onclick', 'resumeGeneration()')
+        .removeClass('btn-stop')
+        .addClass('btn-resume')
+        .prop('disabled', false)
+        .html(`
+            <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                <path d="M4 2l10 6-10 6V2z"/>
+            </svg>
+            <span>다시 진행</span>
+        `);
+}
+
+async function resumeGeneration() {
+    if (!_isGenerating || !_isPaused) return;
+
+    _isPaused = false;
+    try {
+        await fetch(`/${state.jwtToken}/api/generate/resume/${state.currentProject._id}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+    } catch (e) {
+        console.warn('Resume request failed:', e);
+    }
+    _showStopButton();
 }
 
 
@@ -4323,10 +4828,10 @@ function _setSlideToolsDisabled(disabled) {
 
 
 function _showStopButton() {
-    const $btn = $('#btnGenerate');
+    const $btn = $('#btnGenerate').length ? $('#btnGenerate') : $('#btnStop');
     $btn.attr('id', 'btnStop')
         .attr('onclick', 'stopGeneration()')
-        .removeClass('btn-generate')
+        .removeClass('btn-generate btn-resume')
         .addClass('btn-stop')
         .prop('disabled', false)
         .html(`
@@ -4372,7 +4877,7 @@ function _showGenerateOrRestartButton() {
 
     $btn.attr('id', 'btnGenerate')
         .attr('onclick', 'handleGenerate()')
-        .removeClass('btn-stop')
+        .removeClass('btn-stop btn-resume')
         .addClass('btn-generate')
         .prop('disabled', false)
         .html(hasContent
@@ -4560,11 +5065,18 @@ function renderSlideAtIndex(index) {
     const scaleX = canvasW / _sz.w;
     const scaleY = canvasH / _sz.h;
 
+    // 인포그래픽 슬라이드: 풀사이즈 이미지에 이미 내용이 포함되어 있으므로 텍스트 오브젝트 렌더링 스킵
+    const hasFullImage = (slide.objects || []).some(o =>
+        o.obj_type === 'image' && o.image_url && o.width >= 900 && o.height >= 500);
+    const isInfographicSlide = slide.infographic && hasFullImage;
+
     let descIndex = 0; // description 오브젝트 인덱스 카운터
     let subIndex = 0;  // subtitle 오브젝트 인덱스 카운터
     const items = slide.items || [];
 
     (slide.objects || []).forEach(obj => {
+        // 인포그래픽 슬라이드: 텍스트 오브젝트 스킵 (이미지에 내용 포함)
+        if (isInfographicSlide && obj.obj_type === 'text') return;
         const div = $('<div>').addClass('preview-obj').css({
             position: 'absolute',
             left: (obj.x * scaleX) + 'px',
@@ -4646,58 +5158,18 @@ function renderSlideToContainer(container, slide, thumbW, thumbH, slideSize, sli
     const scaleX = thumbW / _sz.w;
     const scaleY = thumbH / _sz.h;
 
-    // 인포그래픽 첫 번째 슬라이드 썸네일: 중앙 오버레이 + 제목/부제목
-    const isInfographicFirst = slideIndex === 0 && state.infographicMode
-        && (slide.objects || []).some(o => o.obj_type === 'image' && o.image_url)
-        && (slide.infographic_title || (slide.objects || []).some(o => o.role === 'title'));
-    if (isInfographicFirst) {
-        // 배경 이미지 렌더링
-        const imgObj = (slide.objects || []).find(o => o.obj_type === 'image' && o.image_url);
-        if (imgObj) {
-            const imgDiv = $('<div>').css({
-                position: 'absolute', left: 0, top: 0,
-                width: thumbW + 'px', height: thumbH + 'px',
-                overflow: 'hidden', pointerEvents: 'none',
-            });
-            imgDiv.append(`<img src="${imgObj.image_url}" style="width:100%;height:100%;object-fit:cover;">`);
-            container.append(imgDiv);
-        }
-        // 전체 어두운 오버레이
-        container.append($('<div>').css({
-            position: 'absolute', left: 0, top: 0,
-            width: thumbW + 'px', height: thumbH + 'px',
-            background: 'linear-gradient(180deg, rgba(15,27,45,0.6) 0%, rgba(15,27,45,0.4) 40%, rgba(15,27,45,0.4) 60%, rgba(15,27,45,0.6) 100%)',
-            pointerEvents: 'none',
-        }));
-        // 중앙 텍스트
-        const textDiv = $('<div>').css({
-            position: 'absolute', left: 0, top: 0,
-            width: thumbW + 'px', height: thumbH + 'px',
-            display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center',
-            boxSizing: 'border-box', padding: '4px',
-            pointerEvents: 'none',
-        });
-        const titleText = slide.infographic_title
-            || ((slide.objects || []).find(o => o.role === 'title') || {}).generated_text
-            || ((slide.objects || []).find(o => o.role === 'title') || {}).text_content || '';
-        if (titleText) {
-            const scaledFont = Math.max(4, 36 * Math.min(scaleX, scaleY));
-            textDiv.append($('<div>').css({
-                color: '#fff', fontSize: scaledFont + 'px', fontWeight: '800',
-                textAlign: 'center', lineHeight: '1.25', overflow: 'hidden',
-                textShadow: '0 1px 4px rgba(0,0,0,0.4)',
-            }).text(titleText));
-        }
-        container.append(textDiv);
-        return;
-    }
+    // 인포그래픽 슬라이드: 풀사이즈 이미지에 이미 내용이 포함되어 있으므로 텍스트 오브젝트 렌더링 스킵
+    const hasThumbFullImage = (slide.objects || []).some(o =>
+        o.obj_type === 'image' && o.image_url && o.width >= 900 && o.height >= 500);
+    const isThumbInfographic = slide.infographic && hasThumbFullImage;
 
     let thumbDescIdx = 0;
     let thumbSubIdx = 0;
     const thumbItems = slide.items || [];
 
     (slide.objects || []).forEach(obj => {
+        if (isThumbInfographic && obj.obj_type === 'text') return;
+
         const div = $('<div>').css({
             position: 'absolute',
             left: (obj.x * scaleX) + 'px',
@@ -4833,34 +5305,44 @@ function _appendSingleThumbnail(i) {
     const slide = state.generatedSlides[i];
     if (!slide) return;
     const container = $('#slideThumbnails');
-    // 이전 active 해제
-    container.find('.slide-thumb').removeClass('active');
+    const isUserNav = state._userNavigatedDuringGen;
+    if (!isUserNav) {
+        container.find('.slide-thumb').removeClass('active');
+    }
+    const isActive = !isUserNav;
     const thumbEl = $(`
-        <div class="slide-thumb active" onclick="goToSlide(${i})">
+        <div class="slide-thumb ${isActive ? 'active' : ''}" onclick="goToSlide(${i})">
             <div class="slide-thumb-inner"></div>
         </div>
     `);
     { const _td64 = getThumbDimensions(64); renderSlideToContainer(thumbEl.find('.slide-thumb-inner'), slide, _td64.w, _td64.h, undefined, i); }
     container.append(thumbEl);
-    // 새 썸네일이 보이도록 스크롤
-    thumbEl[0].scrollIntoView({ inline: 'nearest', behavior: 'smooth' });
+    if (!isUserNav) {
+        thumbEl[0].scrollIntoView({ inline: 'nearest', behavior: 'smooth' });
+    }
 }
 
 function _appendSingleThumbV(i) {
     const slide = state.generatedSlides[i];
     if (!slide) return;
     const list = $('#slideThumbList');
-    // 이전 active 해제
-    list.find('.slide-thumb-v').removeClass('active');
+    // 사용자가 직접 이동한 상태가 아니면 active 전환
+    const isUserNav = state._userNavigatedDuringGen;
+    if (!isUserNav) {
+        list.find('.slide-thumb-v').removeClass('active');
+    }
+    const isActive = !isUserNav;
     const thumbEl = $(`
-        <div class="slide-thumb-v active" tabindex="0" onclick="goToSlide(${i})" data-slide-idx="${i}">
+        <div class="slide-thumb-v ${isActive ? 'active' : ''}" tabindex="0" onclick="goToSlide(${i})" data-slide-idx="${i}">
             <div class="slide-thumb-v-num">${i + 1}</div>
             <div class="slide-thumb-v-inner"></div>
         </div>
     `);
     { const _td256 = getThumbDimensions(256); renderSlideToContainer(thumbEl.find('.slide-thumb-v-inner'), slide, _td256.w, _td256.h, undefined, i); }
     list.append(thumbEl);
-    thumbEl[0].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (!isUserNav) {
+        thumbEl[0].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
 }
 
 function renderSlideTextPanel() {
@@ -5124,9 +5606,17 @@ function goToSlide(index) {
         exitEditMode();
     }
     state.currentSlideIndex = index;
-    // 인포그래픽 모드에서는 전용 렌더러 사용
-    if (state.infographicMode) {
-        _renderInfographicSlide(index);
+
+    // 생성 중 사용자가 직접 이동 → 로딩 오버레이 제거 후 해당 슬라이드 렌더링
+    if (_isGenerating && state.generatedSlides[index]) {
+        state._userNavigatedDuringGen = true;
+        $('#infographicSlideLoading').remove();
+        // 인포그래픽 모드면 전용 렌더, 아니면 일반 렌더
+        if (state.infographicMode && state.generatedSlides[index].infographic) {
+            _renderInfographicSlide(index);
+        } else {
+            renderSlideAtIndex(index);
+        }
     } else {
         renderSlideAtIndex(index);
     }
@@ -5281,11 +5771,12 @@ async function generateAiSlide() {
     const slideCount = $('#slideCountSelect').val();
 
     if (state.resources.length === 0 && !instructions) {
-        showToast(t('msgEnterInstructions', '지침을 입력하세요'), 'error');
+        showToast(t('msgEnterInstructions', '리소스가 없으면 지침을 입력하세요 (인터넷 검색으로 자료를 수집합니다)'), 'error');
         return;
     }
 
     _isGenerating = true;
+    _isPaused = false;
     _animationCancelled = true;
     state.generatedSlides = [];
     state.currentSlideIndex = 0;
@@ -5393,6 +5884,7 @@ async function generateAiSlide() {
         }
     } finally {
         _isGenerating = false;
+        _isPaused = false;
         _streamReader = null;
         _abortController = null;
         $('#canvasLoadingOverlay').remove();
@@ -5526,11 +6018,12 @@ async function generateInfographic() {
     const slideCount = $('#slideCountSelect').val();
 
     if (state.resources.length === 0 && !instructions) {
-        showToast(t('msgEnterInstructions', '지침을 입력하세요'), 'error');
+        showToast(t('msgEnterInstructions', '리소스가 없으면 지침을 입력하세요 (인터넷 검색으로 자료를 수집합니다)'), 'error');
         return;
     }
 
     _isGenerating = true;
+    _isPaused = false;
     _animationCancelled = true;
     state.generatedSlides = [];
     state.currentSlideIndex = 0;
@@ -5606,7 +6099,7 @@ async function generateInfographic() {
             lang: lang,
             slide_count: slideCount,
             style_hint: state._selectedStylePrompt || '',
-            infographic_ratio: state._infographicRatio || 40,
+            infographic_ratio: state._infographicRatio || 60,
         };
         if (state.autoTemplateMode) {
             requestBody.auto_template = true;
@@ -5663,6 +6156,7 @@ async function generateInfographic() {
         }
     } finally {
         _isGenerating = false;
+        _isPaused = false;
         _streamReader = null;
         _abortController = null;
         $('#canvasLoadingOverlay').remove();
@@ -5678,6 +6172,51 @@ async function generateInfographic() {
 
 function _handleInfographicStreamEvent(data) {
     switch (data.event) {
+        case 'web_search': {
+            const status = data.status;
+            const query = data.query || '';
+
+            // 캔버스 로딩 텍스트 업데이트
+            if (status === 'searching') {
+                $('#infographicLoadingTitle').text('인터넷에서 자료를 검색하고 있습니다');
+                $('#infographicLoadingSub').html('웹에서 관련 자료를 수집하는 중<span class="canvas-loading-dots"><span>.</span><span>.</span><span>.</span></span>');
+            } else if (status === 'complete') {
+                $('#infographicLoadingTitle').text('자료 수집 완료! 슬라이드를 생성합니다');
+                $('#infographicLoadingSub').html('AI가 수집된 자료를 분석하는 중<span class="canvas-loading-dots"><span>.</span><span>.</span><span>.</span></span>');
+            }
+
+            $('#streamingStatus').text(data.message || '');
+
+            if (status === 'searching') {
+                $('#streamingContent').html(`
+                    <div class="ws-row ws-searching" id="webSearchCard">
+                        <div class="ws-icon-wrap"><svg class="ws-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div>
+                        <span class="ws-label">웹 검색 중 &mdash; <em>${escapeHtml(query)}</em></span>
+                    </div>
+                `);
+            } else if (status === 'complete') {
+                const titles = data.titles || [];
+                let listHtml = titles.map(t => `<div class="ws-src">${escapeHtml(t)}</div>`).join('');
+                $('#streamingContent').html(`
+                    <div class="ws-row ws-done" id="webSearchCard">
+                        <div class="ws-icon-wrap"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>
+                        <span class="ws-label">${data.count || 0}건의 자료를 수집했습니다</span>
+                    </div>
+                    ${listHtml ? '<div class="ws-src-list">' + listHtml + '</div>' : ''}
+                `);
+                _refreshResources();
+            } else if (status === 'fallback') {
+                $('#streamingContent').html(`
+                    <div class="ws-row ws-warn" id="webSearchCard">
+                        <div class="ws-icon-wrap"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>
+                        <span class="ws-label">리소스 미지정<br>인터넷 검색으로 자동 진행...</span>
+                    </div>
+                `);
+                _refreshResources();
+            }
+            break;
+        }
+
         case 'start':
             $('#streamingStatus').text(data.message || 'AI가 인포그래픽을 설계하고 있습니다...');
             break;
@@ -5685,8 +6224,17 @@ function _handleInfographicStreamEvent(data) {
         case 'delta': {
             const el = document.getElementById('streamingContent');
             if (el) {
-                el.textContent += (data.text || '');
-                el.scrollTop = el.scrollHeight;
+                // 웹 검색 카드가 있으면 보존 — 별도 영역에 텍스트 추가
+                let deltaEl = document.getElementById('streamingDeltaText');
+                if (!deltaEl) {
+                    const div = document.createElement('div');
+                    div.id = 'streamingDeltaText';
+                    div.className = 'streaming-delta-text';
+                    el.appendChild(div);
+                    deltaEl = div;
+                }
+                deltaEl.textContent += (data.text || '');
+                deltaEl.scrollTop = deltaEl.scrollHeight;
             }
             break;
         }
@@ -5808,6 +6356,7 @@ function _handleInfographicStreamEvent(data) {
             state.generatedSlides = new Array(total).fill(null);
             state.currentSlideIndex = 0;
             state._infographicTotal = total;
+            state._userNavigatedDuringGen = false;
 
             // 좌측 썸네일 초기화
             $('#slideThumbnails').empty();
@@ -5832,12 +6381,16 @@ function _handleInfographicStreamEvent(data) {
             // 슬라이드 저장
             state.generatedSlides[idx] = slide;
 
-            // 현재 슬라이드로 이동 & 이미지 렌더링
-            state.currentSlideIndex = idx;
-            _renderInfographicSlide(idx);
-            updateSlideNav();
+            // 사용자가 직접 다른 슬라이드를 보고 있지 않은 경우에만 캔버스 전환
+            // (사용자가 직접 이동한 경우 _userNavigatedDuringGen 플래그가 true)
+            const autoNavigate = !state._userNavigatedDuringGen;
+            if (autoNavigate) {
+                state.currentSlideIndex = idx;
+                _renderInfographicSlide(idx);
+                updateSlideNav();
+            }
 
-            // 좌측 썸네일 추가
+            // 좌측 썸네일은 항상 추가
             _appendSingleThumbnail(idx);
             _appendSingleThumbV(idx);
 
@@ -5849,13 +6402,15 @@ function _handleInfographicStreamEvent(data) {
             $(`#infOutlineStatus_${idx}`).html('<svg width="14" height="14" viewBox="0 0 16 16" fill="#22c55e"><path d="M8 0a8 8 0 110 16A8 8 0 018 0zm3.78 5.22a.75.75 0 00-1.06 0L7 8.94 5.28 7.22a.75.75 0 10-1.06 1.06l2.25 2.25a.75.75 0 001.06 0l4.25-4.25a.75.75 0 000-1.06z"/></svg>');
             $(`#infOutlineItem_${idx}`).addClass('outline-item-done');
 
-            // 다음 슬라이드가 있으면 로딩 표시
-            if (idx + 1 < total) {
-                // 잠시 현재 슬라이드 표시 후 다음 로딩으로 전환
+            // 다음 슬라이드가 있으면 로딩 표시 (사용자가 직접 이동하지 않은 경우만)
+            if (idx + 1 < total && autoNavigate) {
                 setTimeout(() => {
-                    if (state.currentSlideIndex === idx && _isGenerating) {
-                        _showInfographicSlideLoading(idx + 1, total);
-                        _highlightInfographicOutlineItem(idx + 1);
+                    // 사용자가 이 사이에 직접 이동했으면 전환하지 않음
+                    if (!state._userNavigatedDuringGen) {
+                        if (state.currentSlideIndex === idx && _isGenerating) {
+                            _showInfographicSlideLoading(idx + 1, total);
+                            _highlightInfographicOutlineItem(idx + 1);
+                        }
                     }
                 }, 1500);
             }
@@ -5865,6 +6420,7 @@ function _handleInfographicStreamEvent(data) {
         case 'complete':
             // 마지막 슬라이드 로딩 표시 제거
             $('#infographicSlideLoading').remove();
+            state._userNavigatedDuringGen = false;
 
             renderSlideTextPanel();
             state.currentSlideIndex = 0;
@@ -5873,10 +6429,13 @@ function _handleInfographicStreamEvent(data) {
             renderSlideThumbList();
             updateSlideNav();
             showToast('인포그래픽 생성이 완료되었습니다!', 'success');
+            // 웹 검색으로 추가된 리소스 반영
+            _refreshResources();
             break;
 
         case 'stopped':
             $('#infographicSlideLoading').remove();
+            state._userNavigatedDuringGen = false;
             showToast(data.message || '생성이 중단되었습니다.', 'info');
             if (state.generatedSlides.filter(Boolean).length > 0) {
                 state.currentSlideIndex = 0;
@@ -5936,70 +6495,6 @@ function _renderInfographicSlide(idx) {
         canvas.append(div);
     }
 
-    if (idx === 0) {
-        // 첫 번째 슬라이드: 전체 어두운 오버레이 + 중앙 제목/부제목 표시
-        // 전체 반투명 오버레이 (이미지 위에 어둡게)
-        const fullOverlay = $('<div>').addClass('preview-obj').css({
-            position: 'absolute',
-            left: 0, top: 0,
-            width: canvasW + 'px',
-            height: canvasH + 'px',
-            background: 'linear-gradient(180deg, rgba(15,27,45,0.6) 0%, rgba(15,27,45,0.4) 40%, rgba(15,27,45,0.4) 60%, rgba(15,27,45,0.6) 100%)',
-            zIndex: 2,
-            pointerEvents: 'none',
-        });
-        canvas.append(fullOverlay);
-
-        // 중앙 텍스트 컨테이너
-        const textContainer = $('<div>').addClass('preview-obj infographic-slide-center-overlay').css({
-            position: 'absolute',
-            left: 0,
-            top: 0,
-            width: canvasW + 'px',
-            height: canvasH + 'px',
-            zIndex: 3,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxSizing: 'border-box',
-            padding: (20 * (canvasW / 960)) + 'px',
-        });
-
-        // 상단 장식 라인
-        const scale = canvasW / 960;
-        const accentLine = $('<div>').css({
-            width: (80 * scale) + 'px',
-            height: (3 * scale) + 'px',
-            background: 'linear-gradient(90deg, #2563EB, #3B82F6)',
-            borderRadius: '2px',
-            marginBottom: (20 * scale) + 'px',
-        });
-        textContainer.append(accentLine);
-
-        // 제목 텍스트
-        const titleText = slide.infographic_title
-            || ((slide.objects || []).find(o => o.role === 'title') || {}).generated_text
-            || ((slide.objects || []).find(o => o.role === 'title') || {}).text_content
-            || '';
-        if (titleText) {
-            const titleEl = $('<div>').css({
-                color: '#FFFFFF',
-                fontSize: (40 * scale) + 'px',
-                fontWeight: '800',
-                textAlign: 'center',
-                lineHeight: '1.25',
-                marginBottom: (16 * scale) + 'px',
-                wordBreak: 'keep-all',
-                letterSpacing: '-0.02em',
-                textShadow: '0 2px 8px rgba(0,0,0,0.4)',
-            });
-            titleEl.text(titleText);
-            textContainer.append(titleEl);
-        }
-
-        canvas.append(textContainer);
-    }
 }
 
 /** 캔버스에 인포그래픽 슬라이드 생성 중 로딩 표시 */
@@ -6297,7 +6792,7 @@ function _stopEditAutoSave() {
 function exitEditMode() {
     collectEditedText();
     if (state.editDirtySlides.size > 0) {
-        showConfirm({
+        _showConfirmLegacy({
             title: t('editUnsavedChanges'),
             message: '',
             okText: t('btnSave'),
@@ -8398,6 +8893,7 @@ async function startTranslation(targetLang) {
     const langName = langNames[targetLang] || targetLang;
 
     _isGenerating = true;
+    _isPaused = false;
     _showStopButton();
     _setSlideToolsDisabled(true);
 
@@ -8590,6 +9086,7 @@ async function startTranslation(targetLang) {
     } finally {
         streamDone = true;
         _isGenerating = false;
+        _isPaused = false;
         _streamReader = null;
         _abortController = null;
         $('#translateProgressBar').remove();
@@ -9869,7 +10366,7 @@ $(function() {
 });
 
 // ============ 범용 확인 다이얼로그 ============
-function showConfirm({ title, message, okText, cancelText, onOk, onCancel, danger = true }) {
+function _showConfirmLegacy({ title, message, okText, cancelText, onOk, onCancel, danger = true }) {
     $('#confirmDialogTitle').text(title || '확인');
     $('#confirmDialogMessage').html(message || '진행하시겠습니까?');
     const okBtn = $('#confirmDialogOk');
@@ -9902,7 +10399,7 @@ $('#confirmDialogModal').on('click', function(e) {
 // Promise 기반 confirm (await 가능)
 function confirmAsync({ title, message, okText, cancelText, danger = true }) {
     return new Promise(resolve => {
-        showConfirm({
+        _showConfirmLegacy({
             title, message, okText, cancelText, danger,
             onOk: () => resolve(true),
             onCancel: () => resolve(false),
@@ -10487,6 +10984,7 @@ async function generateExcel() {
     }
 
     _isGenerating = true;
+    _isPaused = false;
     state.generatedExcel = null;
     $('#btnDownloadXlsx').hide();
 
@@ -10559,6 +11057,7 @@ async function generateExcel() {
         }
     } finally {
         _isGenerating = false;
+        _isPaused = false;
         _abortController = null;
         _hideExcelProgress();
         _showGenerateOrRestartButton();
@@ -10640,6 +11139,7 @@ function _detectChartRequest(instruction) {
 
 async function _generateChartDirect(chartReq) {
     _isGenerating = true;
+    _isPaused = false;
     _showStopButton();
     _showExcelProgress('차트를 생성하고 있습니다...', '');
 
@@ -10688,6 +11188,7 @@ async function _generateChartDirect(chartReq) {
         showToast(e.message || '차트 생성 실패', 'error');
     } finally {
         _isGenerating = false;
+        _isPaused = false;
         _hideExcelProgress();
         _showGenerateOrRestartButton();
         $('#instructionsInput').val('');
@@ -10735,6 +11236,7 @@ async function modifyExcel() {
     }
 
     _isGenerating = true;
+    _isPaused = false;
     _isExcelModifying = true;
     _destroyExcelCharts();
     _showStopButton();
@@ -10822,6 +11324,7 @@ async function modifyExcel() {
         }
     } finally {
         _isGenerating = false;
+        _isPaused = false;
         _isExcelModifying = false;
         _abortController = null;
         _hideExcelProgress();
@@ -12195,7 +12698,7 @@ function _updateDocxTemplateButton(filename) {
 function handleDocxTemplate() {
     if (state.docxTemplateId) {
         // 이미 템플릿이 있으면 교체 확인
-        showConfirm({
+        _showConfirmLegacy({
             title: t('msgConfirmReplaceTemplate'),
             message: '',
             okText: t('btnReplace'),
@@ -12294,6 +12797,7 @@ async function generateWord() {
     }
 
     _isGenerating = true;
+    _isPaused = false;
     _wordDeltaCount = 0;
     _wordRequestedTotal = parseInt($('#docxPageCountSelect').val()) || 0; // 요청한 전체 섹션 수
     state.generatedDocx = null;
@@ -12371,6 +12875,7 @@ async function generateWord() {
         }
     } finally {
         _isGenerating = false;
+        _isPaused = false;
         _abortController = null;
         _hideWordProgress();
         _showGenerateOrRestartButton();
@@ -12397,6 +12902,7 @@ async function modifyWord() {
     }
 
     _isGenerating = true;
+    _isPaused = false;
     _showStopButton();
     _showWordProgress(t('wordStreaming'), '');
 
@@ -12468,6 +12974,7 @@ async function modifyWord() {
         }
     } finally {
         _isGenerating = false;
+        _isPaused = false;
         _abortController = null;
         _hideWordProgress();
         _showGenerateOrRestartButton();
@@ -13612,6 +14119,7 @@ async function generateOnlyOfficeDocx() {
     }
 
     _isGenerating = true;
+    _isPaused = false;
     _showStopButton();
     state.currentProject.status = 'generating';
     $('#wsProjectStatus').text(t('statusGenerating')).attr('class', 'ws-status generating');
@@ -13743,6 +14251,7 @@ async function _onlyofficeDocxStreamWithEditor(url, body) {
                 errMsg = errBody.detail || errBody.message || errMsg;
             } catch {}
             _isGenerating = false;
+            _isPaused = false;
             _stopStreamTimer();
             $('#ooStreamOverlay').remove();
             _showGenerateOrRestartButton();
@@ -13819,6 +14328,7 @@ async function _onlyofficeDocxStreamWithEditor(url, body) {
                         break;
                     case 'complete':
                         _isGenerating = false;
+                        _isPaused = false;
                         // 대기 중인 리로드 타이머 취소
                         if (_editorReloadTimer) { clearTimeout(_editorReloadTimer); _editorReloadTimer = null; }
                         _editorReloadPending = false;
@@ -13843,6 +14353,7 @@ async function _onlyofficeDocxStreamWithEditor(url, body) {
                         break;
                     case 'stopped':
                         _isGenerating = false;
+                        _isPaused = false;
                         if (_editorReloadTimer) { clearTimeout(_editorReloadTimer); _editorReloadTimer = null; }
                         _editorReloadPending = false;
                         _stopStreamTimer();
@@ -13854,6 +14365,7 @@ async function _onlyofficeDocxStreamWithEditor(url, body) {
                         break;
                     case 'error':
                         _isGenerating = false;
+                        _isPaused = false;
                         _stopStreamTimer();
                         $('#ooStreamOverlay').fadeOut(300, function() { $(this).remove(); });
                         _showGenerateOrRestartButton();
@@ -13866,12 +14378,14 @@ async function _onlyofficeDocxStreamWithEditor(url, body) {
         // 스트림이 끝났는데 complete/error 없이 종료된 경우
         if ($('#ooStreamOverlay').is(':visible')) {
             _isGenerating = false;
+            _isPaused = false;
             _stopStreamTimer();
             $('#ooStreamOverlay').remove();
             _showGenerateOrRestartButton();
         }
     } catch (e) {
         _isGenerating = false;
+        _isPaused = false;
         _stopStreamTimer();
         $('#ooStreamOverlay').remove();
         _showGenerateOrRestartButton();
@@ -14371,6 +14885,7 @@ async function _onlyofficeDocxHtmlStream(url, body) {
                 errMsg = errBody.detail || errBody.message || errMsg;
             } catch {}
             _isGenerating = false;
+            _isPaused = false;
             _hideOoDocxHtmlPreview();
             _showGenerateOrRestartButton();
             state.currentProject.status = 'draft';
@@ -14457,6 +14972,7 @@ async function _onlyofficeDocxHtmlStream(url, body) {
                         break;
                     case 'complete':
                         _isGenerating = false;
+                        _isPaused = false;
                         _hideOoDocxHtmlPreview();
                         _showGenerateOrRestartButton();
                         state.currentProject.status = 'generated';
@@ -14474,6 +14990,7 @@ async function _onlyofficeDocxHtmlStream(url, body) {
                         break;
                     case 'stopped':
                         _isGenerating = false;
+                        _isPaused = false;
                         _hideOoDocxHtmlPreview();
                         _showGenerateOrRestartButton();
                         state.currentProject.status = 'stopped';
@@ -14490,6 +15007,7 @@ async function _onlyofficeDocxHtmlStream(url, body) {
                         break;
                     case 'error':
                         _isGenerating = false;
+                        _isPaused = false;
                         _hideOoDocxHtmlPreview();
                         _showGenerateOrRestartButton();
                         $('#ooDocxPreviewWrap').fadeOut(300, function() { $(this).remove(); });
@@ -14502,12 +15020,14 @@ async function _onlyofficeDocxHtmlStream(url, body) {
         // 스트림이 끝났는데 complete/error 없이 종료된 경우
         if ($('#ooDocxPreviewWrap').is(':visible') && _isGenerating) {
             _isGenerating = false;
+            _isPaused = false;
             _hideOoDocxHtmlPreview();
             _showGenerateOrRestartButton();
             $('#ooDocxPreviewWrap').remove();
         }
     } catch (e) {
         _isGenerating = false;
+        _isPaused = false;
         _hideOoDocxHtmlPreview();
         _showGenerateOrRestartButton();
         $('#ooDocxPreviewWrap').remove();
@@ -16270,6 +16790,7 @@ async function generateHtmlReport() {
     }
 
     _isGenerating = true;
+    _isPaused = false;
     state.generatedHtml = null;
     state._htmlOutlineReceived = false;
     state._htmlOutlineData = null;
@@ -16378,6 +16899,7 @@ async function generateHtmlReport() {
         }
     } finally {
         _isGenerating = false;
+        _isPaused = false;
         _abortController = null;
         _outlinePhase = false;
         _hideHtmlProgress();

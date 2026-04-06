@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from bson import ObjectId
 from datetime import datetime
-from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest, DocxModifyRequest, DocxPrepareRequest, RewriteRequest, TranslateProjectRequest, HtmlReportGenerateRequest, InfographicGenerateRequest, AiSlideGenerateRequest
+from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, InfographicSlideAddRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest, DocxModifyRequest, DocxPrepareRequest, RewriteRequest, TranslateProjectRequest, HtmlReportGenerateRequest, InfographicGenerateRequest, AiSlideGenerateRequest, SummaryInfographicRequest
 from services.mongo_service import get_db
 from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible, get_user_by_key
 from services import redis_service
@@ -13,7 +13,7 @@ from services.excel_service import generate_xlsx, auto_generate_chart_definition
 from services.word_service import generate_docx, create_empty_docx, extract_docx_template_structure
 from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content, generate_excel_content_stream, modify_excel_content_stream, generate_docx_content_stream, rewrite_text_stream, generate_html_report_stream, generate_html_report_outline_stream, generate_html_report_css_stream, generate_html_page_content, _call_claude_api
 from services.search_service import search_web
-from services.infographic_service import generate_infographic_image, generate_infographic_batch, generate_bg_image, fix_slide_text_image, edit_slide_image
+from services.infographic_service import generate_infographic_image, generate_infographic_batch, generate_bg_image, fix_slide_text_image, edit_slide_image, generate_summary_infographic
 from services.onlyoffice_service import create_onlyoffice_document
 from services.file_service import extract_excel_structure
 from routers.prompt import get_prompt_content, get_prompt_model
@@ -162,15 +162,29 @@ async def generate_slides(jwt_token: str, data: GenerateRequest):
         pages = search_result.get("pages", [])
         if pages:
             search_contents = []
-            for page in pages:
-                title = page.get("title", "")
+            now = datetime.utcnow()
+            for i, page in enumerate(pages):
+                p_title = page.get("title", "") or f"웹 검색 {i+1}: {data.instructions[:30]}"
                 content = page.get("content", "")
+                p_url = page.get("url", "")
                 if content:
-                    search_contents.append(f"[{title}]\n{content}")
+                    search_contents.append(f"[{p_title}]\n{content}")
+                    await db.resources.insert_one({
+                        "project_id": data.project_id,
+                        "resource_type": "web",
+                        "title": p_title,
+                        "content": content,
+                        "source_url": p_url,
+                        "sources": [p_url] if p_url else [],
+                        "created_at": now,
+                    })
             combined_text = "\n\n".join(search_contents)
 
     if not combined_text.strip():
-        raise HTTPException(status_code=400, detail="리소스에 텍스트 내용이 없습니다.")
+        if data.instructions.strip():
+            combined_text = data.instructions
+        else:
+            raise HTTPException(status_code=400, detail="리소스에 텍스트 내용이 없습니다.")
 
     # 템플릿 슬라이드 조회
     slides = await get_template_slides(data.template_id)
@@ -381,30 +395,31 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
         pages = search_result.get("pages", [])
         if pages:
             search_contents = []
-            search_sources = []
-            for page in pages:
-                title = page.get("title", "")
+            now = datetime.utcnow()
+            for i, page in enumerate(pages):
+                p_title = page.get("title", "") or f"웹 검색 {i+1}: {data.instructions[:30]}"
                 content = page.get("content", "")
-                url = page.get("url", "")
+                p_url = page.get("url", "")
                 if content:
-                    search_contents.append(f"[{title}]\n{content}")
-                    if url:
-                        search_sources.append(url)
+                    search_contents.append(f"[{p_title}]\n{content}")
+                    await db.resources.insert_one({
+                        "project_id": data.project_id,
+                        "resource_type": "web",
+                        "title": p_title,
+                        "content": content,
+                        "source_url": p_url,
+                        "sources": [p_url] if p_url else [],
+                        "created_at": now,
+                    })
             combined_text = "\n\n".join(search_contents)
-            # 검색 결과를 리소스로 자동 저장
             if combined_text.strip():
-                await db.resources.insert_one({
-                    "project_id": data.project_id,
-                    "resource_type": "web",
-                    "title": f"자동 웹 검색: {data.instructions[:50]}",
-                    "content": combined_text,
-                    "sources": search_sources,
-                    "created_at": datetime.utcnow(),
-                })
                 web_search_performed = True
 
     if not combined_text.strip():
-        raise HTTPException(status_code=400, detail="리소스에 텍스트 내용이 없습니다.")
+        if data.instructions.strip():
+            combined_text = data.instructions
+        else:
+            raise HTTPException(status_code=400, detail="리소스에 텍스트 내용이 없습니다.")
 
     # 커스텀 템플릿 또는 일반 템플릿 슬라이드 조회
     custom_template_doc = None
@@ -483,6 +498,10 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
                 yield _sse("start", {"message": "AI가 슬라이드를 설계하고 있습니다..."})
 
             # 취소 체크
+            if await _wait_if_paused(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
             if await _check_cancelled(db, data.project_id, generation_id):
                 yield _sse("stopped", {"message": "생성이 중단되었습니다."})
                 await _set_stopped(db, data.project_id)
@@ -500,6 +519,9 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
                     chunk_count += 1
                     # 50 chunk마다 취소 체크 (~2-3초 간격)
                     if chunk_count % 50 == 0:
+                        if await _wait_if_paused(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
                         if await _check_cancelled(db, data.project_id, generation_id):
                             cancelled = True
                             break
@@ -573,6 +595,10 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
             # ── Phase 2: 슬라이드별 콘텐츠 전송 + DB 저장 ──
             for output_order, item in enumerate(llm_slides):
                 # 각 슬라이드 저장 전 취소 체크
+                if await _wait_if_paused(db, data.project_id, generation_id):
+                    yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                    await _set_stopped(db, data.project_id)
+                    return
                 if await _check_cancelled(db, data.project_id, generation_id):
                     yield _sse("stopped", {"message": "생성이 중단되었습니다."})
                     await _set_stopped(db, data.project_id)
@@ -620,6 +646,8 @@ async def generate_slides_stream(jwt_token: str, data: GenerateRequest):
 
             yield _sse("complete", {"total": len(generated)})
 
+        except asyncio.CancelledError:
+            return
         except Exception as e:
             print(f"[SSE] Stream error: {e}")
             # 중단 요청으로 인한 에러인지 확인
@@ -654,54 +682,12 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
     await db.slide_history.delete_many({"project_id": data.project_id})
     await redis_service.delete_project_locks(data.project_id)
 
-    # 리소스 텍스트 수집
-    cursor = db.resources.find({"project_id": data.project_id})
-    all_content = []
-    async for r in cursor:
-        if r.get("resource_type") == "image":
-            img_desc = r.get("content", "")
-            if img_desc:
-                img_title = r.get("title") or r.get("original_filename") or "이미지"
-                all_content.append(f"[이미지: {img_title}]\n{img_desc}")
-            continue
-        if r.get("content"):
-            all_content.append(r["content"])
-        elif r.get("title"):
-            all_content.append(f"[{r['title']}]")
-    combined_text = "\n\n".join(all_content)
-
-    # 리소스가 없으면 지침으로 자동 웹 검색
-    web_search_performed = False
-    if not combined_text.strip():
-        if not data.instructions.strip():
+    if not data.instructions.strip():
+        # 리소스도 없고 지침도 없는지 빠른 체크
+        cursor = db.resources.find({"project_id": data.project_id}, {"_id": 1})
+        has_resources = await cursor.to_list(length=1)
+        if not has_resources:
             raise HTTPException(status_code=400, detail="리소스 또는 지침을 입력하세요.")
-        search_result = await search_web(data.instructions)
-        pages = search_result.get("pages", [])
-        if pages:
-            search_contents = []
-            search_sources = []
-            for page in pages:
-                title = page.get("title", "")
-                content = page.get("content", "")
-                url = page.get("url", "")
-                if content:
-                    search_contents.append(f"[{title}]\n{content}")
-                    if url:
-                        search_sources.append(url)
-            combined_text = "\n\n".join(search_contents)
-            if combined_text.strip():
-                await db.resources.insert_one({
-                    "project_id": data.project_id,
-                    "resource_type": "web",
-                    "title": f"자동 웹 검색: {data.instructions[:50]}",
-                    "content": combined_text,
-                    "sources": search_sources,
-                    "created_at": datetime.utcnow(),
-                })
-                web_search_performed = True
-
-    if not combined_text.strip():
-        raise HTTPException(status_code=400, detail="리소스에 텍스트 내용이 없습니다.")
 
     # 인포그래픽용 간이 아웃라인 생성을 위한 슬라이드 메타 (body 타입만)
     dummy_meta = [{
@@ -738,14 +724,79 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
         style_hint = data.style_hint or ""
 
         try:
+            # ── 리소스 수집 (SSE 스트림 내부에서 실행) ──
+            cursor = db.resources.find({"project_id": data.project_id})
+            all_content = []
+            async for r in cursor:
+                if r.get("resource_type") == "image":
+                    img_desc = r.get("content", "")
+                    if img_desc:
+                        img_title = r.get("title") or r.get("original_filename") or "이미지"
+                        all_content.append(f"[이미지: {img_title}]\n{img_desc}")
+                    continue
+                if r.get("content"):
+                    all_content.append(r["content"])
+                elif r.get("title"):
+                    all_content.append(f"[{r['title']}]")
+            combined_text = "\n\n".join(all_content)
+
+            web_search_performed = False
+            if not combined_text.strip() and data.instructions.strip():
+                yield _sse("web_search", {"status": "searching", "query": data.instructions, "message": "인터넷에서 자료를 검색하고 있습니다..."})
+                search_result = await search_web(data.instructions)
+                pages = search_result.get("pages", [])
+                if pages:
+                    search_contents = []
+                    search_titles = []
+                    now = datetime.utcnow()
+                    for i, page in enumerate(pages):
+                        p_title = page.get("title", "") or f"웹 검색 {i+1}: {data.instructions[:30]}"
+                        content = page.get("content", "")
+                        p_url = page.get("url", "")
+                        if content:
+                            search_contents.append(f"[{p_title}]\n{content}")
+                            search_titles.append(p_title)
+                            await db.resources.insert_one({
+                                "project_id": data.project_id,
+                                "resource_type": "web",
+                                "title": p_title,
+                                "content": content,
+                                "source_url": p_url,
+                                "sources": [p_url] if p_url else [],
+                                "created_at": now,
+                            })
+                    combined_text = "\n\n".join(search_contents)
+                    if combined_text.strip():
+                        web_search_performed = True
+                        yield _sse("web_search", {"status": "complete", "count": len(search_titles), "titles": search_titles[:5], "message": f"{len(search_titles)}건의 자료를 수집했습니다"})
+
+                if not combined_text.strip():
+                    combined_text = data.instructions
+                    await db.resources.insert_one({
+                        "project_id": data.project_id,
+                        "resource_type": "text",
+                        "title": f"사용자 지침: {data.instructions[:50]}",
+                        "content": data.instructions,
+                        "created_at": datetime.utcnow(),
+                    })
+                    yield _sse("web_search", {"status": "fallback", "message": "리소스 미지정 — 지침 내용으로 진행합니다"})
+
+            if not combined_text.strip():
+                yield _sse("error", {"message": "리소스 또는 지침을 입력하세요."})
+                return
+
             if data.auto_template:
                 yield _sse("start", {"message": "AI가 최적의 디자인 스타일을 분석하고 있습니다..."})
             elif web_search_performed:
-                yield _sse("start", {"message": "웹 검색으로 자료를 수집하여 아웃라인을 설계하고 있습니다..."})
+                yield _sse("start", {"message": "수집한 자료로 아웃라인을 설계하고 있습니다..."})
             else:
                 yield _sse("start", {"message": "AI가 인포그래픽 아웃라인을 설계하고 있습니다..."})
 
             # 취소 체크
+            if await _wait_if_paused(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
             if await _check_cancelled(db, data.project_id, generation_id):
                 yield _sse("stopped", {"message": "생성이 중단되었습니다."})
                 await _set_stopped(db, data.project_id)
@@ -790,6 +841,10 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
                     yield _sse("delta", {"text": f"디자인 분석 실패 (기본 스타일로 진행)\n"})
 
                 # 취소 체크
+                if await _wait_if_paused(db, data.project_id, generation_id):
+                    yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                    await _set_stopped(db, data.project_id)
+                    return
                 if await _check_cancelled(db, data.project_id, generation_id):
                     yield _sse("stopped", {"message": "생성이 중단되었습니다."})
                     await _set_stopped(db, data.project_id)
@@ -813,6 +868,9 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
                     yield _sse("delta", {"text": event_data})
                     chunk_count += 1
                     if chunk_count % 50 == 0:
+                        if await _wait_if_paused(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
                         if await _check_cancelled(db, data.project_id, generation_id):
                             cancelled = True
                             break
@@ -879,6 +937,10 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
                 infographic_ratio=data.infographic_ratio,
             ):
                 # 취소 체크
+                if await _wait_if_paused(db, data.project_id, generation_id):
+                    yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                    await _set_stopped(db, data.project_id)
+                    return
                 if await _check_cancelled(db, data.project_id, generation_id):
                     yield _sse("stopped", {"message": "생성이 중단되었습니다."})
                     await _set_stopped(db, data.project_id)
@@ -899,25 +961,6 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
                         "image_url": image_url,
                         "image_fit": "cover",
                         "z_index": 1,
-                    })
-
-                # 첫 번째 슬라이드: 타이틀을 별도 텍스트 오브젝트로 오버레이
-                if idx == 0:
-                    gen_objects.append({
-                        "obj_type": "text",
-                        "x": 80, "y": 220,
-                        "width": 800, "height": 80,
-                        "text_content": title,
-                        "generated_text": title,
-                        "role": "title",
-                        "z_index": 10,
-                        "text_style": {
-                            "font_size": 40,
-                            "bold": True,
-                            "color": "#FFFFFF",
-                            "align": "center",
-                            "font_family": "Pretendard",
-                        }
                     })
 
                 gen_slide = {
@@ -961,8 +1004,254 @@ async def generate_infographic_stream(jwt_token: str, data: InfographicGenerateR
 
             yield _sse("complete", {"total": len(generated)})
 
+        except asyncio.CancelledError:
+            return
         except Exception as e:
             print(f"[SSE] Infographic stream error: {e}")
+            import traceback
+            traceback.print_exc()
+            project = await db.projects.find_one(
+                {"_id": ObjectId(data.project_id)}, {"status": 1}
+            )
+            if project and project.get("status") in ("stop_requested", "stopped"):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+            else:
+                yield _sse("error", {"message": str(e)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@router.post("/{jwt_token}/api/generate/summary-infographic/stream")
+async def generate_summary_infographic_stream(jwt_token: str, data: SummaryInfographicRequest):
+    """한장 요약 인포그래픽 생성 - 리소스를 1장 인포그래픽 이미지로 요약 SSE 스트리밍"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    # 기존 생성 슬라이드 삭제
+    await db.generated_slides.delete_many({"project_id": data.project_id})
+    await db.slide_locks.delete_many({"project_id": data.project_id})
+    await db.slide_history.delete_many({"project_id": data.project_id})
+    await redis_service.delete_project_locks(data.project_id)
+
+    if not data.instructions.strip():
+        cursor = db.resources.find({"project_id": data.project_id}, {"_id": 1})
+        has_resources = await cursor.to_list(length=1)
+        if not has_resources:
+            raise HTTPException(status_code=400, detail="리소스 또는 지침을 입력하세요.")
+
+    generation_id = str(uuid.uuid4())
+    await redis_service.clear_generation_cancel(data.project_id)
+
+    await db.projects.update_one(
+        {"_id": ObjectId(data.project_id)},
+        {"$set": {
+            "instructions": data.instructions,
+            "status": "generating",
+            "generation_id": generation_id,
+            "infographic_mode": True,
+            "summary_infographic": True,
+            "updated_at": datetime.utcnow(),
+        }}
+    )
+
+    def _sse(event: str, payload: dict) -> str:
+        return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False, default=str)}\n\n"
+
+    async def event_stream():
+        try:
+            # ── 리소스 수집 (SSE 스트림 내부) ──
+            cursor = db.resources.find({"project_id": data.project_id})
+            all_content = []
+            async for r in cursor:
+                if r.get("resource_type") == "image":
+                    img_desc = r.get("content", "")
+                    if img_desc:
+                        img_title = r.get("title") or r.get("original_filename") or "이미지"
+                        all_content.append(f"[이미지: {img_title}]\n{img_desc}")
+                    continue
+                if r.get("content"):
+                    all_content.append(r["content"])
+                elif r.get("title"):
+                    all_content.append(f"[{r['title']}]")
+            combined_text = "\n\n".join(all_content)
+
+            web_search_performed = False
+            if not combined_text.strip() and data.instructions.strip():
+                yield _sse("web_search", {"status": "searching", "query": data.instructions, "message": "인터넷에서 자료를 검색하고 있습니다..."})
+                search_result = await search_web(data.instructions)
+                pages = search_result.get("pages", [])
+                if pages:
+                    search_contents = []
+                    search_titles = []
+                    now = datetime.utcnow()
+                    for i, page in enumerate(pages):
+                        p_title = page.get("title", "") or f"웹 검색 {i+1}: {data.instructions[:30]}"
+                        content = page.get("content", "")
+                        p_url = page.get("url", "")
+                        if content:
+                            search_contents.append(f"[{p_title}]\n{content}")
+                            search_titles.append(p_title)
+                            await db.resources.insert_one({
+                                "project_id": data.project_id,
+                                "resource_type": "web",
+                                "title": p_title,
+                                "content": content,
+                                "source_url": p_url,
+                                "sources": [p_url] if p_url else [],
+                                "created_at": now,
+                            })
+                    combined_text = "\n\n".join(search_contents)
+                    if combined_text.strip():
+                        web_search_performed = True
+                        yield _sse("web_search", {"status": "complete", "count": len(search_titles), "titles": search_titles[:5], "message": f"{len(search_titles)}건의 자료를 수집했습니다"})
+
+                if not combined_text.strip():
+                    combined_text = data.instructions
+                    await db.resources.insert_one({
+                        "project_id": data.project_id,
+                        "resource_type": "text",
+                        "title": f"사용자 지침: {data.instructions[:50]}",
+                        "content": data.instructions,
+                        "created_at": datetime.utcnow(),
+                    })
+                    yield _sse("web_search", {"status": "fallback", "message": "리소스 미지정 — 지침 내용으로 진행합니다"})
+
+            if not combined_text.strip():
+                yield _sse("error", {"message": "리소스 또는 지침을 입력하세요."})
+                return
+
+            yield _sse("start", {"message": web_search_performed and "수집한 자료를 분석하여 요약하고 있습니다..." or "AI가 자료를 분석하여 요약하고 있습니다..."})
+
+            # 취소 체크
+            if await _wait_if_paused(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+            if await _check_cancelled(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            # Phase 1: Claude로 리소스 요약 구조 생성
+            yield _sse("delta", {"text": "자료를 분석하고 요약 구조를 설계하는 중...\n"})
+
+            summary_system = await get_prompt_content("summary_infographic_system")
+            summary_user_tpl = await get_prompt_content("summary_infographic_user")
+            # 리소스 텍스트 제한 (Claude 입력용)
+            resource_excerpt = combined_text[:8000]
+            summary_user = summary_user_tpl.format(
+                resources_text=resource_excerpt,
+                instructions=data.instructions or "전체 내용 요약",
+            )
+            summary_model = await get_prompt_model("summary_infographic_system")
+            effective_model = summary_model or "claude-sonnet-4-6"
+
+            summary_result = await _call_claude_api(summary_system, summary_user, model=effective_model)
+
+            # JSON 파싱
+            import re
+            json_match = re.search(r'```json\s*(.*?)\s*```', summary_result, re.DOTALL)
+            if json_match:
+                summary_data = json.loads(json_match.group(1))
+            else:
+                summary_data = json.loads(summary_result)
+
+            summary_title = summary_data.get("title", "Summary")
+            yield _sse("delta", {"text": f"요약 완료: {summary_title}\n"})
+
+            # 아웃라인 전송
+            sections = summary_data.get("sections", [])
+            def _section_detail(s):
+                dp = s.get("data_points", [])
+                if dp:
+                    return " / ".join(f"{d.get('label','')}: {d.get('value','')}" for d in dp[:3])
+                pts = s.get("points", [])
+                return " / ".join(pts[:3]) if pts else ""
+            outline_items = [{
+                "type": "cover",
+                "title": summary_title,
+                "subtitle": summary_data.get("subtitle", ""),
+                "items_count": len(sections),
+                "items": [{"heading": s.get("heading", ""), "detail": _section_detail(s)} for s in sections],
+            }]
+            yield _sse("outline", {"slides": outline_items})
+
+            # 취소 체크
+            if await _wait_if_paused(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+            if await _check_cancelled(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            # Phase 2: Gemini로 인포그래픽 이미지 생성
+            yield _sse("infographic_start", {"total": 1, "message": "인포그래픽 이미지를 생성하고 있습니다..."})
+
+            image_url, _ = await generate_summary_infographic(
+                summary_data=summary_data,
+                style_hint=data.style_hint or "",
+                infographic_ratio=data.infographic_ratio,
+            )
+
+            # 슬라이드 저장
+            gen_objects = []
+            if image_url:
+                gen_objects.append({
+                    "obj_type": "image",
+                    "x": 0, "y": 0,
+                    "width": 960, "height": 540,
+                    "image_url": image_url,
+                    "image_fit": "cover",
+                    "z_index": 1,
+                })
+
+            gen_slide = {
+                "project_id": data.project_id,
+                "template_slide_id": "infographic",
+                "order": 1,
+                "objects": gen_objects,
+                "items": [],
+                "background_image": None,
+                "infographic": True,
+                "infographic_title": summary_title,
+                "summary_infographic": True,
+                "created_at": datetime.utcnow(),
+            }
+            result = await db.generated_slides.insert_one(gen_slide)
+            gen_slide["_id"] = str(result.inserted_id)
+
+            yield _sse("infographic_slide", {
+                "index": 0,
+                "total": 1,
+                "slide": gen_slide,
+                "title": summary_title,
+            })
+
+            # 프로젝트 상태 업데이트
+            await db.projects.update_one(
+                {"_id": ObjectId(data.project_id)},
+                {"$set": {
+                    "status": "generated",
+                    "updated_at": datetime.utcnow(),
+                }}
+            )
+
+            yield _sse("complete", {"total": 1})
+
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            print(f"[SSE] Summary infographic stream error: {e}")
             import traceback
             traceback.print_exc()
             project = await db.projects.find_one(
@@ -996,54 +1285,11 @@ async def generate_ai_slide_stream(jwt_token: str, data: AiSlideGenerateRequest)
     await db.slide_history.delete_many({"project_id": data.project_id})
     await redis_service.delete_project_locks(data.project_id)
 
-    # 리소스 텍스트 수집
-    cursor = db.resources.find({"project_id": data.project_id})
-    all_content = []
-    async for r in cursor:
-        if r.get("resource_type") == "image":
-            img_desc = r.get("content", "")
-            if img_desc:
-                img_title = r.get("title") or r.get("original_filename") or "이미지"
-                all_content.append(f"[이미지: {img_title}]\n{img_desc}")
-            continue
-        if r.get("content"):
-            all_content.append(r["content"])
-        elif r.get("title"):
-            all_content.append(f"[{r['title']}]")
-    combined_text = "\n\n".join(all_content)
-
-    # 리소스가 없으면 지침으로 자동 웹 검색
-    web_search_performed = False
-    if not combined_text.strip():
-        if not data.instructions.strip():
+    if not data.instructions.strip():
+        cursor = db.resources.find({"project_id": data.project_id}, {"_id": 1})
+        has_resources = await cursor.to_list(length=1)
+        if not has_resources:
             raise HTTPException(status_code=400, detail="리소스 또는 지침을 입력하세요.")
-        search_result = await search_web(data.instructions)
-        pages = search_result.get("pages", [])
-        if pages:
-            search_contents = []
-            search_sources = []
-            for page in pages:
-                title = page.get("title", "")
-                content = page.get("content", "")
-                url = page.get("url", "")
-                if content:
-                    search_contents.append(f"[{title}]\n{content}")
-                    if url:
-                        search_sources.append(url)
-            combined_text = "\n\n".join(search_contents)
-            if combined_text.strip():
-                await db.resources.insert_one({
-                    "project_id": data.project_id,
-                    "resource_type": "web",
-                    "title": f"자동 웹 검색: {data.instructions[:50]}",
-                    "content": combined_text,
-                    "sources": search_sources,
-                    "created_at": datetime.utcnow(),
-                })
-                web_search_performed = True
-
-    if not combined_text.strip():
-        raise HTTPException(status_code=400, detail="리소스에 텍스트 내용이 없습니다.")
 
     # 인포그래픽용 간이 아웃라인 메타
     dummy_meta = [{
@@ -1077,9 +1323,74 @@ async def generate_ai_slide_stream(jwt_token: str, data: AiSlideGenerateRequest)
 
     async def event_stream():
         try:
-            yield _sse("start", {"message": "AI가 슬라이드를 설계하고 있습니다..."})
+            # ── 리소스 수집 (SSE 스트림 내부) ──
+            cursor = db.resources.find({"project_id": data.project_id})
+            all_content = []
+            async for r in cursor:
+                if r.get("resource_type") == "image":
+                    img_desc = r.get("content", "")
+                    if img_desc:
+                        img_title = r.get("title") or r.get("original_filename") or "이미지"
+                        all_content.append(f"[이미지: {img_title}]\n{img_desc}")
+                    continue
+                if r.get("content"):
+                    all_content.append(r["content"])
+                elif r.get("title"):
+                    all_content.append(f"[{r['title']}]")
+            combined_text = "\n\n".join(all_content)
+
+            web_search_performed = False
+            if not combined_text.strip() and data.instructions.strip():
+                yield _sse("web_search", {"status": "searching", "query": data.instructions, "message": "인터넷에서 자료를 검색하고 있습니다..."})
+                search_result = await search_web(data.instructions)
+                pages = search_result.get("pages", [])
+                if pages:
+                    search_contents = []
+                    search_titles = []
+                    now = datetime.utcnow()
+                    for i, page in enumerate(pages):
+                        p_title = page.get("title", "") or f"웹 검색 {i+1}: {data.instructions[:30]}"
+                        content = page.get("content", "")
+                        p_url = page.get("url", "")
+                        if content:
+                            search_contents.append(f"[{p_title}]\n{content}")
+                            search_titles.append(p_title)
+                            await db.resources.insert_one({
+                                "project_id": data.project_id,
+                                "resource_type": "web",
+                                "title": p_title,
+                                "content": content,
+                                "source_url": p_url,
+                                "sources": [p_url] if p_url else [],
+                                "created_at": now,
+                            })
+                    combined_text = "\n\n".join(search_contents)
+                    if combined_text.strip():
+                        web_search_performed = True
+                        yield _sse("web_search", {"status": "complete", "count": len(search_titles), "titles": search_titles[:5], "message": f"{len(search_titles)}건의 자료를 수집했습니다"})
+
+                if not combined_text.strip():
+                    combined_text = data.instructions
+                    await db.resources.insert_one({
+                        "project_id": data.project_id,
+                        "resource_type": "text",
+                        "title": f"사용자 지침: {data.instructions[:50]}",
+                        "content": data.instructions,
+                        "created_at": datetime.utcnow(),
+                    })
+                    yield _sse("web_search", {"status": "fallback", "message": "리소스 미지정 — 지침 내용으로 진행합니다"})
+
+            if not combined_text.strip():
+                yield _sse("error", {"message": "리소스 또는 지침을 입력하세요."})
+                return
+
+            yield _sse("start", {"message": web_search_performed and "수집한 자료로 슬라이드를 설계하고 있습니다..." or "AI가 슬라이드를 설계하고 있습니다..."})
 
             # 취소 체크
+            if await _wait_if_paused(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
             if await _check_cancelled(db, data.project_id, generation_id):
                 yield _sse("stopped", {"message": "생성이 중단되었습니다."})
                 await _set_stopped(db, data.project_id)
@@ -1100,6 +1411,9 @@ async def generate_ai_slide_stream(jwt_token: str, data: AiSlideGenerateRequest)
                     yield _sse("delta", {"text": event_data})
                     chunk_count += 1
                     if chunk_count % 50 == 0:
+                        if await _wait_if_paused(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
                         if await _check_cancelled(db, data.project_id, generation_id):
                             cancelled = True
                             break
@@ -1163,8 +1477,12 @@ async def generate_ai_slide_stream(jwt_token: str, data: AiSlideGenerateRequest)
                 llm_slides,
                 style_hint=effective_style_hint,
                 aspect_ratio="16:9",
-                infographic_ratio=40,
+                infographic_ratio=settings.DEFAULT_INFOGRAPHIC_RATIO,
             ):
+                if await _wait_if_paused(db, data.project_id, generation_id):
+                    yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                    await _set_stopped(db, data.project_id)
+                    return
                 if await _check_cancelled(db, data.project_id, generation_id):
                     yield _sse("stopped", {"message": "생성이 중단되었습니다."})
                     await _set_stopped(db, data.project_id)
@@ -1203,7 +1521,7 @@ async def generate_ai_slide_stream(jwt_token: str, data: AiSlideGenerateRequest)
                     })
                     z += 1
 
-                if slide_type == "title" or idx == 0:
+                if slide_type == "title" and idx != 0:
                     _add_text("title", 80, 200, 800, 80, title, {
                         "font_size": 36, "bold": True, "color": "#FFFFFF",
                         "align": "center", "font_family": "Pretendard",
@@ -1337,6 +1655,8 @@ async def generate_ai_slide_stream(jwt_token: str, data: AiSlideGenerateRequest)
                 "total": total_slides,
             })
 
+        except asyncio.CancelledError:
+            return
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -1373,7 +1693,7 @@ async def fix_slide_text(jwt_token: str, slide_id: str):
         raise HTTPException(status_code=400, detail="이미지를 찾을 수 없습니다")
 
     # 이미지 파일 로드
-    image_path = Path(settings.UPLOAD_DIR).resolve() / image_url.lstrip("/uploads/")
+    image_path = Path(settings.UPLOAD_DIR).resolve() / image_url.removeprefix("/uploads/")
     if not image_path.exists():
         raise HTTPException(status_code=404, detail="이미지 파일을 찾을 수 없습니다")
 
@@ -1420,7 +1740,7 @@ async def edit_slide_image_endpoint(jwt_token: str, slide_id: str, body: dict):
     if not image_url:
         raise HTTPException(status_code=400, detail="이미지를 찾을 수 없습니다")
 
-    image_path = Path(settings.UPLOAD_DIR).resolve() / image_url.lstrip("/uploads/")
+    image_path = Path(settings.UPLOAD_DIR).resolve() / image_url.removeprefix("/uploads/")
     if not image_path.exists():
         raise HTTPException(status_code=404, detail="이미지 파일을 찾을 수 없습니다")
 
@@ -1574,10 +1894,6 @@ async def generate_slide_text(jwt_token: str, data: SlideTextRequest):
             existing_content = {"contents": ec, "items": gen_slide.get("items", [])}
 
     # LLM으로 단일 슬라이드 텍스트 생성
-    print(f"[slide-text] instruction: {data.instruction}")
-    print(f"[slide-text] slide_meta placeholders: {slide_meta.get('placeholders', [])}")
-    print(f"[slide-text] existing_content: {existing_content}")
-
     try:
         llm_result = await generate_single_slide_content(
             resources_text=resources_text,
@@ -1592,8 +1908,6 @@ async def generate_slide_text(jwt_token: str, data: SlideTextRequest):
 
     contents = llm_result.get("contents", {})
     items = llm_result.get("items", [])
-    print(f"[slide-text] LLM result contents: {contents}")
-    print(f"[slide-text] LLM result items: {items}")
 
     # items를 subtitle/description placeholder에 매핑
     # (_build_gen_objects가 매핑되지 않은 subtitle/description 오브젝트를 제거하므로 반드시 필요)
@@ -1624,8 +1938,6 @@ async def generate_slide_text(jwt_token: str, data: SlideTextRequest):
     for img_obj in current_images.values():
         gen_objects.append(img_obj)
 
-    print(f"[slide-text] gen_objects count: {len(gen_objects)}, text objs: {[(o.get('role',''), o.get('generated_text','')[:30]) for o in gen_objects if o.get('obj_type')=='text']}")
-
     # DB 업데이트
     await db.generated_slides.update_one(
         {"_id": ObjectId(data.slide_id)},
@@ -1641,6 +1953,95 @@ async def generate_slide_text(jwt_token: str, data: SlideTextRequest):
         "objects": gen_objects,
         "items": items,
     }
+
+
+@router.post("/{jwt_token}/api/generate/infographic-slide")
+async def add_infographic_slide(jwt_token: str, data: InfographicSlideAddRequest):
+    """인포그래픽 슬라이드 추가: 내용을 입력받아 AI 이미지를 생성하여 슬라이드 추가"""
+    user_key = await get_user_key(jwt_token)
+    db = get_db()
+    await check_project_access(db, data.project_id, user_key, "editor")
+
+    now = datetime.utcnow()
+
+    # 삽입 위치 결정
+    if data.insert_after_order is not None:
+        await db.generated_slides.update_many(
+            {"project_id": data.project_id, "order": {"$gt": data.insert_after_order}},
+            {"$inc": {"order": 1}, "$set": {"updated_at": now}}
+        )
+        new_order = data.insert_after_order + 1
+    else:
+        count = await db.generated_slides.count_documents({"project_id": data.project_id})
+        new_order = count + 1
+
+    # 프로젝트 정보에서 프레젠테이션 제목 가져오기
+    project = await db.projects.find_one({"_id": ObjectId(data.project_id)})
+    pres_title = project.get("name", "") if project else ""
+
+    # 참조 이미지: 직전 슬라이드의 이미지를 참조하여 스타일 일관성 유지
+    reference_image = None
+    if data.insert_after_order is not None:
+        prev_slide = await db.generated_slides.find_one(
+            {"project_id": data.project_id, "order": data.insert_after_order}
+        )
+    else:
+        prev_slide = await db.generated_slides.find_one(
+            {"project_id": data.project_id},
+            sort=[("order", -1)]
+        )
+    if prev_slide:
+        for obj in prev_slide.get("objects", []):
+            if obj.get("obj_type") == "image" and obj.get("image_url"):
+                img_path = Path(settings.UPLOAD_DIR) / obj["image_url"].removeprefix("/uploads/")
+                if img_path.exists():
+                    reference_image = img_path.read_bytes()
+                break
+
+    # AI 인포그래픽 이미지 생성
+    image_url, image_bytes = await generate_infographic_image(
+        slide_title=data.content[:100],
+        slide_content=data.content,
+        slide_type="content",
+        style_hint=data.style_hint,
+        slide_number=new_order,
+        total_slides=new_order,
+        presentation_title=pres_title,
+        reference_image=reference_image,
+    )
+
+    if not image_url:
+        raise HTTPException(status_code=500, detail="이미지 생성에 실패했습니다. 다시 시도해주세요.")
+
+    # 슬라이드 문서 생성
+    gen_objects = []
+    if image_url:
+        gen_objects.append({
+            "obj_type": "image",
+            "x": 0, "y": 0,
+            "width": 960, "height": 540,
+            "image_url": image_url,
+            "image_fit": "cover",
+            "z_index": 1,
+        })
+
+    doc = {
+        "project_id": data.project_id,
+        "template_slide_id": "infographic",
+        "order": new_order,
+        "objects": gen_objects,
+        "items": [],
+        "background_image": None,
+        "infographic": True,
+        "infographic_title": data.content[:100],
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    result = await db.generated_slides.insert_one(doc)
+    doc["_id"] = str(result.inserted_id)
+
+    return {"slide": doc}
 
 
 @router.delete("/{jwt_token}/api/generate/manual-slide/{slide_id}")
@@ -1705,6 +2106,32 @@ async def stop_generation(jwt_token: str, project_id: str):
         }}
     )
 
+    return {"success": True}
+
+
+@router.post("/{jwt_token}/api/generate/pause/{project_id}")
+async def pause_generation(jwt_token: str, project_id: str):
+    """생성 일시 중단"""
+    await get_user_key(jwt_token)
+    db = get_db()
+    project = await db.projects.find_one({"_id": ObjectId(project_id)})
+    if not project:
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
+    if project.get("status") != "generating":
+        return {"success": True, "message": "생성 중이 아닙니다"}
+    await redis_service.set_generation_pause(project_id)
+    return {"success": True}
+
+
+@router.post("/{jwt_token}/api/generate/resume/{project_id}")
+async def resume_generation(jwt_token: str, project_id: str):
+    """생성 재개"""
+    await get_user_key(jwt_token)
+    db = get_db()
+    project = await db.projects.find_one({"_id": ObjectId(project_id)})
+    if not project:
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
+    await redis_service.clear_generation_pause(project_id)
     return {"success": True}
 
 
@@ -1852,7 +2279,8 @@ async def download_pptx(jwt_token: str, project_id: str):
     await get_user_key(jwt_token)
     try:
         file_url = await generate_pptx(project_id)
-        file_path = os.path.join(".", file_url.lstrip("/"))
+        relative_path = file_url.replace("/uploads/", "", 1)
+        file_path = os.path.join(settings.UPLOAD_DIR, relative_path)
         if not os.path.exists(file_path):
             raise HTTPException(status_code=500, detail="파일 생성 실패")
 
@@ -2052,6 +2480,10 @@ async def generate_excel_stream(jwt_token: str, data: ExcelGenerateRequest):
 
             yield _sse("start", {"message": "AI가 데이터를 구조화하고 있습니다..."})
 
+            if await _wait_if_paused(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
             if await _check_cancelled(db, data.project_id, generation_id):
                 yield _sse("stopped", {"message": "생성이 중단되었습니다."})
                 await _set_stopped(db, data.project_id)
@@ -2068,6 +2500,9 @@ async def generate_excel_stream(jwt_token: str, data: ExcelGenerateRequest):
                     yield _sse("delta", {"text": event_data})
                     chunk_count += 1
                     if chunk_count % 50 == 0:
+                        if await _wait_if_paused(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
                         if await _check_cancelled(db, data.project_id, generation_id):
                             cancelled = True
                             break
@@ -2113,6 +2548,8 @@ async def generate_excel_stream(jwt_token: str, data: ExcelGenerateRequest):
             yield _sse("excel_data", {"excel": excel_doc})
             yield _sse("complete", {"total_sheets": len(llm_result.get("sheets", []))})
 
+        except asyncio.CancelledError:
+            return
         except Exception as e:
             print(f"[SSE-Excel] Stream error: {e}")
             project = await db.projects.find_one(
@@ -2159,6 +2596,10 @@ async def modify_excel_stream(jwt_token: str, data: ExcelModifyRequest):
         try:
             yield _sse("start", {"message": "AI가 데이터를 수정하고 있습니다..."})
 
+            if await _wait_if_paused(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
             if await _check_cancelled(db, data.project_id, generation_id):
                 yield _sse("stopped", {"message": "수정이 중단되었습니다."})
                 await _set_stopped(db, data.project_id)
@@ -2175,6 +2616,9 @@ async def modify_excel_stream(jwt_token: str, data: ExcelModifyRequest):
                     yield _sse("delta", {"text": event_data})
                     chunk_count += 1
                     if chunk_count % 50 == 0:
+                        if await _wait_if_paused(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
                         if await _check_cancelled(db, data.project_id, generation_id):
                             cancelled = True
                             break
@@ -2253,6 +2697,8 @@ async def modify_excel_stream(jwt_token: str, data: ExcelModifyRequest):
             yield _sse("excel_data", {"excel": excel_doc})
             yield _sse("complete", {"total_sheets": len(llm_result.get("sheets", []))})
 
+        except asyncio.CancelledError:
+            return
         except Exception as e:
             print(f"[SSE-Excel-Modify] Stream error: {e}")
             project = await db.projects.find_one(
@@ -2419,7 +2865,9 @@ async def download_xlsx(jwt_token: str, project_id: str):
     await get_user_key(jwt_token)
     try:
         file_url = await generate_xlsx(project_id)
-        file_path = os.path.join(".", file_url.lstrip("/"))
+        # file_url: "/uploads/generated/xxx.xlsx" → UPLOAD_DIR 기준 절대 경로로 변환
+        relative_path = file_url.replace("/uploads/", "", 1)
+        file_path = os.path.join(settings.UPLOAD_DIR, relative_path)
         if not os.path.exists(file_path):
             raise HTTPException(status_code=500, detail="파일 생성 실패")
 
@@ -2473,25 +2921,23 @@ async def generate_onlyoffice_pptx_stream(jwt_token: str, data: GenerateRequest)
         pages = search_result.get("pages", [])
         if pages:
             search_contents = []
-            search_sources = []
-            for page in pages:
-                title = page.get("title", "")
+            now = datetime.utcnow()
+            for i, page in enumerate(pages):
+                p_title = page.get("title", "") or f"웹 검색 {i+1}: {data.instructions[:30]}"
                 content = page.get("content", "")
-                url = page.get("url", "")
+                p_url = page.get("url", "")
                 if content:
-                    search_contents.append(f"[{title}]\n{content}")
-                    if url:
-                        search_sources.append(url)
+                    search_contents.append(f"[{p_title}]\n{content}")
+                    await db.resources.insert_one({
+                        "project_id": data.project_id,
+                        "resource_type": "web",
+                        "title": p_title,
+                        "content": content,
+                        "source_url": p_url,
+                        "sources": [p_url] if p_url else [],
+                        "created_at": now,
+                    })
             combined_text = "\n\n".join(search_contents)
-            if combined_text.strip():
-                await db.resources.insert_one({
-                    "project_id": data.project_id,
-                    "resource_type": "web",
-                    "title": f"자동 웹 검색: {data.instructions[:50]}",
-                    "content": combined_text,
-                    "sources": search_sources,
-                    "created_at": datetime.utcnow(),
-                })
 
     # 템플릿 슬라이드 분석
     slides = await get_template_slides(data.template_id)
@@ -2532,6 +2978,9 @@ async def generate_onlyoffice_pptx_stream(jwt_token: str, data: GenerateRequest)
                     yield _sse("delta", {"text": event_data})
                     chunk_count += 1
                     if chunk_count % 50 == 0:
+                        if await _wait_if_paused(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
                         if await _check_cancelled(db, data.project_id, generation_id):
                             cancelled = True
                             break
@@ -2618,6 +3067,8 @@ async def generate_onlyoffice_pptx_stream(jwt_token: str, data: GenerateRequest)
 
             yield _sse("complete", {"total_slides": len(llm_slides)})
 
+        except asyncio.CancelledError:
+            return
         except Exception as e:
             print(f"[SSE-OO-PPTX] Stream error: {e}")
             import traceback
@@ -2686,6 +3137,10 @@ async def generate_onlyoffice_xlsx_stream(jwt_token: str, data: ExcelGenerateReq
 
             yield _sse("start", {"message": "AI가 데이터를 구조화하고 있습니다..."})
 
+            if await _wait_if_paused(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
             if await _check_cancelled(db, data.project_id, generation_id):
                 yield _sse("stopped", {"message": "생성이 중단되었습니다."})
                 await _set_stopped(db, data.project_id)
@@ -2702,6 +3157,9 @@ async def generate_onlyoffice_xlsx_stream(jwt_token: str, data: ExcelGenerateReq
                     yield _sse("delta", {"text": event_data})
                     chunk_count += 1
                     if chunk_count % 50 == 0:
+                        if await _wait_if_paused(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
                         if await _check_cancelled(db, data.project_id, generation_id):
                             cancelled = True
                             break
@@ -2770,6 +3228,8 @@ async def generate_onlyoffice_xlsx_stream(jwt_token: str, data: ExcelGenerateReq
 
             yield _sse("complete", {"total_sheets": len(llm_result.get("sheets", []))})
 
+        except asyncio.CancelledError:
+            return
         except Exception as e:
             print(f"[SSE-OO-XLSX] Stream error: {e}")
             import traceback
@@ -2953,6 +3413,10 @@ async def generate_onlyoffice_docx_stream(jwt_token: str, data: DocxGenerateRequ
 
             yield _sse("start", {"message": "AI가 문서를 작성하고 있습니다..."})
 
+            if await _wait_if_paused(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
             if await _check_cancelled(db, data.project_id, generation_id):
                 yield _sse("stopped", {"message": "생성이 중단되었습니다."})
                 await _set_stopped(db, data.project_id)
@@ -2999,6 +3463,9 @@ async def generate_onlyoffice_docx_stream(jwt_token: str, data: DocxGenerateRequ
                         })
 
                     if chunk_count % 50 == 0:
+                        if await _wait_if_paused(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
                         if await _check_cancelled(db, data.project_id, generation_id):
                             cancelled = True
                             break
@@ -3063,6 +3530,8 @@ async def generate_onlyoffice_docx_stream(jwt_token: str, data: DocxGenerateRequ
 
             yield _sse("complete", {"total_sections": len(llm_result.get("sections", []))})
 
+        except asyncio.CancelledError:
+            return
         except Exception as e:
             print(f"[SSE-OO-DOCX] Stream error: {e}")
             import traceback
@@ -3189,6 +3658,10 @@ async def generate_docx_stream(jwt_token: str, data: DocxGenerateRequest):
 
             yield _sse("start", {"message": "AI가 문서를 구조화하고 있습니다..."})
 
+            if await _wait_if_paused(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
             if await _check_cancelled(db, data.project_id, generation_id):
                 yield _sse("stopped", {"message": "생성이 중단되었습니다."})
                 await _set_stopped(db, data.project_id)
@@ -3213,6 +3686,9 @@ async def generate_docx_stream(jwt_token: str, data: DocxGenerateRequest):
                     yield _sse("delta", {"text": event_data})
                     chunk_count += 1
                     if chunk_count % 50 == 0:
+                        if await _wait_if_paused(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
                         if await _check_cancelled(db, data.project_id, generation_id):
                             cancelled = True
                             break
@@ -3258,6 +3734,8 @@ async def generate_docx_stream(jwt_token: str, data: DocxGenerateRequest):
             yield _sse("docx_data", {"docx": docx_doc})
             yield _sse("complete", {"total_sections": len(llm_result.get("sections", []))})
 
+        except asyncio.CancelledError:
+            return
         except Exception as e:
             print(f"[SSE-Docx] Stream error: {e}")
             project = await db.projects.find_one(
@@ -3304,6 +3782,10 @@ async def modify_docx_stream(jwt_token: str, data: DocxModifyRequest):
         try:
             yield _sse("start", {"message": "AI가 문서를 수정하고 있습니다..."})
 
+            if await _wait_if_paused(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
             if await _check_cancelled(db, data.project_id, generation_id):
                 yield _sse("stopped", {"message": "수정이 중단되었습니다."})
                 await _set_stopped(db, data.project_id)
@@ -3330,6 +3812,9 @@ async def modify_docx_stream(jwt_token: str, data: DocxModifyRequest):
                     yield _sse("delta", {"text": event_data})
                     chunk_count += 1
                     if chunk_count % 50 == 0:
+                        if await _wait_if_paused(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
                         if await _check_cancelled(db, data.project_id, generation_id):
                             cancelled = True
                             break
@@ -3376,6 +3861,8 @@ async def modify_docx_stream(jwt_token: str, data: DocxModifyRequest):
             yield _sse("docx_data", {"docx": docx_doc})
             yield _sse("complete", {"total_sections": len(llm_result.get("sections", []))})
 
+        except asyncio.CancelledError:
+            return
         except Exception as e:
             print(f"[SSE-Docx-Modify] Stream error: {e}")
             project = await db.projects.find_one(
@@ -3434,7 +3921,8 @@ async def download_docx(jwt_token: str, project_id: str):
         db = get_db()
         template_path = await _get_docx_template_path(db, project_id=project_id)
         file_url = await generate_docx(project_id, template_path)
-        file_path = os.path.join(".", file_url.lstrip("/"))
+        relative_path = file_url.replace("/uploads/", "", 1)
+        file_path = os.path.join(settings.UPLOAD_DIR, relative_path)
         if not os.path.exists(file_path):
             raise HTTPException(status_code=500, detail="파일 생성 실패")
 
@@ -3473,6 +3961,8 @@ async def rewrite_stream(jwt_token: str, data: RewriteRequest):
                     yield _sse("delta", {"text": event_data})
                 elif event_type == "result":
                     yield _sse("done", {"text": full_text})
+        except asyncio.CancelledError:
+            return
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -3718,6 +4208,8 @@ async def translate_project_stream(jwt_token: str, data: TranslateProjectRequest
                 "total": len(generated),
             })
 
+        except asyncio.CancelledError:
+            return
         except Exception as e:
             print(f"[Translate] Stream error: {e}")
             import traceback
@@ -4044,6 +4536,10 @@ async def generate_html_report_stream_endpoint(jwt_token: str, data: HtmlReportG
             # === Phase 1: 아웃라인 생성 ===
             yield _sse("start", {"message": "리포트 구조를 설계하고 있습니다..."})
 
+            if await _wait_if_paused(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
             if await _check_cancelled(db, data.project_id, generation_id):
                 yield _sse("stopped", {"message": "생성이 중단되었습니다."})
                 await _set_stopped(db, data.project_id)
@@ -4065,6 +4561,9 @@ async def generate_html_report_stream_endpoint(jwt_token: str, data: HtmlReportG
                     yield _sse("delta", {"text": event_data})
                     chunk_count += 1
                     if chunk_count % 50 == 0:
+                        if await _wait_if_paused(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
                         if await _check_cancelled(db, data.project_id, generation_id):
                             cancelled = True
                             break
@@ -4131,6 +4630,10 @@ async def generate_html_report_stream_endpoint(jwt_token: str, data: HtmlReportG
 
             for idx, page_outline in enumerate(outline_data["pages"]):
                 # 중단 확인
+                if await _wait_if_paused(db, data.project_id, generation_id):
+                    yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                    await _set_stopped(db, data.project_id)
+                    return
                 if await _check_cancelled(db, data.project_id, generation_id):
                     yield _sse("stopped", {"message": "생성이 중단되었습니다."})
                     await _set_stopped(db, data.project_id)
@@ -4205,6 +4708,8 @@ async def generate_html_report_stream_endpoint(jwt_token: str, data: HtmlReportG
             yield _sse("html_data", {"html": html_doc})
             yield _sse("complete", {"total_pages": len(generated_pages)})
 
+        except asyncio.CancelledError:
+            return
         except Exception as e:
             print(f"[SSE-HTML] Stream error: {e}")
             import traceback
@@ -4489,9 +4994,20 @@ async def _check_cancelled(db, project_id: str, generation_id: str) -> bool:
     return False
 
 
+async def _wait_if_paused(db, project_id: str, generation_id: str) -> bool:
+    """일시 중단 상태면 대기, 취소되면 True 반환"""
+    while await redis_service.check_generation_pause(project_id):
+        # 취소 체크 (일시 중단 중에도 완전 중단 가능)
+        if await _check_cancelled(db, project_id, generation_id):
+            return True
+        await asyncio.sleep(1)
+    return False
+
+
 async def _set_stopped(db, project_id: str):
     """프로젝트 상태를 stopped로 변경"""
     await redis_service.clear_generation_cancel(project_id)
+    await redis_service.clear_generation_pause(project_id)
     await db.projects.update_one(
         {"_id": ObjectId(project_id)},
         {"$set": {"status": "stopped", "updated_at": datetime.utcnow()}}

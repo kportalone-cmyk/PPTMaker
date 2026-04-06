@@ -39,7 +39,7 @@ async def generate_infographic_image(
     slide_number: int = 1,
     total_slides: int = 1,
     presentation_title: str = "",
-    infographic_ratio: int = 40,
+    infographic_ratio: int = 60,
     reference_image: bytes | None = None,
 ) -> tuple[str | None, bytes | None]:
     """
@@ -60,11 +60,7 @@ async def generate_infographic_image(
         has_reference=reference_image is not None,
     )
 
-    print(f"\n{'='*60}")
-    print(f"[Infographic] 슬라이드 이미지 생성 프롬프트 (참조이미지: {'있음' if reference_image else '없음'})")
-    print(f"{'='*60}")
-    print(prompt)
-    print(f"{'='*60}\n")
+    print(f"[Infographic] 슬라이드 이미지 생성 요청 (참조이미지: {'있음' if reference_image else '없음'})")
 
     try:
         image_bytes, file_ext = await _call_gemini_image_api(prompt, reference_image=reference_image)
@@ -96,7 +92,7 @@ async def _build_image_prompt(
     slide_number: int = 1,
     total_slides: int = 1,
     presentation_title: str = "",
-    infographic_pct: int = 40,
+    infographic_pct: int = 60,
     has_reference: bool = False,
 ) -> str:
     """파워포인트 슬라이드 이미지 생성을 위한 프롬프트 구성"""
@@ -106,9 +102,29 @@ async def _build_image_prompt(
 
     # 슬라이드 비율/지침을 DB에서 조회 (하드코딩 금지)
     if slide_number == 1:
-        infographic_ratio = await get_prompt_content("infographic_cover_ratio")
+        infographic_ratio_prompt = await get_prompt_content("infographic_cover_ratio")
     else:
-        infographic_ratio = await get_prompt_content("infographic_content_ratio")
+        infographic_ratio_prompt = await get_prompt_content("infographic_content_ratio")
+
+    # infographic_pct 값에 따라 비율 지침 추가
+    text_pct = 100 - infographic_pct
+    ratio_instruction = f"""
+VISUAL vs TEXT RATIO — STRICTLY FOLLOW:
+- Infographic visuals (icons, charts, diagrams, illustrations): {infographic_pct}% of the slide area
+- Text content (headings, bullet points, descriptions): {text_pct}% of the slide area"""
+
+    if infographic_pct <= 20:
+        ratio_instruction += "\n- This is a TEXT-HEAVY slide. Minimal graphics, focus on readable text with clean layout."
+    elif infographic_pct <= 40:
+        ratio_instruction += "\n- Balanced layout with more text than graphics. Use icons/charts as accents."
+    elif infographic_pct <= 60:
+        ratio_instruction += "\n- Equal balance. Use infographic elements alongside concise text."
+    elif infographic_pct <= 80:
+        ratio_instruction += "\n- GRAPHIC-HEAVY slide. Large charts, diagrams, icons dominate. Text is minimal labels only."
+    else:
+        ratio_instruction += "\n- Almost ALL GRAPHICS. Minimal text — only short labels, numbers. Visual storytelling."
+
+    infographic_ratio = infographic_ratio_prompt + ratio_instruction
 
     pres_context = f' for a presentation about "{presentation_title}"' if presentation_title else ""
 
@@ -171,23 +187,27 @@ async def _call_gemini_image_api(prompt: str, reference_image: bytes | None = No
         ),
     ]
 
-    generate_config = types.GenerateContentConfig(
-        thinking_config=types.ThinkingConfig(
-            thinking_level="HIGH",
-        ),
-        image_config=types.ImageConfig(
+    # Thinking 설정 (.env GOOGLE_IMAGE_THINKING: none/LOW/MEDIUM/HIGH)
+    thinking_level = settings.GOOGLE_IMAGE_THINKING.strip().upper()
+    config_kwargs = {
+        "image_config": types.ImageConfig(
             aspect_ratio="16:9",
             image_size="1K",
         ),
-        response_modalities=["IMAGE", "TEXT"],
-    )
+        "response_modalities": ["IMAGE", "TEXT"],
+    }
+    if thinking_level and thinking_level != "NONE":
+        config_kwargs["thinking_config"] = types.ThinkingConfig(
+            thinking_level=thinking_level,
+        )
+    generate_config = types.GenerateContentConfig(**config_kwargs)
 
     # 동기 SDK를 비동기 이벤트 루프에서 실행
     def _sync_generate():
         data_buffer = None
         file_ext = None
         for chunk in client.models.generate_content_stream(
-            model="gemini-3.1-flash-image-preview",
+            model=settings.GOOGLE_IMAGE_MODEL,
             contents=contents,
             config=generate_config,
         ):
@@ -253,7 +273,7 @@ def _build_slide_content_text(slide: dict) -> str:
     return "\n".join(content_parts)
 
 
-async def _generate_single_slide(idx, slide, style_hint, aspect_ratio, total_slides, presentation_title, infographic_ratio=40, reference_image: bytes | None = None):
+async def _generate_single_slide(idx, slide, style_hint, aspect_ratio, total_slides, presentation_title, infographic_ratio=60, reference_image: bytes | None = None):
     """단일 슬라이드 이미지를 생성"""
     title = slide.get("title", "") or slide.get("section_title", "") or f"슬라이드 {idx + 1}"
     slide_type = slide.get("type", "content")
@@ -296,7 +316,7 @@ async def generate_infographic_batch(
     outline_slides: list[dict],
     style_hint: str = "",
     aspect_ratio: str = "16:9",
-    infographic_ratio: int = 40,
+    infographic_ratio: int = 60,
 ):
     """
     스타일 일관성을 위해 첫 콘텐츠 슬라이드를 먼저 생성하고,
@@ -502,4 +522,140 @@ async def generate_bg_image(
         return f"/uploads/infographics/{filename}", image_bytes
     except Exception as e:
         print(f"[AI Slide BG] 배경 이미지 생성 실패: {e}")
+        return None, None
+
+
+async def generate_summary_infographic(
+    summary_data: dict,
+    style_hint: str = "",
+    infographic_ratio: int = 60,
+) -> tuple[str | None, bytes | None]:
+    """
+    한장 요약 인포그래픽 이미지를 생성합니다.
+    Claude가 요약한 structured data를 Gemini 이미지로 변환.
+
+    Args:
+        summary_data: Claude가 생성한 요약 JSON (title, subtitle, sections, key_metrics, conclusion)
+        style_hint: 스타일 힌트
+
+    Returns:
+        (이미지 URL, 이미지 bytes) 또는 (None, None)
+    """
+    if not settings.GOOGLE_API_KEYS:
+        print("[SummaryInfographic] GOOGLE_API_KEY가 설정되지 않았습니다.")
+        return None, None
+
+    title = summary_data.get("title", "Summary")
+    subtitle = summary_data.get("subtitle", "")
+    sections = summary_data.get("sections", [])
+    key_metrics = summary_data.get("key_metrics", [])
+    conclusion = summary_data.get("conclusion", "")
+    flow = summary_data.get("flow", {})
+    color_scheme = summary_data.get("color_scheme", "auto")
+
+    # sections 텍스트 구성 — 그래픽 요소 중심, 텍스트 최소화
+    sections_text_parts = []
+    for i, sec in enumerate(sections, 1):
+        heading = sec.get("heading", f"Section {i}")
+        icon = sec.get("icon_hint", "")
+        visual_type = sec.get("visual_type", "stat_card")
+        highlight = sec.get("highlight_value", "")
+
+        # data_points (새 구조) 또는 points (구 구조) 지원
+        data_points = sec.get("data_points", [])
+        points = sec.get("points", [])
+
+        section_line = f"{i}. [{icon} icon] {heading} → draw as [{visual_type}]"
+        if highlight:
+            section_line += f" — show {highlight} LARGE"
+
+        # data_points 우선, 없으면 points fallback
+        if data_points:
+            dp_lines = [f"  {dp.get('label','')}: {dp.get('value','')}" for dp in data_points[:4]]
+            sections_text_parts.append(section_line + "\n" + "\n".join(dp_lines))
+        elif points:
+            pt_lines = [f"  {p}" for p in points[:3]]
+            sections_text_parts.append(section_line + "\n" + "\n".join(pt_lines))
+        else:
+            sections_text_parts.append(section_line)
+    sections_text = "\n\n".join(sections_text_parts)
+
+    # metrics 텍스트 구성 (색상/아이콘 힌트 포함)
+    metrics_text = ""
+    if key_metrics:
+        metrics_lines = []
+        for m in key_metrics:
+            label = m.get("label", "")
+            value = m.get("value", "")
+            icon = m.get("icon_hint", "")
+            color = m.get("color_hint", "blue")
+            metrics_lines.append(f"  - [{icon} icon, {color} card] {label}: {value} (display value LARGE)")
+        metrics_text = "Key Metric Cards (display as prominent stat cards with large numbers):\n" + "\n".join(metrics_lines)
+
+    # flow 텍스트 구성
+    flow_text = ""
+    flow_type = flow.get("type", "none") if flow else "none"
+    if flow_type and flow_type != "none":
+        steps = flow.get("steps", [])
+        flow_desc = flow.get("description", "")
+        if steps:
+            steps_str = " → ".join(steps)
+            flow_text = f"Process/Flow Visualization ({flow_type}):\n  {steps_str}"
+            if flow_desc:
+                flow_text += f"\n  Description: {flow_desc}"
+            flow_text += "\n  [Render as connected visual nodes with arrows, NOT plain text]"
+
+    # 프롬프트 구성
+    prompt_template = await get_prompt_content("summary_infographic_image")
+    prompt = prompt_template.format(
+        title=title,
+        subtitle=subtitle,
+        sections_text=sections_text,
+        metrics_text=metrics_text,
+        conclusion=conclusion,
+        flow_text=flow_text,
+        color_scheme=color_scheme,
+    )
+
+    if style_hint:
+        style_template = await get_prompt_content("infographic_style_override")
+        prompt += style_template.format(style_hint=style_hint)
+
+    # 인포그래픽 비율 지침 추가
+    text_pct = 100 - infographic_ratio
+    ratio_instruction = f"""
+VISUAL vs TEXT RATIO — STRICTLY FOLLOW:
+- Infographic visuals (icons, charts, diagrams, illustrations): {infographic_ratio}% of the image area
+- Text content (headings, bullet points, descriptions): {text_pct}% of the image area"""
+    if infographic_ratio <= 20:
+        ratio_instruction += "\n- This is a TEXT-HEAVY layout. Minimal graphics, focus on readable text with clean layout."
+    elif infographic_ratio <= 40:
+        ratio_instruction += "\n- Balanced layout with more text than graphics. Use icons/charts as accents."
+    elif infographic_ratio <= 60:
+        ratio_instruction += "\n- Equal balance. Use infographic elements alongside concise text."
+    elif infographic_ratio <= 80:
+        ratio_instruction += "\n- GRAPHIC-HEAVY layout. Large charts, diagrams, icons dominate. Text is minimal labels only."
+    else:
+        ratio_instruction += "\n- Almost ALL GRAPHICS. Minimal text — only short labels, numbers. Visual storytelling."
+    prompt += "\n" + ratio_instruction
+
+    print(f"[SummaryInfographic] 한장 요약 인포그래픽 이미지 생성 요청")
+
+    try:
+        image_bytes, file_ext = await _call_gemini_image_api(prompt)
+        if not image_bytes:
+            return None, None
+
+        ext = file_ext or ".png"
+        filename = f"summary_{uuid.uuid4().hex}{ext}"
+        filepath = INFOGRAPHIC_DIR / filename
+        filepath.write_bytes(image_bytes)
+
+        print(f"[SummaryInfographic] 이미지 저장 완료: {filepath}")
+        return f"/uploads/infographics/{filename}", image_bytes
+
+    except Exception as e:
+        print(f"[SummaryInfographic] 이미지 생성 실패: {e}")
+        import traceback
+        traceback.print_exc()
         return None, None

@@ -384,6 +384,52 @@ async def clear_generation_cancel(project_id: str) -> bool | None:
 
 
 # ──────────────────────────────────────────────
+# 생성 일시 중단 플래그
+# ──────────────────────────────────────────────
+
+async def set_generation_pause(project_id: str, ttl: int = 600) -> bool | None:
+    """생성 일시 중단 플래그 설정"""
+    r = get_redis()
+    if not r:
+        return None
+    try:
+        key = _key("gen_pause", project_id)
+        await r.set(key, "1", ex=ttl)
+        return True
+    except Exception:
+        return None
+
+
+async def check_generation_pause(project_id: str) -> bool | None:
+    """
+    생성 일시 중단 여부 확인.
+    Returns: True(일시 중단), False(진행중), None(Redis 불가)
+    """
+    r = get_redis()
+    if not r:
+        return None
+    try:
+        key = _key("gen_pause", project_id)
+        val = await r.get(key)
+        return val is not None
+    except Exception:
+        return None
+
+
+async def clear_generation_pause(project_id: str) -> bool | None:
+    """생성 일시 중단 플래그 제거"""
+    r = get_redis()
+    if not r:
+        return None
+    try:
+        key = _key("gen_pause", project_id)
+        await r.delete(key)
+        return True
+    except Exception:
+        return None
+
+
+# ──────────────────────────────────────────────
 # 사용자 캐시
 # ──────────────────────────────────────────────
 

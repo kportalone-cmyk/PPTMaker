@@ -823,48 +823,42 @@ Design requirements:
         "name": "인포그래픽 커버 이미지 프롬프트",
         "description": "Gemini API로 커버 슬라이드 인포그래픽 이미지를 생성하는 프롬프트. 변수: {pres_context}, {title}, {content_summary}, {infographic_ratio}, {aspect_ratio}",
         "model": "gemini-3.1-flash-image-preview",
-        "content": """Generate an INFOGRAPHIC COVER SLIDE image with a WHITE background{pres_context}.
+        "content": """Generate a SIMPLE, CLEAN COVER SLIDE image{pres_context}.
 
 Title: {title}
 Subtitle: {content_summary}
 
 {infographic_ratio}
 
-===== COVER SLIDE DESIGN — WHITE BACKGROUND =====
+===== COVER SLIDE DESIGN — MINIMAL & SIMPLE =====
 
-This is a COVER SLIDE. The background MUST be pure WHITE (#FFFFFF).
+This is a COVER SLIDE. Keep it SIMPLE and ELEGANT with minimal visual elements.
 
 TEXT TO INCLUDE:
-- The presentation TITLE: "{title}" — large (24-28pt), bold, dark color (#1B2A4A or black)
-- The SUBTITLE/SUMMARY: "{content_summary}" — a concise phrase that summarizes the ENTIRE presentation's scope and purpose. Smaller (14-16pt), dark gray (#334155).
+- The presentation TITLE: "{title}" — large (28-36pt), bold, prominent color
+- A SHORT SUMMARY phrase (1-2 lines) that briefly describes the presentation scope — smaller (14-16pt), muted color. Derive this from: "{content_summary}"
 
-LAYOUT (LEFT-RIGHT SPLIT):
-- Full widescreen {aspect_ratio} layout on pure WHITE background
-- LEFT SIDE (about half the width):
-  - Title text: upper-left area, large and bold
-  - Subtitle text: below the title, clearly readable
-  - Clean spacing, left-aligned text
-- RIGHT SIDE (about half the width):
-  - Infographic visuals that represent the OVERALL CONTENT of the presentation
-  - Use relevant icons, mini-diagrams, process flow illustrations, conceptual graphics
-  - These visuals should give viewers a QUICK OVERVIEW of what the presentation covers
-  - Examples: data flow diagrams, technology stack icons, process arrows, feature icons
-- Text and visuals must NOT overlap — each has its own zone
+LAYOUT:
+- Full widescreen {aspect_ratio} layout
+- CENTER or LEFT-CENTER composition
+- Title: prominent, upper area
+- Summary phrase: below the title, clearly readable
+- ONE simple accent visual (a single icon, a minimal geometric shape, or a thin accent line) to add visual interest — placed to the side or below the text
+- Generous empty space — at least 50% of the slide should be clean
 
 DESIGN:
-- Background: pure WHITE (#FFFFFF) — absolutely NO dark backgrounds, NO gradients, NO colored backgrounds
-- Infographic visuals: clean, flat, professional, sharp-edged icons and illustrations
-- Use a consistent accent color (e.g., #2563EB blue or #6366F1 indigo) for icons and visual elements
-- Thin geometric lines or dividers to separate sections
-- ALL elements must be SHARP and CRISP — no blur, no bokeh, no frosted effects
-- Overall feel: professional white-background corporate pitch deck cover
+- Typography-focused: the text IS the design
+- ONE accent color only for the small visual element
+- Clean, modern, corporate feel
+- ALL elements must be SHARP and CRISP
+- Choose a background color that suits the presentation topic (light or dark)
 
-FORBIDDEN:
-- Dark or colored backgrounds (background MUST be white)
+STRICTLY FORBIDDEN:
+- Multiple infographic icons, diagrams, or illustrations
+- Grid layouts or collections of small images
 - Cluttered or busy designs
-- Too many decorative elements
+- More than ONE decorative visual element
 - Header bars, content boxes, tables, charts
-- Any text other than the title and subtitle
 - Page numbers, footer text, navigation elements
 - Company names, brand names, logos
 - Blur, bokeh, frosted glass effects
@@ -885,52 +879,49 @@ Slide content:
 
 {infographic_ratio}
 
-===== MANDATORY TEMPLATE — EVERY SLIDE MUST USE THIS EXACT SAME DESIGN =====
+===== CONTENT SLIDE DESIGN =====
 
-LAYOUT (identical on ALL slides):
-- Full-width dark navy (#1B2A4A) header bar at the very top, about one-eighth of slide height
-- Slide title displayed inside the header bar in white (#FFFFFF) bold sans-serif text
-- Thin #E2E8F0 separator line directly below the header bar
-- White (#FFFFFF) content area below — NO gradients, NO patterns, NO textures, NO colored backgrounds
+LAYOUT — VARY BY CONTENT (choose the best layout for THIS slide's content):
+- Each slide should have a DIFFERENT layout arrangement based on what the content needs
+- Possible layouts (pick the most suitable one):
+  * Left text + right infographic/icons
+  * Top title + grid of cards/items below
+  * Full-width process flow or timeline
+  * Center-focused diagram with surrounding labels
+  * Two-column comparison
+  * Icon grid with short descriptions
+  * Large central visual with minimal text
+- The title should always be clearly visible at the top or in a header area
 - Comfortable margins on all sides
-- ABSOLUTELY NO slide numbers, page numbers, percentage labels, margin indicators, or any footer text anywhere
-- Do NOT render any technical annotations like percentages, measurements, or layout guides as visible text
 
-COLOR PALETTE (use ONLY these exact colors on ALL slides — NO exceptions):
-- #1B2A4A — header bar background, section headings
-- #FFFFFF — header text, content area background, card fills
-- #334155 — all body text
-- #2563EB — icons, chart bars, borders, arrows, accent elements
-- #E2E8F0 — card borders, divider lines, subtle backgrounds
-- #DBEAFE — highlight boxes, selected item backgrounds
-- #64748B — captions, labels, secondary text
-FORBIDDEN: Do NOT use red, orange, green, purple, pink, yellow, teal, amber, or ANY color not listed above.
+CONSISTENT STYLE (keep the same FEEL across slides, but NOT the same layout):
+- Same color palette as other slides in this deck
+- Same typography style (font family, weight conventions)
+- Same icon style (flat, monoline, consistent stroke weight)
+- Same card/box design language (border style, rounded corners)
+- Background should match the overall deck tone
 
-TYPOGRAPHY (same on ALL slides — USE SMALL, COMPACT TEXT):
-- Sans-serif font family only (Pretendard, Noto Sans KR, or Arial)
-- Header title: 20-24pt bold #FFFFFF (NOT larger than 24pt)
-- Content headings/subtitles: 13-15pt bold #1B2A4A (NOT larger than 15pt)
-- Body text / bullet points: 10-12pt regular #334155 (NOT larger than 12pt)
-- Labels/captions: 8-9pt #64748B
-- TEXT MUST BE SMALL AND COMPACT — this is a data-dense slide, not a billboard
-- Leave enough room for infographic visuals on the right side (nearly half of slide width)
-- Text area should occupy slightly more than half of slide width (left side)
-- Do NOT render any percentage values, measurement numbers, or layout annotations as visible text in the image
+TYPOGRAPHY:
+- Sans-serif font family (Pretendard, Noto Sans KR, or Arial)
+- Title: 20-24pt bold
+- Content headings: 13-15pt bold
+- Body text: 10-12pt regular
+- Labels/captions: 8-9pt
+- TEXT MUST BE SMALL AND COMPACT — data-dense, not a billboard
 
-VISUAL ELEMENTS (same style on ALL slides):
-- Icons: flat monoline, 2px stroke, #2563EB color only
-- Cards: #FFFFFF fill, 1px #E2E8F0 border, 8px rounded corners
-- Charts/graphs: #2563EB fills, #E2E8F0 grid lines
-- Arrows/connectors: #2563EB, clean geometric
+VISUAL ELEMENTS:
+- Icons: flat monoline, consistent stroke weight
+- Cards: clean fill, subtle border, rounded corners
+- Charts/graphs: clean, minimal
+- Arrows/connectors: geometric, clean
 
 RULES:
 - Widescreen {aspect_ratio}
-- NO watermarks, NO placeholder text like "Lorem ipsum"
-- ABSOLUTELY NO page numbers, slide numbers, "Page X", "Slide X/Y", or any numbering in corners or footer
-- ABSOLUTELY NO footer text like "Section: ...", page indicators, or navigation elements
-- ABSOLUTELY NO company names, brand names, logos, or solution names anywhere in the slide (no footer logos, no header branding, no "Company Name" text)
-- If the title is in Korean, ALL text in the slide MUST be in Korean
-- This slide must be visually IDENTICAL in template structure to every other slide in the deck
+- NO watermarks, NO placeholder text
+- NO page numbers, slide numbers, or footer text
+- NO company names, brand names, or logos
+- If the title is in Korean, ALL text MUST be in Korean
+- Do NOT render percentage labels, margin annotations, or layout guide text
 
 ==========================================================================""",
     },
@@ -942,8 +933,8 @@ RULES:
         "content": """
 ⚠️ HIGHEST PRIORITY — USER STYLE OVERRIDE:
 The following user-specified style OVERRIDES all default design rules above.
-If this style specifies different colors, backgrounds, layouts, or aesthetics, follow the user style INSTEAD.
-But still keep the style CONSISTENT across ALL slides — do not vary between slides.
+If this style specifies different colors, backgrounds, or aesthetics, follow the user style INSTEAD.
+Keep the visual STYLE (colors, fonts, icons) consistent across slides, but VARY the layout per slide.
 
 {style_hint}""",
     },
@@ -952,23 +943,19 @@ But still keep the style CONSISTENT across ALL slides — do not vary between sl
         "name": "인포그래픽 참조 이미지 프롬프트",
         "description": "참조 이미지가 있을 때 스타일 일관성을 위해 추가되는 프롬프트. 변수: 없음",
         "model": "",
-        "content": """⚠️⚠️⚠️ ABSOLUTE HIGHEST PRIORITY — STYLE REFERENCE IMAGE PROVIDED ⚠️⚠️⚠️
+        "content": """⚠️ STYLE REFERENCE IMAGE PROVIDED ⚠️
 A reference slide image from this SAME presentation is attached.
-You MUST produce a slide that looks like it belongs to the EXACT SAME slide deck.
+Your slide must look like it belongs to the SAME slide deck.
 
-COPY EXACTLY from the reference image:
-- SAME header bar: same color, same height, same position at top
-- SAME background: same content area style, same margins
-- SAME typography: same font family, same sizes, same colors, same weight
-- SAME icon style: same line weight, same color, same flat monoline style
-- SAME card/box design: same border color, same radius, same shadow style
-- SAME color palette: ONLY the colors used in the reference image
-- SAME layout grid: same left-right split ratio, same spacing between elements
-- SAME footer style: if reference has no footer/page numbers, do NOT add them
+MATCH from the reference image (consistent style):
+- SAME color palette: use the same colors seen in the reference
+- SAME background tone: same content area style
+- SAME typography style: same font family, same weight conventions, same color choices
+- SAME icon style: same line weight, same color, same flat style
+- SAME card/box design language: same border style, same radius
 
-ONLY the CONTENT (text words, specific icons, data) should differ.
-The VISUAL TEMPLATE must be PIXEL-PERFECT identical to the reference.
-If your output looks like a DIFFERENT slide deck style, it is WRONG.""",
+DO NOT COPY the layout — choose a DIFFERENT layout arrangement that best fits THIS slide's content.
+The visual STYLE (colors, fonts, icon style) should be consistent, but the LAYOUT should vary.""",
     },
     {
         "key": "single_slide_edit_system",
@@ -1303,6 +1290,177 @@ RULES:
   detail: "트랜지스터 76억개, 전력효율 2배 향상"
 """,
     },
+    {
+        "key": "summary_infographic_system",
+        "name": "한장 요약 인포그래픽 시스템 프롬프트",
+        "description": "리소스와 지침을 1장 인포그래픽용 요약 텍스트로 변환하는 시스템 프롬프트. 텍스트 최소화, 그래픽 요소 극대화",
+        "model": "claude-sonnet-4-6",
+        "force_update": True,
+        "content": """You are a world-class infographic designer. Your specialty: replacing TEXT with VISUAL GRAPHICS.
+
+⚠️ CRITICAL: This output will be rendered as an IMAGE by an AI image generator.
+Too much text = garbled/unreadable text in the image.
+MINIMIZE TEXT. MAXIMIZE GRAPHICS.
+
+Given resources, extract the core message and structure it for a GRAPHIC-HEAVY, TEXT-MINIMAL infographic.
+
+Output ONLY valid JSON:
+```json
+{
+  "title": "Title (max 6 words)",
+  "subtitle": "Subtitle (max 8 words)",
+  "sections": [
+    {
+      "heading": "2-3 words only",
+      "icon_hint": "icon keyword (rocket, chart-bar, shield, gear, lightbulb, target, clock, users, trending-up, database, check-circle, zap, globe, lock, cpu)",
+      "visual_type": "donut_chart | bar_chart | progress_bars | process_flow | comparison | icon_grid | stat_card | timeline | rating_stars | gauge_meter",
+      "data_points": [
+        {"label": "2-3 words", "value": "number or short value"}
+      ],
+      "highlight_value": "Key number to show LARGE (e.g. '95%', '3.2x')"
+    }
+  ],
+  "key_metrics": [
+    {"label": "2-3 words", "value": "number", "icon_hint": "trending-up", "color_hint": "green|blue|orange|red|purple"}
+  ],
+  "flow": {
+    "type": "none | linear_process | cycle | comparison_table",
+    "steps": ["2-3 word step", "2-3 word step", "2-3 word step"]
+  },
+  "conclusion": "One short takeaway (max 10 words)",
+  "color_scheme": "auto | warm | cool | corporate | vibrant"
+}
+```
+
+STRICT RULES:
+- Title: MAX 6 words. Subtitle: MAX 8 words
+- sections: 3-5 sections
+- heading: MAX 3 words per section
+- data_points: use label+value pairs (NOT sentences). Label max 3 words, value should be a number/percentage/short keyword
+- Each section max 3-4 data_points
+- key_metrics: 3-5 metrics — ALWAYS include numeric values. Extract or derive numbers from data
+- visual_type: MUST vary — use at least 3 DIFFERENT types across sections. NEVER use "bullets" — always pick a graphic type
+- flow: populate if content has a process/sequence (max 5 steps, each max 3 words)
+- highlight_value: at least 2 sections must have a standout number
+- NO sentences anywhere. Only keywords, numbers, and short labels
+- Use the same language as resources/instructions
+- Think: "How would a newspaper infographic show this?" — charts, icons, numbers, NOT paragraphs""",
+    },
+    {
+        "key": "summary_infographic_user",
+        "name": "한장 요약 인포그래픽 사용자 프롬프트",
+        "description": "한장 요약 인포그래픽 사용자 프롬프트. 변수: {resources_text}, {instructions}",
+        "model": "",
+        "force_update": True,
+        "content": """다음 자료를 1장의 그래픽 중심 인포그래픽으로 요약해주세요.
+
+⚠️ 핵심 원칙: 텍스트를 최소화하고 시각적 요소(차트, 아이콘, 수치 카드, 프로세스 다이어그램, 비교 그래프 등)로 정보를 전달하세요.
+- 문장 사용 금지. 키워드 + 숫자만 사용
+- 모든 heading은 2-3단어 이내
+- 모든 data_points의 label은 2-3단어, value는 숫자/퍼센트/짧은 키워드
+- 가능한 한 숫자로 표현하세요
+
+[자료]
+{resources_text}
+
+[사용자 지침]
+{instructions}""",
+    },
+    {
+        "key": "summary_infographic_image",
+        "name": "한장 요약 인포그래픽 이미지 프롬프트",
+        "description": "Gemini API로 한장 요약 인포그래픽 이미지를 생성하는 프롬프트. 변수: {title}, {subtitle}, {sections_text}, {metrics_text}, {conclusion}, {flow_text}, {color_scheme}",
+        "model": "gemini-3.1-flash-image-preview",
+        "force_update": True,
+        "content": """Generate a SINGLE infographic image in 16:9 widescreen.
+This is a GRAPHIC-HEAVY infographic — NOT a text document. 90% GRAPHICS, 10% TEXT.
+
+Title: {title}
+Subtitle: {subtitle}
+
+Data to visualize:
+{sections_text}
+
+{metrics_text}
+
+{flow_text}
+
+Takeaway: {conclusion}
+
+Color scheme: {color_scheme}
+
+===== DESIGN RULES: GRAPHICS FIRST, TEXT MINIMAL =====
+
+⚠️ CRITICAL RULE: MINIMIZE ALL TEXT. Use GRAPHICS to communicate information.
+- Section headings: MAX 3 words, rendered as icon + short label
+- Data: show as CHARTS, BARS, GAUGES, ICONS — NOT as text sentences
+- Numbers: display LARGE (48-72pt) as the primary visual element
+- NO paragraphs, NO bullet point lists with sentences, NO long descriptions
+
+WHAT TO DRAW (use ALL of these graphic types):
+
+1. METRIC CARDS (top row): Large colored cards showing key numbers
+   - Giant number (48-72pt) as the focal point
+   - Tiny 2-word label below (12pt)
+   - Small trend arrow icon
+   - Colored background per card
+
+2. CHARTS & GRAPHS (at least 2 of these):
+   - Donut/pie chart with percentage segments + labels
+   - Horizontal bar chart comparing values
+   - Progress bars with % filled
+   - Gauge/speedometer meters
+   - Simple line/area mini-chart
+
+3. ICON GRID or PICTOGRAM: Show quantities/categories using repeated icons
+   - e.g., 7 out of 10 users = 7 filled person icons + 3 outlined
+
+4. PROCESS/FLOW DIAGRAM (if applicable):
+   - Connected circles/boxes with arrows
+   - Numbered steps as visual nodes
+   - Timeline with dots on a line
+
+5. COMPARISON VISUAL (if applicable):
+   - Side-by-side colored bars
+   - Before/After split layout
+   - Stacked or grouped bar comparison
+
+LAYOUT:
+- Title: top 8%, large bold text + thin subtitle
+- Metrics row: top 20%, 3-5 large stat cards in a row
+- Visual body: middle 60%, 2-3 columns of charts/diagrams/icon grids
+- Takeaway bar: bottom 8%, accent-colored strip with short conclusion
+
+TEXT BUDGET — STRICT LIMITS:
+- Title: max 6 words
+- Subtitle: max 8 words
+- Each section label: max 3 words
+- Each data label: max 3 words
+- Conclusion: max 10 words
+- TOTAL text in entire image: under 80 words
+- If you need to convey more information, use a GRAPHIC (chart, icon, arrow) instead of text
+
+VISUAL STYLE:
+- Clean flat design, no 3D effects
+- 4-5 color palette, each section has distinct accent color
+- Rounded corner cards (8-12px radius)
+- Flat monoline icons, consistent 32-40px size
+- ALL text SHARP and CRISP — large enough to read easily
+- Minimum font size: 14pt (nothing smaller)
+- Background: solid or very subtle gradient
+
+FORBIDDEN:
+- Sentences or paragraphs of text
+- Bullet point lists with text longer than 3 words
+- Text smaller than 14pt
+- Blur, bokeh, frosted glass
+- Photos or realistic images
+- Overlapping or cramped elements
+- Logos, brand names, watermarks
+- Any text that could become garbled — if in doubt, use an icon instead
+
+===========================================================================""",
+    },
 ]
 
 
@@ -1321,14 +1479,27 @@ async def ensure_default_prompts():
         if not existing:
             # 최초 등록만 수행
             doc = {
-                **prompt,
-                "content_hash": _content_hash(prompt["content"]),
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                k: v for k, v in prompt.items() if k != "force_update"
             }
+            doc["content_hash"] = _content_hash(prompt["content"])
+            doc["created_at"] = datetime.utcnow()
+            doc["updated_at"] = datetime.utcnow()
             await db.prompts.insert_one(doc)
             print(f"[Prompt] 기본 프롬프트 등록: {prompt['key']}")
-        # DB에 이미 존재하면 아무것도 하지 않음 — DB 내용이 항상 우선
+        elif prompt.get("force_update"):
+            # force_update 플래그가 있으면 해시 비교 후 변경 시 DB 업데이트
+            new_hash = _content_hash(prompt["content"])
+            old_hash = existing.get("content_hash", "")
+            if new_hash != old_hash:
+                update_doc = {k: v for k, v in prompt.items() if k != "force_update"}
+                update_doc["content_hash"] = new_hash
+                update_doc["updated_at"] = datetime.utcnow()
+                await db.prompts.update_one(
+                    {"key": prompt["key"]},
+                    {"$set": update_doc}
+                )
+                print(f"[Prompt] 프롬프트 강제 업데이트: {prompt['key']}")
+        # DB에 이미 존재하고 force_update가 아니면 아무것도 하지 않음
 
         # Redis 캐시 무효화 (서버 시작 시 DB 최신 내용 반영)
         await redis_service.cache_delete(f"prompt:{prompt['key']}")

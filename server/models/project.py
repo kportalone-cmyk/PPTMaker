@@ -41,6 +41,13 @@ class ManualSlideRequest(BaseModel):
     insert_after_order: Optional[int] = None  # None이면 맨 끝에 추가
 
 
+class InfographicSlideAddRequest(BaseModel):
+    project_id: str
+    content: str  # 생성할 슬라이드 내용/지침
+    style_hint: str = ""  # 스타일 프롬프트
+    insert_after_order: Optional[int] = None
+
+
 class SlideTextRequest(BaseModel):
     project_id: str
     slide_id: str
@@ -110,8 +117,16 @@ class InfographicGenerateRequest(BaseModel):
     lang: str = ""
     slide_count: str = "auto"
     style_hint: str = ""  # 인포그래픽 스타일 힌트
-    infographic_ratio: int = 40  # 인포그래픽 비율 (%) - 기본 40%
+    infographic_ratio: int = 60  # 인포그래픽 비율 (%) - .env DEFAULT_INFOGRAPHIC_RATIO와 동기화
     auto_template: bool = False  # AI 자동 디자인 모드
+
+
+class SummaryInfographicRequest(BaseModel):
+    project_id: str
+    instructions: str = ""
+    lang: str = ""
+    style_hint: str = ""  # 인포그래픽 스타일 힌트
+    infographic_ratio: int = 60  # 인포그래픽 비율 (%) - .env DEFAULT_INFOGRAPHIC_RATIO와 동기화
 
 
 class AiSlideGenerateRequest(BaseModel):

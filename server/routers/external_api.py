@@ -260,7 +260,7 @@ async def external_generate(
             raw_slides,
             style_hint=style_hint,
             aspect_ratio="16:9",
-            infographic_ratio=40,
+            infographic_ratio=settings.DEFAULT_INFOGRAPHIC_RATIO,
         ):
             idx = img_result["index"]
             image_url = img_result["image_url"]
