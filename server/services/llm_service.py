@@ -16,6 +16,181 @@ from PIL import Image
 from config import settings, anthropic_key_rotator
 from routers.prompt import get_prompt_content, get_prompt_model
 
+# OpenAI SDK (SLLM / sglang / vllm OpenAI-compat 호출용)
+try:
+    from openai import AsyncOpenAI
+except ImportError:  # pragma: no cover
+    AsyncOpenAI = None
+
+
+# ============ Provider 선택 헬퍼 ============
+
+def _is_sllm_mode() -> bool:
+    """현재 LLM provider가 SLLM인지"""
+    return settings.LLM_PROVIDER == "sllm"
+
+
+def _active_model_label(claude_model: str = "") -> str:
+    """로그용 활성 모델 라벨 (provider 라우팅 반영)"""
+    if _is_sllm_mode():
+        return f"sllm:{settings.SLLM_MODEL}"
+    return claude_model or settings.ANTHROPIC_MODEL
+
+
+def _llm_unavailable() -> bool:
+    """현재 활성 provider의 자격증명이 없어 호출 불가한 상태인지
+
+    - claude: ANTHROPIC_API_KEY 미설정/placeholder
+    - sllm:   SLLM_BASE_URL 또는 SLLM_MODEL 미설정, 또는 openai SDK 미설치
+    """
+    if _is_sllm_mode():
+        if AsyncOpenAI is None:
+            return True
+        if not settings.SLLM_BASE_URL or not settings.SLLM_MODEL:
+            return True
+        return False
+    # claude
+    key = settings.ANTHROPIC_API_KEY
+    return (not key) or key == "your_anthropic_api_key_here"
+
+
+# ============ SLLM (OpenAI 호환) 클라이언트 ============
+
+_sllm_client_cache = {"client": None}
+
+
+def _get_sllm_client():
+    """AsyncOpenAI 클라이언트 (싱글톤). SSL 검증 옵션 지원."""
+    if AsyncOpenAI is None:
+        raise RuntimeError("openai 패키지가 설치되어 있지 않습니다. (pip install openai)")
+    if _sllm_client_cache["client"] is None:
+        http_client = httpx.AsyncClient(
+            verify=settings.SLLM_VERIFY_SSL,
+            timeout=httpx.Timeout(300.0, connect=30.0),
+        )
+        _sllm_client_cache["client"] = AsyncOpenAI(
+            base_url=settings.SLLM_BASE_URL,
+            api_key=settings.SLLM_API_KEY or "EMPTY",
+            http_client=http_client,
+        )
+    return _sllm_client_cache["client"]
+
+
+def _sllm_extra_body() -> dict:
+    """sglang/vllm chat_template_kwargs (reasoning 토글 등)"""
+    extra: dict = {}
+    if settings.SLLM_REASONING_ENABLED:
+        # Qwen3 / DeepSeek-R1 계열: vLLM/sglang의 chat_template_kwargs로 thinking 토글
+        extra["chat_template_kwargs"] = {"enable_thinking": True}
+    return extra
+
+
+async def _call_sllm_api(system_prompt: str, user_prompt: str, max_tokens: int = 0) -> str:
+    """SLLM(OpenAI 호환) 비스트리밍 호출 → 최종 응답 텍스트 반환
+
+    Reasoning(<think>…</think>) 블록은 SLLM_REASONING_VISIBLE=false일 때 제거.
+    """
+    client = _get_sllm_client()
+    mt = max_tokens if max_tokens > 0 else settings.SLLM_MAX_TOKENS
+
+    kwargs: dict = {
+        "model": settings.SLLM_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "max_tokens": mt,
+    }
+    extra = _sllm_extra_body()
+    if extra:
+        kwargs["extra_body"] = extra
+
+    response = await client.chat.completions.create(**kwargs)
+    text = ""
+    if response and response.choices:
+        msg = response.choices[0].message
+        text = msg.content or ""
+
+    # reasoning 블록 제거 (보이지 않게 설정된 경우)
+    if settings.SLLM_REASONING_ENABLED and not settings.SLLM_REASONING_VISIBLE:
+        text = re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL)
+    return text
+
+
+async def _stream_sllm_api(system_prompt: str, user_prompt: str, max_tokens: int = 0):
+    """SLLM(OpenAI 호환) 스트리밍 호출 - text delta를 async yield
+
+    SLLM_REASONING_ENABLED=true + SLLM_REASONING_VISIBLE=false 인 경우
+    `<think>...</think>` 구간을 silent 버퍼링하고 본문만 yield.
+    """
+    client = _get_sllm_client()
+    mt = max_tokens if max_tokens > 0 else settings.SLLM_MAX_TOKENS
+
+    kwargs: dict = {
+        "model": settings.SLLM_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "max_tokens": mt,
+        "stream": True,
+    }
+    extra = _sllm_extra_body()
+    if extra:
+        kwargs["extra_body"] = extra
+
+    hide_think = settings.SLLM_REASONING_ENABLED and not settings.SLLM_REASONING_VISIBLE
+    in_think = False
+    buffer = ""
+    OPEN_TAG = "<think>"
+    CLOSE_TAG = "</think>"
+
+    stream = await client.chat.completions.create(**kwargs)
+    async for chunk in stream:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        text = getattr(delta, "content", None) or ""
+        if not text:
+            continue
+
+        if not hide_think:
+            yield text
+            continue
+
+        # <think>...</think> 구간 silent 버퍼링
+        buffer += text
+        while buffer:
+            if not in_think:
+                idx = buffer.find(OPEN_TAG)
+                if idx == -1:
+                    # 마지막 (len(OPEN_TAG)-1) 글자는 부분 일치 가능성 → 보류
+                    safe = max(0, len(buffer) - (len(OPEN_TAG) - 1))
+                    if safe > 0:
+                        yield buffer[:safe]
+                        buffer = buffer[safe:]
+                    break
+                # OPEN_TAG 발견
+                if idx > 0:
+                    yield buffer[:idx]
+                buffer = buffer[idx + len(OPEN_TAG):]
+                in_think = True
+            else:
+                idx = buffer.find(CLOSE_TAG)
+                if idx == -1:
+                    # close 태그 부분일치 보호용 끝부분만 남기고 폐기
+                    keep = len(CLOSE_TAG) - 1
+                    if len(buffer) > keep:
+                        buffer = buffer[-keep:]
+                    break
+                # CLOSE_TAG 발견 → 사고 본문 폐기
+                buffer = buffer[idx + len(CLOSE_TAG):]
+                in_think = False
+
+    # 종료 후 남은 안전한 잔여 텍스트
+    if buffer and not in_think:
+        yield buffer
+
 
 # ============ 슬라이드 타입 ↔ content_type 매핑 ============
 SCHEMA_TYPE_TO_CONTENT_TYPE = {
@@ -47,7 +222,7 @@ async def generate_slide_content(
     """
     num_templates = len(slides_meta)
 
-    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+    if _llm_unavailable():
         return {
             "slides": _fallback_content(resources_text, slides_meta),
             "meta": {},
@@ -65,7 +240,7 @@ async def generate_slide_content(
 
     try:
         result = await _call_claude_api(system_prompt, user_prompt, model=effective_model)
-        print(f"[LLM] API 응답 길이: {len(result)} chars (model: {effective_model})")
+        print(f"[LLM] API 응답 길이: {len(result)} chars (model: {_active_model_label(effective_model)})")
         parsed = _parse_rich_schema(result, slides_meta)
         if parsed:
             print(f"[LLM] 파싱 성공 - slides: {len(parsed.get('slides', []))}개")
@@ -82,7 +257,10 @@ async def generate_slide_content(
 
 
 async def _call_claude_api(system_prompt: str, user_prompt: str, model: str = "") -> str:
-    """Claude API 호출 (httpx 비동기)"""
+    """LLM 호출 (provider 라우팅: claude → Anthropic, sllm → OpenAI 호환)"""
+    if _is_sllm_mode():
+        return await _call_sllm_api(system_prompt, user_prompt)
+
     url = "https://api.anthropic.com/v1/messages"
     headers = {
         "x-api-key": anthropic_key_rotator.next(),
@@ -119,15 +297,18 @@ async def _call_claude_api(system_prompt: str, user_prompt: str, model: str = ""
         return "\n".join(text_parts)
 
 
-async def analyze_image_content(file_path: str, original_filename: str = "") -> str:
-    """Claude Vision API로 이미지 내용 분석
+async def analyze_image_content(file_path: str, original_filename: str = "", prompt: str = "") -> str:
+    """Vision API로 이미지 내용 분석 (Claude 또는 SLLM 자동 라우팅)
 
     지원 형식: jpg, jpeg, png, gif, webp
     비지원 형식(svg, bmp)은 빈 문자열 반환
-    """
-    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
-        return ""
 
+    - LLM_PROVIDER=claude : Anthropic Messages API (image block)
+    - LLM_PROVIDER=sllm   : OpenAI 호환 chat.completions.create (image_url + data URI)
+
+    호출 실패 시 빈 문자열 반환.
+    prompt 인자가 비어 있으면 기본 프레젠테이션 분석 프롬프트 사용.
+    """
     ext = os.path.splitext(file_path)[1].lower()
     SUPPORTED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
     if ext not in SUPPORTED_EXT:
@@ -140,6 +321,14 @@ async def analyze_image_content(file_path: str, original_filename: str = "") -> 
         ".gif": "image/gif",
         ".webp": "image/webp",
     }
+
+    # provider 자격증명 체크
+    if _is_sllm_mode():
+        if AsyncOpenAI is None or not settings.SLLM_BASE_URL or not settings.SLLM_MODEL:
+            return ""
+    else:
+        if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+            return ""
 
     try:
         # 이미지 읽기 + 리사이즈 (1568px 이하)
@@ -161,16 +350,56 @@ async def analyze_image_content(file_path: str, original_filename: str = "") -> 
         image_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
         media_type = MEDIA_TYPE_MAP.get(ext, "image/png")
 
-        prompt = (
-            f"이 이미지(파일명: {original_filename})의 내용을 자세히 분석하여 설명해주세요.\n"
-            "다음 항목을 포함하세요:\n"
-            "1. 이미지에 보이는 주요 내용과 요소\n"
-            "2. 텍스트가 있다면 텍스트 내용 전문\n"
-            "3. 차트/그래프/도표가 있다면 데이터 해석\n"
-            "4. 이미지의 전체적인 주제와 맥락\n\n"
-            "프레젠테이션 자료 작성에 활용할 수 있도록 구체적이고 정확하게 설명하세요."
-        )
+        if not prompt:
+            prompt = (
+                f"이 이미지(파일명: {original_filename})의 내용을 자세히 분석하여 설명해주세요.\n"
+                "다음 항목을 포함하세요:\n"
+                "1. 이미지에 보이는 주요 내용과 요소\n"
+                "2. 텍스트가 있다면 텍스트 내용 전문\n"
+                "3. 차트/그래프/도표가 있다면 데이터 해석\n"
+                "4. 이미지의 전체적인 주제와 맥락\n\n"
+                "프레젠테이션 자료 작성에 활용할 수 있도록 구체적이고 정확하게 설명하세요."
+            )
 
+        # ──────────────────── SLLM (OpenAI 호환) ────────────────────
+        if _is_sllm_mode():
+            try:
+                client = _get_sllm_client()
+                data_url = f"data:{media_type};base64,{image_data}"
+                kwargs: dict = {
+                    "model": settings.SLLM_MODEL,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {"url": data_url}},
+                            ],
+                        }
+                    ],
+                    "max_tokens": 1024,
+                }
+                extra = _sllm_extra_body()
+                if extra:
+                    kwargs["extra_body"] = extra
+
+                response = await client.chat.completions.create(**kwargs)
+                text = ""
+                if response and response.choices:
+                    msg = response.choices[0].message
+                    text = msg.content or ""
+
+                # reasoning 블록 제거 (보이지 않게 설정된 경우)
+                if settings.SLLM_REASONING_ENABLED and not settings.SLLM_REASONING_VISIBLE:
+                    text = re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL)
+
+                print(f"[Vision/SLLM] 이미지 분석 완료: {original_filename} ({len(text)} chars)")
+                return text
+            except Exception as e:
+                print(f"[Vision/SLLM] 이미지 분석 실패 ({original_filename}): {e}")
+                return ""
+
+        # ──────────────────── Claude (Anthropic Messages API) ────────────────────
         headers = {
             "x-api-key": anthropic_key_rotator.next(),
             "anthropic-version": "2023-06-01",
@@ -214,6 +443,145 @@ async def analyze_image_content(file_path: str, original_filename: str = "") -> 
 
     except Exception as e:
         print(f"[Vision] 이미지 분석 실패 ({original_filename}): {e}")
+        return ""
+
+
+async def analyze_image_for_patterns(
+    file_path: str,
+    original_filename: str = "",
+    prompt: str = "",
+    max_tokens: int = 8192,
+) -> str:
+    """Vision API 로 이미지를 분석하되 max_tokens 를 크게 잡는 변형 (M8 패턴 추출용).
+
+    `analyze_image_content` 와 동일한 로직이지만, 응답 길이 제한을 명시적으로
+    높여 다수의 슬라이드 레이아웃 패턴을 JSON 으로 한 번에 받을 수 있게 한다.
+
+    - prompt 가 비어 있으면 빈 문자열 반환 (패턴 추출용은 반드시 호출자가 prompt 지정).
+    - 지원 이미지 확장자(jpg/jpeg/png/gif/webp) 외에는 빈 문자열.
+    - 실패 시 빈 문자열.
+    """
+    ext = os.path.splitext(file_path)[1].lower()
+    SUPPORTED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+    if ext not in SUPPORTED_EXT:
+        return ""
+    if not prompt:
+        return ""
+
+    MEDIA_TYPE_MAP = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+    }
+
+    # provider 자격증명 체크
+    if _is_sllm_mode():
+        if AsyncOpenAI is None or not settings.SLLM_BASE_URL or not settings.SLLM_MODEL:
+            return ""
+    else:
+        if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+            return ""
+
+    try:
+        img = Image.open(file_path)
+        w, h = img.size
+        MAX_DIM = 1568
+        if max(w, h) > MAX_DIM:
+            ratio = MAX_DIM / max(w, h)
+            img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+
+        if img.mode in ("RGBA", "LA", "P"):
+            img = img.convert("RGB")
+
+        buf = io.BytesIO()
+        out_fmt = "JPEG" if ext in (".jpg", ".jpeg") else "PNG" if ext == ".png" else "WEBP" if ext == ".webp" else "PNG"
+        img.save(buf, format=out_fmt)
+        image_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
+        media_type = MEDIA_TYPE_MAP.get(ext, "image/png")
+
+        # ──────────────────── SLLM (OpenAI 호환) ────────────────────
+        if _is_sllm_mode():
+            try:
+                client = _get_sllm_client()
+                data_url = f"data:{media_type};base64,{image_data}"
+                kwargs: dict = {
+                    "model": settings.SLLM_MODEL,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {"url": data_url}},
+                            ],
+                        }
+                    ],
+                    "max_tokens": max_tokens,
+                }
+                extra = _sllm_extra_body()
+                if extra:
+                    kwargs["extra_body"] = extra
+
+                response = await client.chat.completions.create(**kwargs)
+                text = ""
+                if response and response.choices:
+                    msg = response.choices[0].message
+                    text = msg.content or ""
+
+                if settings.SLLM_REASONING_ENABLED and not settings.SLLM_REASONING_VISIBLE:
+                    text = re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL)
+
+                print(f"[Vision-Patterns/SLLM] 패턴 추출 분석 완료: {original_filename} ({len(text)} chars)")
+                return text
+            except Exception as e:
+                print(f"[Vision-Patterns/SLLM] 패턴 추출 분석 실패 ({original_filename}): {e}")
+                return ""
+
+        # ──────────────────── Claude (Anthropic Messages API) ────────────────────
+        headers = {
+            "x-api-key": anthropic_key_rotator.next(),
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        payload = {
+            "model": settings.ANTHROPIC_OUTLINE_MODEL,
+            "max_tokens": max_tokens,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": image_data,
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+        }
+
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                json=payload,
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        content_blocks = data.get("content", [])
+        text_parts = [block["text"] for block in content_blocks if block.get("type") == "text"]
+        result = "\n".join(text_parts)
+        print(f"[Vision-Patterns] 패턴 추출 분석 완료: {original_filename} ({len(result)} chars)")
+        return result
+
+    except Exception as e:
+        print(f"[Vision-Patterns] 패턴 추출 분석 실패 ({original_filename}): {e}")
         return ""
 
 
@@ -1171,7 +1539,7 @@ async def generate_single_slide_content(
     Returns:
         {"contents": {placeholder: text}, "items": [{"heading": ..., "detail": ...}]}
     """
-    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+    if _llm_unavailable():
         # 폴백: placeholder마다 지침 텍스트 반환
         contents = {}
         for p in slide_meta.get("placeholders", []):
@@ -1458,7 +1826,12 @@ async def _build_generation_prompts(
 
 
 async def _stream_claude_api(system_prompt: str, user_prompt: str, model: str = "", max_tokens: int = 0):
-    """Claude API 스트리밍 호출 - text delta를 async yield"""
+    """LLM 스트리밍 호출 (provider 라우팅: claude → Anthropic, sllm → OpenAI 호환)"""
+    if _is_sllm_mode():
+        async for delta in _stream_sllm_api(system_prompt, user_prompt, max_tokens=max_tokens):
+            yield delta
+        return
+
     url = "https://api.anthropic.com/v1/messages"
     headers = {
         "x-api-key": anthropic_key_rotator.next(),
@@ -1520,7 +1893,7 @@ async def generate_slide_content_stream(
         ("delta", str)   - Claude에서 스트리밍된 텍스트 청크
         ("result", dict) - 최종 파싱 결과
     """
-    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+    if _llm_unavailable():
         yield ("result", {
             "slides": _fallback_content(resources_text, slides_meta),
             "meta": {},
@@ -1543,7 +1916,7 @@ async def generate_slide_content_stream(
             full_text += delta
             yield ("delta", delta)
 
-        print(f"[LLM] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {effective_model})")
+        print(f"[LLM] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {_active_model_label(effective_model)})")
         parsed = _parse_rich_schema(full_text, slides_meta)
         if parsed:
             slide_count_result = len(parsed.get("slides", []))
@@ -1582,7 +1955,7 @@ async def generate_excel_content_stream(
         ("delta", str)   - Claude에서 스트리밍된 텍스트 청크
         ("result", dict) - 최종 파싱 결과: {"sheets": [...], "meta": {...}}
     """
-    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+    if _llm_unavailable():
         yield ("result", _excel_fallback(resources_text))
         return
 
@@ -1600,7 +1973,7 @@ async def generate_excel_content_stream(
             full_text += delta
             yield ("delta", delta)
 
-        print(f"[LLM-Excel] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {effective_model})")
+        print(f"[LLM-Excel] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {_active_model_label(effective_model)})")
         parsed = _parse_excel_schema(full_text)
         if parsed:
             sheet_count_result = len(parsed.get("sheets", []))
@@ -1628,7 +2001,7 @@ async def modify_excel_content_stream(
         ("delta", str)   - Claude에서 스트리밍된 텍스트 청크
         ("result", dict) - 최종 파싱 결과: {"sheets": [...], "meta": {...}}
     """
-    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+    if _llm_unavailable():
         yield ("result", current_data)
         return
 
@@ -1645,7 +2018,7 @@ async def modify_excel_content_stream(
             full_text += delta
             yield ("delta", delta)
 
-        print(f"[LLM-Excel-Modify] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {effective_model})")
+        print(f"[LLM-Excel-Modify] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {_active_model_label(effective_model)})")
         parsed = _parse_excel_schema(full_text)
         if parsed:
             sheet_count_result = len(parsed.get("sheets", []))
@@ -1940,7 +2313,7 @@ async def generate_docx_content_stream(
         ("delta", str)   - Claude에서 스트리밍된 텍스트 청크
         ("result", dict) - 최종 파싱 결과: {"sections": [...], "meta": {...}}
     """
-    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+    if _llm_unavailable():
         yield ("result", _docx_fallback(resources_text))
         return
 
@@ -1969,7 +2342,7 @@ async def generate_docx_content_stream(
             full_text += delta
             yield ("delta", delta)
 
-        print(f"[LLM-Docx] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {effective_model})")
+        print(f"[LLM-Docx] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {_active_model_label(effective_model)})")
         parsed = _parse_docx_schema(full_text)
         if parsed:
             section_count_result = len(parsed.get("sections", []))
@@ -2271,7 +2644,7 @@ async def rewrite_text_stream(
         ("delta", str) - 스트리밍 텍스트 청크
         ("result", str) - 최종 완성 텍스트
     """
-    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+    if _llm_unavailable():
         yield ("result", selected_text)
         return
 
@@ -2303,7 +2676,7 @@ async def rewrite_text_stream(
             full_text += delta
             yield ("delta", delta)
 
-        print(f"[LLM-Rewrite] 완료 - 응답 길이: {len(full_text)} chars (model: {effective_model})")
+        print(f"[LLM-Rewrite] 완료 - 응답 길이: {len(full_text)} chars (model: {_active_model_label(effective_model)})")
         yield ("result", full_text)
     except Exception as e:
         import traceback
@@ -2431,7 +2804,7 @@ async def generate_html_report_stream(
         ("delta", str)   - Claude에서 스트리밍된 텍스트 청크
         ("result", dict) - 최종 파싱 결과: {"pages": [...], "meta": {...}}
     """
-    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+    if _llm_unavailable():
         yield ("result", _html_report_fallback(resources_text))
         return
 
@@ -2460,7 +2833,7 @@ async def generate_html_report_stream(
             full_text += delta
             yield ("delta", delta)
 
-        print(f"[LLM-HTML] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {effective_model})")
+        print(f"[LLM-HTML] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {_active_model_label(effective_model)})")
         parsed = _parse_html_report_schema(full_text)
         if parsed:
             page_count_result = len(parsed.get("pages", []))
@@ -2580,7 +2953,7 @@ async def generate_html_report_css_stream(
         ("delta", str)   - CSS 스트리밍 청크
         ("result", str)  - 최종 CSS 문자열
     """
-    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+    if _llm_unavailable():
         yield ("result", ".rpt-page { width:100%; padding:40px; font-family:'Malgun Gothic',Arial,sans-serif; box-sizing:border-box; }")
         return
 
@@ -2607,7 +2980,7 @@ async def generate_html_report_css_stream(
             css_text = css_text[:-3]
         css_text = css_text.strip()
 
-        print(f"[LLM-HTML-CSS] CSS 생성 완료 - 길이: {len(css_text)} chars (model: {effective_model})")
+        print(f"[LLM-HTML-CSS] CSS 생성 완료 - 길이: {len(css_text)} chars (model: {_active_model_label(effective_model)})")
         yield ("result", css_text)
     except Exception as e:
         import traceback
@@ -2807,7 +3180,7 @@ async def generate_html_report_outline_stream(
         ("delta", str)   - Claude에서 스트리밍된 텍스트 청크
         ("result", dict) - 최종 파싱 결과: {"meta": {...}, "pages": [...]}
     """
-    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+    if _llm_unavailable():
         yield ("result", {
             "meta": {"title": "리포트", "description": ""},
             "pages": [
@@ -2830,7 +3203,7 @@ async def generate_html_report_outline_stream(
             full_text += delta
             yield ("delta", delta)
 
-        print(f"[LLM-HTML-Outline] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {effective_model})")
+        print(f"[LLM-HTML-Outline] 스트리밍 완료 - 전체 응답 길이: {len(full_text)} chars (model: {_active_model_label(effective_model)})")
         parsed = _parse_html_report_outline(full_text)
         if parsed:
             page_count_result = len(parsed.get("pages", []))
@@ -2912,7 +3285,7 @@ async def generate_html_page_content(
         ("delta", str)   - Claude에서 스트리밍된 텍스트 청크
         ("result", str)  - 최종 HTML 문자열
     """
-    if not settings.ANTHROPIC_API_KEY or settings.ANTHROPIC_API_KEY == "your_anthropic_api_key_here":
+    if _llm_unavailable():
         fallback_html = f'<div style="width:960px;height:540px;padding:40px;font-family:Arial,sans-serif;"><h1>{page_info.get("title", "페이지")}</h1><p>{page_info.get("summary", "")}</p></div>'
         yield ("result", fallback_html)
         return
@@ -2933,7 +3306,7 @@ async def generate_html_page_content(
             yield ("delta", delta)
 
         page_order = page_info.get("order", "?")
-        print(f"[LLM-HTML-Page] 페이지 {page_order} 스트리밍 완료 - 길이: {len(full_text)} chars (model: {effective_model})")
+        print(f"[LLM-HTML-Page] 페이지 {page_order} 스트리밍 완료 - 길이: {len(full_text)} chars (model: {_active_model_label(effective_model)})")
         yield ("result", full_text)
     except Exception as e:
         import traceback
@@ -2941,3 +3314,1148 @@ async def generate_html_page_content(
         traceback.print_exc()
         fallback_html = f'<div style="width:960px;height:540px;padding:40px;font-family:Arial,sans-serif;"><h1>{page_info.get("title", "페이지")}</h1><p>{page_info.get("summary", "")}</p></div>'
         yield ("result", fallback_html)
+
+
+# ============ PPTX 스타일 구조화 (M2) ============
+
+# 패턴별 필수 필드 카탈로그 (스킬 파일이 어떤 정보를 줘도 항상 따라야 하는 형식)
+_PPTX_STYLED_PATTERN_FIELDS = {
+    "cover": ("title", "subtitle", "description", "presenter"),
+    "toc": ("items",),
+    "chapter": ("chapter_no", "title", "subtitle", "part_total"),
+    "content_3col": ("label", "title", "cards"),
+    "content_2col_hero": ("label", "title", "hero_text", "cards"),
+    "content_2x2": ("label", "title", "cards"),
+    "big_stat": ("label", "title", "stat", "support_cards"),
+    "content_3col_icon_block": ("label", "title", "cards"),
+    "content_2_numbered": ("label", "title", "cards"),
+    "content_3col_sidebar": ("label", "title", "cards"),
+    "content_2x2_top_line": ("label", "title", "cards"),
+    "closing": ("title", "summary", "closing_message"),
+}
+
+_PPTX_STYLED_ALL_PATTERNS = set(_PPTX_STYLED_PATTERN_FIELDS.keys())
+
+# 활성 패턴 중 카드 기반 content 패턴이 없을 때 fallback 으로 강등할 대상
+_PPTX_STYLED_FALLBACK_CONTENT = "content_3col"
+
+
+async def generate_pptx_styled_content_stream(
+    resources_text: str,
+    instructions: str,
+    skill_file: dict,
+    lang: str = "",
+    slide_count: str = "auto",
+):
+    """PPT 스타일 적용 구조화 슬라이드 스트리밍 (M2 Structurer)
+
+    스킬 파일에 등록된 디자인 샘플 이미지와 폰트 글리프 미리보기가 있으면
+    멀티모달 호출 경로로 LLM 에 시각 컨텍스트를 함께 주입한다.
+
+    Yields:
+        ("delta", str)   - LLM 텍스트 청크
+        ("result", dict) - 최종 파싱된 슬라이드 JSON (스키마는 시스템 프롬프트 정의)
+    """
+    if _llm_unavailable():
+        yield ("result", {"slides": [], "meta": {}, "sources": []})
+        return
+
+    # 프롬프트 빌드 (DB에서 시스템/사용자 키 조회, 변수 치환)
+    system_prompt, user_prompt = await _build_pptx_styled_prompts(
+        resources_text, instructions, skill_file, lang, slide_count
+    )
+
+    prompt_model = await get_prompt_model("pptx_styled_structurer_system")
+    effective_model = prompt_model or settings.ANTHROPIC_OUTLINE_MODEL
+
+    # 스킬 파일에서 멀티모달 이미지 컨텍스트 수집
+    images = _collect_skill_file_images(skill_file)
+    if images:
+        print(f"[LLM-PPTXStyled] 멀티모달 이미지 첨부: {len(images)}개")
+
+    try:
+        full_text = ""
+        if images:
+            async for delta in _stream_llm_api_multimodal(
+                system_prompt, user_prompt, images, model=effective_model
+            ):
+                full_text += delta
+                yield ("delta", delta)
+        else:
+            async for delta in _stream_claude_api(system_prompt, user_prompt, model=effective_model):
+                full_text += delta
+                yield ("delta", delta)
+
+        print(f"[LLM-PPTXStyled] 스트리밍 완료 - 길이: {len(full_text)} (model: {_active_model_label(effective_model)})")
+        parsed = _parse_pptx_styled_schema(full_text, skill_file)
+        if parsed:
+            yield ("result", parsed)
+        else:
+            yield ("result", {"slides": [], "meta": {}, "sources": [], "raw": full_text[:4000]})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[LLM-PPTXStyled] 호출 실패: {e}")
+        yield ("result", {"slides": [], "meta": {}, "sources": [], "error": str(e)})
+
+
+# ============ 멀티모달 (이미지+텍스트) 헬퍼 ============
+
+# 멀티모달 LLM 호출 시 첨부할 이미지의 최대 개수 (token 비용 가드)
+_MULTIMODAL_MAX_IMAGES = 8
+# 이미지 리사이즈 최대 변 길이 (analyze_image_content 와 동일)
+_MULTIMODAL_MAX_DIM = 1568
+
+
+def _guess_media_type_from_path(path: str) -> str:
+    """파일 경로에서 media_type 추론"""
+    ext = os.path.splitext(path or "")[1].lower()
+    return {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+    }.get(ext, "image/png")
+
+
+def _url_to_local_path(url: str) -> str:
+    """`/uploads/...` URL 을 UPLOAD_DIR 기준 로컬 절대경로로 변환.
+
+    URL 이 `/uploads/` 로 시작하지 않거나 변환 실패 시 빈 문자열 반환.
+    """
+    if not url or not isinstance(url, str):
+        return ""
+    if not url.startswith("/uploads/"):
+        return ""
+    rel = url[len("/uploads/"):]
+    full = os.path.join(settings.UPLOAD_DIR, rel.replace("/", os.sep))
+    return full if os.path.isfile(full) else ""
+
+
+def _collect_skill_file_images(skill_file: dict, max_images: int = _MULTIMODAL_MAX_IMAGES) -> list[dict]:
+    """스킬 파일에서 LLM 컨텍스트로 보낼 이미지 경로 수집.
+
+    우선순위:
+    1. samples / sample_image_refs (디자인 샘플) — 최대 5개
+    2. fonts[].preview_url (글리프 미리보기) — 최대 3개
+
+    Returns:
+        [{"path": <로컬 절대경로>, "media_type": "image/png|jpeg|...", "label": <설명>}]
+    """
+    if not isinstance(skill_file, dict):
+        return []
+
+    images: list[dict] = []
+
+    # 1. 디자인 샘플 이미지 (최대 5개)
+    samples_raw = skill_file.get("samples") or skill_file.get("sample_image_refs") or []
+    if isinstance(samples_raw, list):
+        sample_count = 0
+        for s in samples_raw:
+            if sample_count >= 5:
+                break
+            if not isinstance(s, dict):
+                continue
+            # 우선순위: local_path → url 변환 → file_id 기반 경로
+            local = s.get("local_path") or s.get("path")
+            url = s.get("url", "")
+            if not local and url:
+                local = _url_to_local_path(url)
+            if not local or not os.path.isfile(local):
+                continue
+            images.append({
+                "path": local,
+                "media_type": _guess_media_type_from_path(local),
+                "label": f"design_sample:{s.get('original_filename', s.get('file_id', ''))}",
+            })
+            sample_count += 1
+
+    # 2. 폰트 글리프 미리보기 (최대 3개)
+    fonts_raw = skill_file.get("fonts") or []
+    if isinstance(fonts_raw, list):
+        font_count = 0
+        for f in fonts_raw:
+            if font_count >= 3:
+                break
+            if not isinstance(f, dict):
+                continue
+            preview_local = f.get("preview_local_path")
+            preview_url = f.get("preview_url", "")
+            if not preview_local and preview_url:
+                preview_local = _url_to_local_path(preview_url)
+            if not preview_local or not os.path.isfile(preview_local):
+                continue
+            images.append({
+                "path": preview_local,
+                "media_type": _guess_media_type_from_path(preview_local),
+                "label": f"font_preview:{f.get('family', f.get('name', ''))}",
+            })
+            font_count += 1
+
+    # token 비용 가드 — 상한 적용
+    return images[:max_images]
+
+
+def _load_and_encode_image(img: dict) -> tuple[str, str] | None:
+    """이미지를 로드하여 base64 문자열로 변환.
+
+    Args:
+        img: {"path": <abs path>, "media_type": <str>} or {"data": <bytes>, "media_type": <str>}
+
+    Returns:
+        (base64_string, media_type) — 출력 media_type 은 리사이즈 후 실제 저장 포맷 반영.
+        실패 시 None.
+    """
+    try:
+        media_type = img.get("media_type") or "image/png"
+
+        if img.get("path"):
+            pil_img = Image.open(img["path"])
+        elif img.get("data"):
+            pil_img = Image.open(io.BytesIO(img["data"]))
+        else:
+            return None
+
+        # 리사이즈
+        w, h = pil_img.size
+        if max(w, h) > _MULTIMODAL_MAX_DIM:
+            ratio = _MULTIMODAL_MAX_DIM / max(w, h)
+            pil_img = pil_img.resize(
+                (max(1, int(w * ratio)), max(1, int(h * ratio))),
+                Image.LANCZOS,
+            )
+
+        # RGBA → RGB 변환
+        if pil_img.mode in ("RGBA", "LA", "P"):
+            pil_img = pil_img.convert("RGB")
+
+        # 인코딩 포맷 결정
+        if media_type == "image/jpeg":
+            out_fmt, out_media = "JPEG", "image/jpeg"
+        elif media_type == "image/png":
+            out_fmt, out_media = "PNG", "image/png"
+        elif media_type == "image/webp":
+            out_fmt, out_media = "WEBP", "image/webp"
+        elif media_type == "image/gif":
+            out_fmt, out_media = "GIF", "image/gif"
+        else:
+            out_fmt, out_media = "PNG", "image/png"
+
+        buf = io.BytesIO()
+        pil_img.save(buf, format=out_fmt)
+        b64 = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
+        return b64, out_media
+
+    except Exception as e:
+        label = img.get("label") or img.get("path") or ""
+        print(f"[LLM-Multimodal] 이미지 로드/인코딩 실패 ({label}): {e}")
+        return None
+
+
+async def _stream_llm_api_multimodal(
+    system_prompt: str,
+    user_prompt: str,
+    images: list[dict],
+    model: str = "",
+    max_tokens: int = 0,
+):
+    """텍스트+이미지 멀티모달 스트리밍 호출. provider 라우팅 자동.
+
+    Args:
+        system_prompt: 시스템 프롬프트
+        user_prompt: 사용자 프롬프트 (이미지 뒤에 배치)
+        images: [{"path": <abs path>, "media_type": str, "label": str?}, ...]
+        model: Claude 모델명 (sllm 모드에선 무시)
+        max_tokens: 응답 토큰 상한
+
+    Yields:
+        텍스트 delta 문자열
+    """
+    # 이미지 개수 가드
+    if len(images) > _MULTIMODAL_MAX_IMAGES:
+        images = images[:_MULTIMODAL_MAX_IMAGES]
+
+    # 이미지 인코딩 (실패한 이미지는 스킵)
+    encoded: list[tuple[str, str]] = []
+    for img in images:
+        result = _load_and_encode_image(img)
+        if result:
+            encoded.append(result)
+
+    if not encoded:
+        # 모든 이미지 인코딩 실패 → 텍스트 전용 호출로 폴백
+        print(f"[LLM-Multimodal] 모든 이미지 인코딩 실패 — 텍스트 전용 호출로 폴백")
+        async for delta in _stream_claude_api(system_prompt, user_prompt, model=model, max_tokens=max_tokens):
+            yield delta
+        return
+
+    # ──────────────── SLLM (OpenAI 호환) ────────────────
+    if _is_sllm_mode():
+        client = _get_sllm_client()
+        mt = max_tokens if max_tokens > 0 else settings.SLLM_MAX_TOKENS
+
+        content: list[dict] = []
+        for b64, media in encoded:
+            data_url = f"data:{media};base64,{b64}"
+            content.append({"type": "image_url", "image_url": {"url": data_url}})
+        content.append({"type": "text", "text": user_prompt})
+
+        kwargs: dict = {
+            "model": settings.SLLM_MODEL,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": content},
+            ],
+            "max_tokens": mt,
+            "stream": True,
+        }
+        extra = _sllm_extra_body()
+        if extra:
+            kwargs["extra_body"] = extra
+
+        hide_think = settings.SLLM_REASONING_ENABLED and not settings.SLLM_REASONING_VISIBLE
+        in_think = False
+        buffer = ""
+        OPEN_TAG = "<think>"
+        CLOSE_TAG = "</think>"
+
+        stream = await client.chat.completions.create(**kwargs)
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            text = getattr(delta, "content", None) or ""
+            if not text:
+                continue
+
+            if not hide_think:
+                yield text
+                continue
+
+            buffer += text
+            while buffer:
+                if not in_think:
+                    idx = buffer.find(OPEN_TAG)
+                    if idx == -1:
+                        safe = max(0, len(buffer) - (len(OPEN_TAG) - 1))
+                        if safe > 0:
+                            yield buffer[:safe]
+                            buffer = buffer[safe:]
+                        break
+                    if idx > 0:
+                        yield buffer[:idx]
+                    buffer = buffer[idx + len(OPEN_TAG):]
+                    in_think = True
+                else:
+                    idx = buffer.find(CLOSE_TAG)
+                    if idx == -1:
+                        keep = len(CLOSE_TAG) - 1
+                        if len(buffer) > keep:
+                            buffer = buffer[-keep:]
+                        break
+                    buffer = buffer[idx + len(CLOSE_TAG):]
+                    in_think = False
+
+        if buffer and not in_think:
+            yield buffer
+        return
+
+    # ──────────────── Claude (Anthropic Messages API) ────────────────
+    url = "https://api.anthropic.com/v1/messages"
+    headers = {
+        "x-api-key": anthropic_key_rotator.next(),
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+
+    content_blocks: list[dict] = []
+    for b64, media in encoded:
+        content_blocks.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": media, "data": b64},
+        })
+    content_blocks.append({"type": "text", "text": user_prompt})
+
+    effective_model = model or settings.ANTHROPIC_OUTLINE_MODEL
+    payload: dict = {
+        "model": effective_model,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": content_blocks}],
+        "stream": True,
+    }
+    if max_tokens > 0:
+        payload["max_tokens"] = max_tokens
+    elif effective_model == settings.ANTHROPIC_OUTLINE_MODEL and settings.ANTHROPIC_OUTLINE_MAX_TOKENS > 0:
+        payload["max_tokens"] = settings.ANTHROPIC_OUTLINE_MAX_TOKENS
+    elif settings.ANTHROPIC_MAX_TOKENS > 0:
+        payload["max_tokens"] = settings.ANTHROPIC_MAX_TOKENS
+    else:
+        payload["max_tokens"] = 8192
+
+    # Extended output beta 헤더
+    if payload.get("max_tokens", 0) > 16384:
+        headers["anthropic-beta"] = "interleaved-thinking-2025-05-14,output-128k-2025-02-19"
+
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        async with client.stream("POST", url, json=payload, headers=headers) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str.strip() == "[DONE]":
+                    break
+                try:
+                    event = json.loads(data_str)
+                    if event.get("type") == "content_block_delta":
+                        delta = event.get("delta", {})
+                        if delta.get("type") == "text_delta":
+                            text = delta.get("text", "")
+                            if text:
+                                yield text
+                except json.JSONDecodeError:
+                    continue
+
+
+async def _build_pptx_styled_prompts(
+    resources_text: str,
+    instructions: str,
+    skill_file: dict,
+    lang: str,
+    slide_count: str,
+) -> tuple[str, str]:
+    """DB 프롬프트 + 변수 치환"""
+    sys_tpl = await get_prompt_content("pptx_styled_structurer_system") or ""
+    usr_tpl = await get_prompt_content("pptx_styled_structurer_user") or ""
+
+    # default=str: skill_file 안에 들어 있는 datetime/ObjectId 등을 ISO 문자열로 직렬화
+    skill_json = json.dumps(skill_file or {}, ensure_ascii=False, indent=2, default=str)
+
+    # 시스템 프롬프트에는 변수가 없도록 설계되어 있지만, 만에 하나 .format 충돌을
+    # 피하기 위해 try/except 로 감싼다 (중괄호 리터럴이 포함되어 있어도 안전).
+    try:
+        system_prompt = sys_tpl.format()
+    except (IndexError, KeyError, ValueError):
+        system_prompt = sys_tpl
+
+    # 리소스가 너무 길면 12000자로 컷 (다른 generation 함수들과 동일 정책)
+    resources_text_trim = (resources_text or "")[:12000]
+
+    user_prompt = usr_tpl.format(
+        resources_text=resources_text_trim,
+        instructions=instructions or "",
+        skill_file_json=skill_json,
+        slide_count=slide_count or "auto",
+        lang=lang or "ko",
+    )
+    return system_prompt, user_prompt
+
+
+def _parse_pptx_styled_schema(response_text: str, skill_file: dict) -> dict | None:
+    """LLM 응답에서 JSON 추출 + 활성 패턴 필터링/강등 + index 재정렬.
+
+    - ```json 코드 블록 추출 (잘린 JSON 복구 포함, _parse_rich_schema 로직 차용)
+    - 활성화되지 않은 template_id 슬라이드는 활성 content 패턴으로 강등하거나 제거
+    - index 1부터 순차 재부여
+    """
+    text = (response_text or "").strip()
+
+    # 코드 블록 추출
+    if "```json" in text:
+        start = text.index("```json") + 7
+        try:
+            end = text.index("```", start)
+            text = text[start:end].strip()
+        except ValueError:
+            text = text[start:].strip()
+            print(f"[LLM-PPTXStyled] Warning: JSON 블록이 닫히지 않음 (max_tokens 초과 가능성)")
+    elif "```" in text:
+        start = text.index("```") + 3
+        try:
+            end = text.index("```", start)
+            text = text[start:end].strip()
+        except ValueError:
+            text = text[start:].strip()
+
+    parsed = None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        for start_char, end_char in [("{", "}"), ("[", "]")]:
+            if start_char in text:
+                try:
+                    s = text.index(start_char)
+                    e = text.rindex(end_char) + 1
+                    parsed = json.loads(text[s:e])
+                    break
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+    # 잘린 JSON 복구 (_try_repair_truncated_json 재사용 가능 — slides 배열 기반)
+    if parsed is None:
+        repaired = _try_repair_truncated_json(text)
+        if repaired is not None:
+            parsed = repaired
+            print(f"[LLM-PPTXStyled] 잘린 JSON 복구 성공")
+
+    if not isinstance(parsed, dict):
+        return None
+
+    slides_raw = parsed.get("slides")
+    if not isinstance(slides_raw, list):
+        return None
+
+    # 활성 패턴 집합 계산 (없으면 카탈로그 전체 허용)
+    active_patterns: set[str] = set()
+    pattern_library = (skill_file or {}).get("pattern_library") or []
+    if isinstance(pattern_library, list):
+        for p in pattern_library:
+            if isinstance(p, dict) and p.get("enabled") and p.get("id"):
+                active_patterns.add(str(p["id"]))
+    if not active_patterns:
+        # 스킬 파일에 활성 패턴 정보가 없는 경우 (방어적): 전체 카탈로그 허용
+        active_patterns = set(_PPTX_STYLED_ALL_PATTERNS)
+
+    # content 강등 후보: 활성 content_* 패턴 중 첫 번째, 없으면 _PPTX_STYLED_FALLBACK_CONTENT
+    content_active = [
+        p for p in active_patterns
+        if p.startswith("content_") or p == "big_stat"
+    ]
+    fallback_content = content_active[0] if content_active else (
+        _PPTX_STYLED_FALLBACK_CONTENT if _PPTX_STYLED_FALLBACK_CONTENT in active_patterns else None
+    )
+
+    # 슬라이드 정제
+    cleaned: list[dict] = []
+    for slide in slides_raw:
+        if not isinstance(slide, dict):
+            continue
+        tid = slide.get("template_id")
+        if not isinstance(tid, str) or not tid:
+            continue
+        if tid not in _PPTX_STYLED_ALL_PATTERNS:
+            # 카탈로그에 없는 id 는 제거
+            continue
+        if tid not in active_patterns:
+            # 활성화되지 않음 — cover/toc/chapter/closing 처럼 구조적 슬라이드는 제거,
+            # 본문 카드 패턴이면 활성 content 패턴으로 강등 시도
+            if tid in ("cover", "toc", "chapter", "closing"):
+                continue
+            if fallback_content is None:
+                continue
+            # 강등: cards 가 있으면 fallback_content 로 변환
+            cards = slide.get("cards")
+            if not isinstance(cards, list) or not cards:
+                continue
+            new_slide = {
+                "template_id": fallback_content,
+                "label": slide.get("label", ""),
+                "title": slide.get("title", ""),
+                "cards": cards,
+            }
+            # big_stat 의 stat 정보가 들어 있는 경우 등은 hero/desc 로 흡수 시도
+            slide = new_slide
+            tid = fallback_content
+
+        # index 는 나중에 재부여하므로 일단 비움
+        slide.pop("index", None)
+        cleaned.append(slide)
+
+    # index 재부여
+    for i, s in enumerate(cleaned, 1):
+        s["index"] = i
+
+    meta = parsed.get("meta") or {}
+    if isinstance(meta, dict):
+        meta = dict(meta)
+        meta["total_slides"] = len(cleaned)
+    else:
+        meta = {"total_slides": len(cleaned)}
+
+    sources = parsed.get("sources")
+    if not isinstance(sources, list):
+        sources = []
+
+    return {
+        "meta": meta,
+        "slides": cleaned,
+        "sources": sources,
+    }
+
+
+# ============ PPTX Styled - Phase A: Outline-only 스트리밍 (재설계) ============
+
+
+async def _build_pptx_styled_outline_prompts(
+    resources_text: str,
+    instructions: str,
+    lang: str,
+    slide_count: str,
+) -> tuple[str, str]:
+    """outline-only 단계 프롬프트 빌드 (DB 프롬프트 + 변수 치환)"""
+    sys_tpl = await get_prompt_content("pptx_styled_outline_system") or ""
+    usr_tpl = await get_prompt_content("pptx_styled_outline_user") or ""
+
+    try:
+        system_prompt = sys_tpl.format()
+    except (IndexError, KeyError, ValueError):
+        system_prompt = sys_tpl
+
+    resources_text_trim = (resources_text or "")[:12000]
+
+    try:
+        user_prompt = usr_tpl.format(
+            resources_text=resources_text_trim,
+            instructions=instructions or "",
+            slide_count=slide_count or "auto",
+            lang=lang or "ko",
+        )
+    except (IndexError, KeyError, ValueError) as e:
+        # 치환 실패 시 안전한 폴백
+        print(f"[LLM-PPTXStyled-Outline] user prompt 변수 치환 실패: {e} → 평문 결합 폴백")
+        user_prompt = (
+            f"[리소스]\n{resources_text_trim}\n\n"
+            f"[사용자 지시]\n{instructions or ''}\n\n"
+            f"[기타 설정]\n- 총 슬라이드 수: {slide_count or 'auto'}\n- 언어: {lang or 'ko'}\n"
+        )
+    return system_prompt, user_prompt
+
+
+def _synth_pptx_styled_slides_meta() -> list[dict]:
+    """PPT 스타일 outline 단계용 합성 slides_meta.
+
+    표준 outline 흐름(`generate_slide_content_stream`)을 재사용하기 위해, 5개 타입
+    (title / toc / section / content / closing)을 모두 포함하고 본문은 1·2·3·4개
+    items 변형을 제공하는 가짜 템플릿 카탈로그를 만든다. 디자이너(M7)·region 빌더가
+    있는 PPT 스타일 흐름에서는 placeholder 매핑 결과(`mapped slides`)는 사용하지
+    않고, `raw_slides`(LLM 이 출력한 rich schema) 만 사용한다.
+    """
+    metas: list[dict] = []
+
+    # 0) title_slide
+    metas.append({
+        "slide_index": 0,
+        "slide_meta": {
+            "content_type": "title_slide",
+            "layout": "cover",
+            "has_title": True,
+            "has_governance": False,
+            "subtitle_count": 1,
+            "description_count": 0,
+        },
+        "placeholders": [
+            {"placeholder": "title", "role": "title"},
+            {"placeholder": "subtitle", "role": "subtitle"},
+        ],
+    })
+
+    # 1) toc — 항목 수에 여유를 두기 위해 큰 슬롯(7)
+    toc_phs = [{"placeholder": "title", "role": "title"}]
+    for i in range(7):
+        toc_phs.append({"placeholder": f"toc_item_{i+1}", "role": "subtitle"})
+    metas.append({
+        "slide_index": 1,
+        "slide_meta": {
+            "content_type": "toc",
+            "layout": "toc",
+            "has_title": True,
+            "has_governance": False,
+            "subtitle_count": 7,
+            "description_count": 0,
+        },
+        "placeholders": toc_phs,
+    })
+
+    # 2) section_divider (부제목 포함)
+    metas.append({
+        "slide_index": 2,
+        "slide_meta": {
+            "content_type": "section_divider",
+            "layout": "chapter",
+            "has_title": True,
+            "has_governance": False,
+            "subtitle_count": 1,
+            "description_count": 0,
+        },
+        "placeholders": [
+            {"placeholder": "section_title", "role": "title"},
+            {"placeholder": "section_subtitle", "role": "subtitle"},
+            {"placeholder": "section_num", "role": "number"},
+        ],
+    })
+
+    # 3~6) body 변형: 1·2·3·4 items
+    for n_items in (1, 2, 3, 4):
+        phs = [
+            {"placeholder": "title", "role": "title"},
+            {"placeholder": "governance", "role": "governance"},
+        ]
+        for i in range(n_items):
+            phs.append({"placeholder": f"sub_{i+1}", "role": "subtitle"})
+            phs.append({"placeholder": f"desc_{i+1}", "role": "description"})
+        metas.append({
+            "slide_index": len(metas),
+            "slide_meta": {
+                "content_type": "body",
+                "layout": f"content_{n_items}",
+                "has_title": True,
+                "has_governance": True,
+                "subtitle_count": n_items,
+                "description_count": n_items,
+            },
+            "placeholders": phs,
+        })
+
+    # 7) closing
+    metas.append({
+        "slide_index": len(metas),
+        "slide_meta": {
+            "content_type": "closing",
+            "layout": "closing",
+            "has_title": True,
+            "has_governance": False,
+            "subtitle_count": 0,
+            "description_count": 1,
+        },
+        "placeholders": [
+            {"placeholder": "title", "role": "title"},
+            {"placeholder": "message", "role": "body"},
+        ],
+    })
+
+    return metas
+
+
+async def generate_pptx_styled_outline_stream(
+    resources_text: str,
+    instructions: str,
+    lang: str = "",
+    slide_count: str = "auto",
+):
+    """PPT 스타일 모드용 outline-only LLM 스트리밍 (Phase A).
+
+    표준 슬라이드 흐름(`generate_slide_content_stream`)을 재사용해 outline 을
+    생성한다. PPT 스타일 모드는 사용자 템플릿이 없으므로, 5개 타입을 모두 포함하는
+    합성 slides_meta 를 전달해 LLM 이 자유롭게 outline 을 구성하게 한다. 결과
+    중 `raw_slides`(rich schema) 만 추출해 M7 디자이너·region 빌더가 기대하는
+    `{"slides": [...rich...], "meta": {...}, "sources": [...]}` 형식으로 재포장한다.
+
+    Yields:
+        ("delta", str)   — LLM 텍스트 청크
+        ("result", dict) — 최종 outline 파싱 결과 (rich schema 리스트)
+    """
+    if _llm_unavailable():
+        yield ("result", {"slides": [], "meta": {}, "sources": []})
+        return
+
+    synth_meta = _synth_pptx_styled_slides_meta()
+
+    try:
+        std_result: dict | None = None
+        async for event_type, event_data in generate_slide_content_stream(
+            resources_text,
+            instructions,
+            synth_meta,
+            lang=lang or "",
+            slide_count=slide_count or "auto",
+        ):
+            if event_type == "delta":
+                yield ("delta", event_data)
+            elif event_type == "result":
+                std_result = event_data
+
+        if not isinstance(std_result, dict):
+            print(f"[LLM-PPTXStyled-Outline] 표준 outline 결과 누락")
+            yield ("result", {"slides": [], "meta": {}, "sources": []})
+            return
+
+        # 표준 흐름 결과에서 rich schema(raw_slides) 만 추출해 PPT 스타일 outline 형식으로 재포장
+        raw_slides = std_result.get("raw_slides") or []
+        # raw_slides 가 없으면(레거시 형식) 매핑된 slides 도 fallback 으로 시도
+        if not raw_slides:
+            mapped_slides = std_result.get("slides") or []
+            if mapped_slides and isinstance(mapped_slides[0], dict) and "type" in mapped_slides[0]:
+                raw_slides = mapped_slides
+
+        # index 1부터 재부여 (PPT 스타일 outline 규약)
+        cleaned: list[dict] = []
+        for i, s in enumerate(raw_slides):
+            if not isinstance(s, dict):
+                continue
+            s = dict(s)
+            s["index"] = i + 1
+            # template_index 는 합성 meta 의 인덱스이므로 PPT 스타일 흐름에서는 의미 없음 — 제거
+            s.pop("template_index", None)
+            cleaned.append(s)
+
+        meta = std_result.get("meta") or {}
+        if isinstance(meta, dict):
+            meta = dict(meta)
+            meta["total_slides"] = len(cleaned)
+        else:
+            meta = {"total_slides": len(cleaned)}
+
+        sources = std_result.get("sources") or []
+        if not isinstance(sources, list):
+            sources = []
+
+        print(f"[LLM-PPTXStyled-Outline] 표준 outline 흐름 재사용 완료 - slides: {len(cleaned)}개")
+        yield ("result", {"meta": meta, "slides": cleaned, "sources": sources})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[LLM-PPTXStyled-Outline] 호출 실패: {e}")
+        yield ("result", {"slides": [], "meta": {}, "sources": [], "error": str(e)})
+
+
+def _parse_pptx_styled_outline(response_text: str) -> dict | None:
+    """outline 응답(rich schema) JSON 파싱. 슬라이드 매핑은 하지 않음.
+
+    Returns dict with keys: meta, slides (rich schema, type 필드 보유), sources.
+    """
+    text = (response_text or "").strip()
+
+    if "```json" in text:
+        start = text.index("```json") + 7
+        try:
+            end = text.index("```", start)
+            text = text[start:end].strip()
+        except ValueError:
+            text = text[start:].strip()
+            print(f"[LLM-PPTXStyled-Outline] Warning: JSON 블록이 닫히지 않음")
+    elif "```" in text:
+        start = text.index("```") + 3
+        try:
+            end = text.index("```", start)
+            text = text[start:end].strip()
+        except ValueError:
+            text = text[start:].strip()
+
+    parsed = None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        for sc, ec in [("{", "}"), ("[", "]")]:
+            if sc in text:
+                try:
+                    s = text.index(sc)
+                    e = text.rindex(ec) + 1
+                    parsed = json.loads(text[s:e])
+                    break
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+    if parsed is None:
+        repaired = _try_repair_truncated_json(text)
+        if repaired is not None:
+            parsed = repaired
+            print(f"[LLM-PPTXStyled-Outline] 잘린 JSON 복구 성공")
+
+    if not isinstance(parsed, dict):
+        return None
+
+    slides = parsed.get("slides")
+    if not isinstance(slides, list):
+        return None
+
+    # index 재부여
+    cleaned: list[dict] = []
+    for i, s in enumerate(slides):
+        if not isinstance(s, dict):
+            continue
+        s = dict(s)
+        s["index"] = i + 1
+        cleaned.append(s)
+
+    meta = parsed.get("meta") or {}
+    if isinstance(meta, dict):
+        meta = dict(meta)
+        meta["total_slides"] = len(cleaned)
+    else:
+        meta = {"total_slides": len(cleaned)}
+
+    sources = parsed.get("sources")
+    if not isinstance(sources, list):
+        sources = []
+
+    return {"meta": meta, "slides": cleaned, "sources": sources}
+
+
+# ============ PPTX Styled - Phase B: Designer 스펙 스트리밍 (재설계) ============
+
+
+async def _build_pptx_styled_design_prompts(
+    outline: dict,
+    skill_file: dict,
+    instructions: str,
+    lang: str,
+) -> tuple[str, str]:
+    """디자이너 단계 프롬프트 빌드 (DB 프롬프트 + 변수 치환). default=str 로 직렬화."""
+    sys_tpl = await get_prompt_content("pptx_styled_designer_system") or ""
+    usr_tpl = await get_prompt_content("pptx_styled_designer_user") or ""
+
+    outline_json = json.dumps(outline or {}, ensure_ascii=False, indent=2, default=str)
+    skill_json = json.dumps(skill_file or {}, ensure_ascii=False, indent=2, default=str)
+
+    try:
+        system_prompt = sys_tpl.format()
+    except (IndexError, KeyError, ValueError):
+        system_prompt = sys_tpl
+
+    try:
+        user_prompt = usr_tpl.format(
+            outline_json=outline_json,
+            skill_file_json=skill_json,
+            instructions=instructions or "",
+            lang=lang or "ko",
+        )
+    except (IndexError, KeyError, ValueError) as e:
+        print(f"[LLM-PPTXStyled-Design] user prompt 변수 치환 실패: {e} → 평문 결합 폴백")
+        user_prompt = (
+            f"[Outline]\n{outline_json}\n\n"
+            f"[Skill File]\n{skill_json}\n\n"
+            f"[Instructions]\n{instructions or ''}\n\n"
+            f"[Language]\n{lang or 'ko'}\n"
+        )
+    return system_prompt, user_prompt
+
+
+# 디자이너 LLM 청크 크기: 한 번에 보낼 outline 슬라이드 수 (토큰 안전성 우선)
+_DESIGN_CHUNK_SIZE = 5
+
+
+async def generate_pptx_styled_design_stream(
+    outline: dict,
+    skill_file: dict,
+    instructions: str = "",
+    lang: str = "",
+):
+    """outline + skill_file 을 받아 N개 슬라이드 디자인 스펙을 **청크 분할 LLM 호출** 로 생성.
+
+    한 번에 N장 전체를 요청하면 토큰 한계로 응답이 잘릴 위험이 있어, _DESIGN_CHUNK_SIZE(5)
+    슬라이드씩 묶어 LLM 을 여러 번 호출하고 결과를 합칩니다.
+
+    각 청크 호출에는 동일한 멀티모달 컨텍스트(샘플 이미지 + 폰트 글리프 + skill_file 전체)가
+    재사용됩니다.
+
+    Yields:
+        ("delta", str)            — 각 청크 LLM 텍스트 청크 (연속 스트리밍처럼 보임)
+        ("chunk_start", dict)     — 청크 시작 ({chunk_index, total_chunks, slide_from, slide_to})
+        ("chunk_done",  dict)     — 청크 완료 ({chunk_index, total_chunks, parsed_count})
+        ("result", dict)          — {"design_specs": [...], "total_slides": N}
+    """
+    if _llm_unavailable():
+        yield ("result", {"design_specs": [], "total_slides": 0})
+        return
+
+    slides = outline.get("slides") if isinstance(outline, dict) else []
+    if not isinstance(slides, list):
+        slides = []
+    total_slides = len(slides)
+    if total_slides == 0:
+        yield ("result", {"design_specs": [], "total_slides": 0})
+        return
+
+    prompt_model = await get_prompt_model("pptx_styled_designer_system")
+    effective_model = prompt_model or settings.ANTHROPIC_OUTLINE_MODEL
+
+    images = _collect_skill_file_images(skill_file)
+    if images:
+        print(f"[LLM-PPTXStyled-Design] 멀티모달 이미지 첨부: {len(images)}개 (청크별 재사용)")
+
+    # 청크당 max_tokens — 5장이면 16K~24K 면 충분, 안전하게 32K
+    if _is_sllm_mode():
+        chunk_max_tokens = min(32000, int(getattr(settings, "SLLM_MAX_TOKENS", 0) or 0) or 32000)
+    else:
+        _env_max = int(getattr(settings, "ANTHROPIC_OUTLINE_MAX_TOKENS", 0) or 0)
+        chunk_max_tokens = min(_env_max, 32000) if _env_max > 0 else 32000
+
+    chunk_size = _DESIGN_CHUNK_SIZE
+    total_chunks = (total_slides + chunk_size - 1) // chunk_size
+    all_specs: list[dict] = []
+    meta = outline.get("meta", {}) if isinstance(outline, dict) else {}
+    sources = outline.get("sources", []) if isinstance(outline, dict) else []
+
+    for chunk_idx in range(total_chunks):
+        start = chunk_idx * chunk_size
+        end = min(start + chunk_size, total_slides)
+        chunk_slides = slides[start:end]
+        slide_from = start + 1
+        slide_to = end
+
+        yield ("chunk_start", {
+            "chunk_index": chunk_idx + 1,
+            "total_chunks": total_chunks,
+            "slide_from": slide_from,
+            "slide_to": slide_to,
+        })
+
+        # 청크 outline 구성 — 메타 동일, slides 만 부분
+        chunk_outline = {
+            "meta": meta,
+            "slides": chunk_slides,
+            "sources": sources,
+        }
+
+        # instructions 에 청크 위치 힌트 추가 (LLM 이 slide_index 를 절대값으로 출력하도록 안내)
+        chunk_instructions = (
+            (instructions or "") +
+            f"\n\n[청크 정보]\n"
+            f"전체 {total_slides}장 중 {slide_from}번~{slide_to}번 슬라이드만 디자인하세요. "
+            f"design_specs[].slide_index 는 반드시 {slide_from}~{slide_to} 사이의 절대 번호로 출력하세요. "
+            f"현재 청크 {chunk_idx + 1}/{total_chunks}."
+        )
+
+        system_prompt, user_prompt = await _build_pptx_styled_design_prompts(
+            chunk_outline, skill_file, chunk_instructions, lang,
+        )
+
+        try:
+            full_text = ""
+            if images:
+                async for delta in _stream_llm_api_multimodal(
+                    system_prompt, user_prompt, images,
+                    model=effective_model, max_tokens=chunk_max_tokens,
+                ):
+                    full_text += delta
+                    yield ("delta", delta)
+            else:
+                async for delta in _stream_claude_api(
+                    system_prompt, user_prompt,
+                    model=effective_model, max_tokens=chunk_max_tokens,
+                ):
+                    full_text += delta
+                    yield ("delta", delta)
+
+            chunk_parsed = _parse_pptx_styled_design_specs(full_text) or {}
+            chunk_specs = chunk_parsed.get("design_specs") or []
+            if not isinstance(chunk_specs, list):
+                chunk_specs = []
+
+            # slide_index 정규화: 비정상이면 청크 위치 기반으로 재부여
+            normalized = []
+            for i, spec in enumerate(chunk_specs):
+                if not isinstance(spec, dict):
+                    continue
+                idx = spec.get("slide_index")
+                if not isinstance(idx, int) or idx < 1 or idx > total_slides:
+                    spec["slide_index"] = slide_from + i
+                normalized.append(spec)
+            all_specs.extend(normalized)
+
+            print(f"[LLM-PPTXStyled-Design] 청크 {chunk_idx + 1}/{total_chunks} "
+                  f"({slide_from}~{slide_to}) 완료 — 길이 {len(full_text)} chars, "
+                  f"specs {len(normalized)}개")
+
+            yield ("chunk_done", {
+                "chunk_index": chunk_idx + 1,
+                "total_chunks": total_chunks,
+                "slide_from": slide_from,
+                "slide_to": slide_to,
+                "parsed_count": len(normalized),
+            })
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"[LLM-PPTXStyled-Design] 청크 {chunk_idx + 1} 실패: {e}")
+            yield ("chunk_done", {
+                "chunk_index": chunk_idx + 1,
+                "total_chunks": total_chunks,
+                "slide_from": slide_from,
+                "slide_to": slide_to,
+                "parsed_count": 0,
+                "error": str(e),
+            })
+            # 다음 청크 계속 진행 (부분 실패 허용)
+
+    # slide_index 기준 정렬 (안정성)
+    all_specs.sort(key=lambda s: (s.get("slide_index") or 0))
+
+    print(f"[LLM-PPTXStyled-Design] 전체 완료 — 총 {len(all_specs)}/{total_slides} specs "
+          f"(model: {_active_model_label(effective_model)}, chunks: {total_chunks})")
+
+    yield ("result", {
+        "design_specs": all_specs,
+        "total_slides": len(all_specs),
+    })
+
+
+def _parse_pptx_styled_design_specs(response_text: str) -> dict | None:
+    """디자이너 응답에서 ```json 블록 추출 → design_specs 배열 반환.
+
+    잘린 JSON 복구는 _try_repair_truncated_json 으로는 어렵기 때문에
+    `design_specs` 배열 기반의 간단 복구를 시도한다.
+    """
+    text = (response_text or "").strip()
+
+    if "```json" in text:
+        start = text.index("```json") + 7
+        try:
+            end = text.index("```", start)
+            text = text[start:end].strip()
+        except ValueError:
+            text = text[start:].strip()
+            print(f"[LLM-PPTXStyled-Design] Warning: JSON 블록이 닫히지 않음")
+    elif "```" in text:
+        start = text.index("```") + 3
+        try:
+            end = text.index("```", start)
+            text = text[start:end].strip()
+        except ValueError:
+            text = text[start:].strip()
+
+    parsed = None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        for sc, ec in [("{", "}"), ("[", "]")]:
+            if sc in text:
+                try:
+                    s = text.index(sc)
+                    e = text.rindex(ec) + 1
+                    parsed = json.loads(text[s:e])
+                    break
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+    # 잘린 JSON 복구 시도: design_specs 배열에서 완성된 객체까지만
+    if parsed is None and '"design_specs"' in text:
+        try:
+            m = re.search(r'"design_specs"\s*:\s*\[', text)
+            if m:
+                arr_start = m.end()
+                last_complete = text.rfind('}')
+                if last_complete > arr_start:
+                    inner = text[arr_start:last_complete + 1].rstrip().rstrip(',')
+                    try:
+                        specs = json.loads(f"[{inner}]")
+                        if isinstance(specs, list):
+                            parsed = {"design_specs": specs}
+                            print(f"[LLM-PPTXStyled-Design] 잘린 JSON 복구 성공 ({len(specs)}개)")
+                    except json.JSONDecodeError:
+                        pass
+        except Exception:
+            pass
+
+    if not isinstance(parsed, dict):
+        return None
+
+    specs = parsed.get("design_specs")
+    if not isinstance(specs, list):
+        return None
+
+    # 기본 정제: dict 만, slide_index 정수화
+    cleaned: list[dict] = []
+    for i, sp in enumerate(specs):
+        if not isinstance(sp, dict):
+            continue
+        sp = dict(sp)
+        try:
+            sp["slide_index"] = int(sp.get("slide_index", i + 1))
+        except Exception:
+            sp["slide_index"] = i + 1
+        cleaned.append(sp)
+
+    return {"design_specs": cleaned, "total_slides": len(cleaned)}

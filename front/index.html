@@ -1067,6 +1067,10 @@
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 8h10"/><path d="M7 12h7"/><path d="M7 16h10"/><circle cx="17" cy="12" r="2"/></svg>
                         한장 요약
                     </button>
+                    <button class="tpl-picker-tab" data-tab="pptstyle" onclick="switchTemplatePicker('pptstyle')">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3l3 6 6 .9-4.5 4.2 1 6.4L12 17.5 6.5 20.5l1-6.4L3 9.9 9 9z"/></svg>
+                        PPT 스타일
+                    </button>
                 </div>
                 <!-- 스킬 그리드 (html_report 전용) -->
                 <div id="skillPickerGrid" class="template-picker-grid" style="display:none;"></div>
@@ -1276,6 +1280,19 @@
                         </div>
                         <p class="infographic-ratio-desc">인포그래픽 이미지와 텍스트 비율을 조절합니다</p>
                     </div>
+                </div>
+                <!-- PPT 스타일 그리드 -->
+                <div id="pptStyleGrid" style="display:none;">
+                    <div class="ppt-style-intro">
+                        <div class="ppt-style-intro-icon">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1C60EF" stroke-width="1.5"><path d="M12 3l3 6 6 .9-4.5 4.2 1 6.4L12 17.5 6.5 20.5l1-6.4L3 9.9 9 9z"/></svg>
+                        </div>
+                        <div class="ppt-style-intro-text">
+                            <div class="ppt-style-intro-title">관리자가 등록한 PPT 스타일</div>
+                            <div class="ppt-style-intro-desc">기업 디자인 토큰과 12 패턴 라이브러리를 기반으로 슬라이드를 자동 빌드합니다</div>
+                        </div>
+                    </div>
+                    <div class="ppt-style-cards-grid" id="pptStyleCardsGrid"></div>
                 </div>
             </div>
         </div>

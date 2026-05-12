@@ -77,6 +77,10 @@ const state = {
     aiSlideMode: false,
     // 한장 요약 인포그래픽 모드
     summaryInfographicMode: false,
+    // PPT 스타일 모드 (관리자 등록 스타일 기반)
+    pptStyleMode: false,
+    selectedPptStyleId: null,
+    selectedPptStyleInfo: null, // {_id, title, description, primary_color, active_patterns}
 };
 
 let _animationCancelled = false;
@@ -2070,6 +2074,23 @@ function renderProjectWorkspace() {
         if (state.currentProject.infographic_mode) {
             state.infographicMode = true;
         }
+        // PPT 스타일 모드 복원 (ppt_style_id 만 있어도 활성화)
+        const _restoredPptStyleId = state.currentProject.ppt_style_id || null;
+        if (_restoredPptStyleId) {
+            state.pptStyleMode = true;
+            state.selectedPptStyleId = _restoredPptStyleId;
+            state.selectedPptStyleInfo = state.currentProject.ppt_style_info || { _id: _restoredPptStyleId, title: 'PPT 스타일' };
+            // PPT 스타일 모드면 다른 모드/템플릿 모두 클리어 (mutual exclusion)
+            state.selectedTemplateId = null;
+            state.infographicMode = false;
+            state.autoTemplateMode = false;
+            state.aiSlideMode = false;
+            state.summaryInfographicMode = false;
+        } else {
+            state.pptStyleMode = false;
+            state.selectedPptStyleId = null;
+            state.selectedPptStyleInfo = null;
+        }
         // 선택한 스타일 복원
         state._selectedStyleId = state.currentProject.selected_style_id || null;
         state._selectedStyleName = state.currentProject.selected_style_name || null;
@@ -2195,6 +2216,9 @@ async function executeProjectReset() {
         state.currentProject.template_id = null;
         state.selectedTemplateId = null;
         state._templateSlideSize = '16:9';
+        // PPT 스타일 모드도 초기화
+        _clearPptStyleState();
+        state.currentProject.ppt_style_id = null;
         updateSlideCanvasAspect();
         updateTemplateButtonLabel();
         hideLoading();
@@ -3251,6 +3275,13 @@ function updateTemplateButtonLabel() {
         return;
     }
 
+    // PPT 스타일 모드 (관리자 등록 스타일)
+    if (state.pptStyleMode && state.selectedPptStyleInfo) {
+        $('#templateSelectLabel').text(state.selectedPptStyleInfo.title || 'PPT 스타일');
+        $('#templateSelectBtn').addClass('has-value');
+        return;
+    }
+
     // AI 슬라이드 모드
     if (state.aiSlideMode) {
         const styleName = state._selectedStyleName || 'AI 슬라이드';
@@ -3322,7 +3353,9 @@ function openTemplatePickerModal() {
     $('#skillPickerGrid').hide();
 
     // 현재 모드에 맞는 탭을 기본 활성화
-    if (state.summaryInfographicMode && isSlideType) {
+    if (state.pptStyleMode && isSlideType) {
+        switchTemplatePicker('pptstyle');
+    } else if (state.summaryInfographicMode && isSlideType) {
         switchTemplatePicker('summary');
     } else if (state.aiSlideMode && isSlideType) {
         switchTemplatePicker('aislide');
@@ -3342,48 +3375,40 @@ function switchTemplatePicker(tab) {
     $('.tpl-picker-tab').removeClass('active');
     $(`.tpl-picker-tab[data-tab="${tab}"]`).addClass('active');
 
+    // 모든 그리드 일괄 숨김 (선택된 탭만 다시 표시)
+    $('#templatePickerGrid').hide();
+    $('#infographicStyleGrid').hide();
+    $('#autoDesignGrid').hide();
+    $('#aiSlideStyleGrid').hide();
+    $('#summaryInfographicGrid').hide();
+    $('#pptStyleGrid').hide();
+
     if (tab === 'standard') {
         $('#templatePickerGrid').show();
-        $('#infographicStyleGrid').hide();
-        $('#autoDesignGrid').hide();
-        $('#aiSlideStyleGrid').hide();
-        $('#summaryInfographicGrid').hide();
         $('#templatePickerTitle').text('표준 템플릿');
         _renderStandardTemplateGrid();
     } else if (tab === 'infographic') {
-        $('#templatePickerGrid').hide();
         $('#infographicStyleGrid').show();
-        $('#autoDesignGrid').hide();
-        $('#aiSlideStyleGrid').hide();
-        $('#summaryInfographicGrid').hide();
         $('#templatePickerTitle').text('AI 이미지 슬라이드');
         _loadAndRenderSlideStyles();
         setTimeout(initInfographicRatioSlider, 50);
     } else if (tab === 'aislide') {
-        $('#templatePickerGrid').hide();
-        $('#infographicStyleGrid').hide();
-        $('#autoDesignGrid').hide();
         $('#aiSlideStyleGrid').show();
-        $('#summaryInfographicGrid').hide();
         $('#templatePickerTitle').text('AI 슬라이드');
         _loadAndRenderAiSlideStyles();
     } else if (tab === 'autodesign') {
-        $('#templatePickerGrid').hide();
-        $('#infographicStyleGrid').hide();
         $('#autoDesignGrid').show();
-        $('#aiSlideStyleGrid').hide();
-        $('#summaryInfographicGrid').hide();
         $('#templatePickerTitle').text('AI 자동 디자인');
         setTimeout(initAutoDesignRatioSlider, 50);
     } else if (tab === 'summary') {
-        $('#templatePickerGrid').hide();
-        $('#infographicStyleGrid').hide();
-        $('#autoDesignGrid').hide();
-        $('#aiSlideStyleGrid').hide();
         $('#summaryInfographicGrid').show();
         $('#templatePickerTitle').text('한장으로 요약 만들기');
         _loadSummaryStyleCards();
         setTimeout(initSummaryRatioSlider, 50);
+    } else if (tab === 'pptstyle') {
+        $('#pptStyleGrid').show();
+        $('#templatePickerTitle').text('PPT 스타일');
+        _loadAndRenderPptStyles();
     }
 }
 
@@ -3593,6 +3618,7 @@ function selectSlideStyle(styleId) {
     if (state.customTemplateId) {
         _clearCustomPptxState();
     }
+    _clearPptStyleState();
     state.selectedTemplateId = null;
     state.infographicMode = true;
     state.autoTemplateMode = false;
@@ -3650,6 +3676,7 @@ function applyCustomStylePrompt() {
     if (state.customTemplateId) {
         _clearCustomPptxState();
     }
+    _clearPptStyleState();
     state.selectedTemplateId = null;
     state.infographicMode = true;
     state.autoTemplateMode = false;
@@ -3759,6 +3786,7 @@ function selectAiSlideStyle(styleId) {
     if (!style) return;
 
     if (state.customTemplateId) _clearCustomPptxState();
+    _clearPptStyleState();
     state.selectedTemplateId = null;
     state.infographicMode = false;
     state.autoTemplateMode = false;
@@ -3806,6 +3834,7 @@ function applyAiSlideCustomPrompt() {
     if (!prompt) { showToast('스타일을 입력하세요', 'error'); return; }
 
     if (state.customTemplateId) _clearCustomPptxState();
+    _clearPptStyleState();
     state.selectedTemplateId = null;
     state.infographicMode = false;
     state.autoTemplateMode = false;
@@ -3878,6 +3907,7 @@ function selectAutoTemplate() {
     if (state.customTemplateId) {
         _clearCustomPptxState();
     }
+    _clearPptStyleState();
     state.selectedTemplateId = null;
     state.infographicMode = true;
     state.autoTemplateMode = true;
@@ -3910,6 +3940,1014 @@ function selectAutoTemplate() {
         }).catch(() => {});
     }
 }
+
+// ============ PPT 스타일 (관리자 등록 스타일 카탈로그) ============
+// 12 패턴 한글 라벨 매핑 (관리자 측과 동일)
+const PPT_STYLE_PATTERN_LABELS = {
+    cover: '표지',
+    toc: '목차',
+    chapter: '챕터',
+    content_3col: '3컬럼 카드',
+    content_2col_hero: '2컬럼+히어로',
+    content_2x2: '2×2 그리드',
+    big_stat: '빅 스탯',
+    content_3col_icon_block: '3컬럼 아이콘',
+    content_2_numbered: '2 카드(번호)',
+    content_3col_sidebar: '3컬럼+사이드바',
+    content_2x2_top_line: '2×2+상단라인',
+    closing: '마무리',
+    // M7 outline type alias
+    title: '표지',
+    section: '챕터',
+    content: '본문',
+    freeform: '자유 디자인',
+};
+
+// M7: outline 슬라이드 type (raw_slides[].type) → 한글 라벨
+const PPT_STYLE_OUTLINE_TYPE_LABELS = {
+    title: '표지',
+    toc: '목차',
+    section: '챕터',
+    content: '본문',
+    closing: '마무리',
+};
+
+function _pptStyleOutlineTypeLabel(type) {
+    if (!type) return '';
+    return PPT_STYLE_OUTLINE_TYPE_LABELS[type] || type;
+}
+
+function _pptStyleLayoutHintLabel(hint) {
+    if (!hint) return '';
+    if (hint === 'freeform') return '자유 디자인';
+    return PPT_STYLE_PATTERN_LABELS[hint] || hint;
+}
+
+let _pptStylesCache = null;
+let _pptStyleBuildState = null; // {slides:[{index,template_id,title,status}], pptx_url, structureDone, buildDone}
+
+function _clearPptStyleState() {
+    state.pptStyleMode = false;
+    state.selectedPptStyleId = null;
+    state.selectedPptStyleInfo = null;
+}
+
+function _getPptStyleLang() {
+    return (state.lang || $('#langSelect').val() || 'ko');
+}
+
+async function _loadAndRenderPptStyles(forceReload) {
+    const grid = $('#pptStyleCardsGrid');
+    grid.html('<div style="text-align:center;padding:40px;color:var(--text-muted);">PPT 스타일을 불러오는 중...</div>');
+    const lang = _getPptStyleLang();
+    try {
+        if (forceReload || !_pptStylesCache || _pptStylesCache._lang !== lang) {
+            const res = await apiGet('/api/ppt-styles?lang=' + encodeURIComponent(lang) + '&limit=50');
+            _pptStylesCache = res.styles || [];
+            _pptStylesCache._lang = lang;
+        }
+    } catch (e) {
+        console.error('PPT 스타일 목록 로드 실패:', e);
+        grid.html('<div style="text-align:center;padding:40px;color:var(--text-muted);">PPT 스타일을 불러올 수 없습니다</div>');
+        return;
+    }
+    _renderPptStyleCards(_pptStylesCache);
+}
+
+function _renderPptStyleCards(styles) {
+    const grid = $('#pptStyleCardsGrid');
+    grid.empty();
+
+    if (!styles || styles.length === 0) {
+        grid.html('<div style="text-align:center;padding:40px;color:var(--text-muted);">등록된 PPT 스타일이 없습니다</div>');
+        return;
+    }
+
+    styles.forEach(s => {
+        const styleId = s._id;
+        if (!styleId) return;
+        const title = s.title || '(제목 없음)';
+        const desc = s.description || '';
+        const refs = Array.isArray(s.sample_image_refs) ? s.sample_image_refs : [];
+        const thumbUrl = (refs[0] && refs[0].url) || '';
+        const tokens = s.design_tokens || {};
+        const primary = (tokens.colors && tokens.colors.primary) || '#1C60EF';
+        const patternLib = Array.isArray(s.pattern_library) ? s.pattern_library : [];
+        const totalPatterns = patternLib.length || 12;
+        const activePatterns = patternLib.filter(p => p && p.enabled !== false).length;
+        const isSelected = state.pptStyleMode && state.selectedPptStyleId === styleId;
+
+        const thumbHtml = thumbUrl
+            ? `<img class="ppt-style-card-thumb" src="${escapeHtml(thumbUrl)}" alt="${escapeHtml(title)}" loading="lazy" />`
+            : `<div class="ppt-style-card-thumb ppt-style-card-thumb-empty" style="background:${escapeHtml(primary)};"></div>`;
+
+        const card = $(`
+            <div class="ppt-style-card ${isSelected ? 'selected' : ''}" data-style-id="${escapeHtml(styleId)}" style="border-left-color:${escapeHtml(primary)};">
+                ${thumbHtml}
+                <div class="ppt-style-card-body">
+                    <div class="ppt-style-card-title">${escapeHtml(title)}</div>
+                    <div class="ppt-style-card-desc">${escapeHtml(desc)}</div>
+                    <div class="ppt-style-card-meta">
+                        <span class="ppt-style-card-dot" style="background:${escapeHtml(primary)};"></span>
+                        <span>${totalPatterns} 패턴 중 ${activePatterns}개 활성</span>
+                    </div>
+                </div>
+                ${isSelected ? '<div class="ppt-style-card-check"><svg width="18" height="18" viewBox="0 0 16 16" fill="#1C60EF"><path d="M8 0a8 8 0 110 16A8 8 0 018 0zm3.78 5.22a.75.75 0 00-1.06 0L7 8.94 5.28 7.22a.75.75 0 10-1.06 1.06l2.25 2.25a.75.75 0 001.06 0l4.25-4.25a.75.75 0 000-1.06z"/></svg></div>' : ''}
+            </div>
+        `);
+        card.on('click', function () { selectPptStyle(styleId); });
+        grid.append(card);
+    });
+}
+
+function selectPptStyle(styleId) {
+    const style = (_pptStylesCache || []).find(s => s._id === styleId);
+    if (!style) return;
+
+    // 다른 모드 / 템플릿 모두 해제
+    if (state.customTemplateId) _clearCustomPptxState();
+    state.selectedTemplateId = null;
+    state.infographicMode = false;
+    state.autoTemplateMode = false;
+    state.aiSlideMode = false;
+    state.summaryInfographicMode = false;
+    state._selectedStyleId = null;
+    state._selectedStylePrompt = '';
+    state._selectedStyleName = null;
+
+    const tokens = style.design_tokens || {};
+    const primary = (tokens.colors && tokens.colors.primary) || '#1C60EF';
+    const patternLib = Array.isArray(style.pattern_library) ? style.pattern_library : [];
+    const activePatterns = patternLib.filter(p => p && p.enabled !== false).length;
+
+    state.pptStyleMode = true;
+    state.selectedPptStyleId = styleId;
+    state.selectedPptStyleInfo = {
+        _id: styleId,
+        title: style.title || '',
+        description: style.description || '',
+        primary_color: primary,
+        active_patterns: activePatterns,
+        total_patterns: patternLib.length || 12,
+    };
+    state._templateSlideSize = '16:9';
+
+    updateSlideCanvasAspect();
+    updateTemplateButtonLabel();
+    closeModal('templatePickerModal');
+
+    if (state.currentProject && state.currentProject._id) {
+        state.currentProject.ppt_style_id = styleId;
+        state.currentProject.ppt_style_info = state.selectedPptStyleInfo;
+        state.currentProject.template_id = null;
+        state.currentProject.infographic_mode = false;
+        state.currentProject.auto_template = false;
+        state.currentProject.ai_slide_mode = false;
+        state.currentProject.summary_infographic = false;
+        apiPut('/api/projects/' + state.currentProject._id, {
+            ppt_style_id: styleId,
+            template_id: null,
+            infographic_mode: false,
+            ai_slide_mode: false,
+            auto_template: false,
+            summary_infographic: false,
+            selected_style_id: null,
+            selected_style_name: null,
+            selected_style_prompt: '',
+        }).catch(() => {});
+    }
+    showToast('PPT 스타일이 적용되었습니다', 'success');
+}
+
+// ----- SSE 헬퍼 -----
+// 서버가 SSE 라인을 `data: {"event": "<name>", ...payload}` 형식으로 송출하므로
+// payload.event 값을 이름으로 매핑하여 handlers 객체를 호출한다.
+async function streamSSE(url, body, handlers, abortSignal) {
+    handlers = handlers || {};
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
+        signal: abortSignal,
+    });
+    if (!response.ok) {
+        let detail = '';
+        try { const err = await response.json(); detail = err.detail || ''; } catch (_) {}
+        throw new Error(detail || ('HTTP ' + response.status));
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    // handlers 가 throw 하면 SSE 루프를 종료한다 (stopped/error 신호용)
+    const dispatch = (payload) => {
+        if (!payload || typeof payload !== 'object') return;
+        const evt = payload.event || 'message';
+        const fn = handlers[evt];
+        if (typeof fn === 'function') {
+            fn(payload); // throw 시 상위로 전파 → reader.cancel()
+        }
+    };
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split('\n\n');
+            buffer = parts.pop() || '';
+            for (const part of parts) {
+                for (const line of part.split('\n')) {
+                    if (!line.startsWith('data: ')) continue;
+                    let payload;
+                    try { payload = JSON.parse(line.slice(6)); }
+                    catch (e) { console.warn('SSE parse error:', e); continue; }
+                    dispatch(payload);
+                }
+            }
+        }
+        // 남은 버퍼
+        if (buffer.startsWith('data: ')) {
+            try {
+                const tail = JSON.parse(buffer.slice(6));
+                dispatch(tail);
+            } catch (_) {}
+        }
+    } finally {
+        try { await reader.cancel(); } catch (_) {}
+    }
+}
+
+// ----- PPT 스타일 생성 흐름 -----
+async function generatePptStyled() {
+    if (!state.currentProject || !state.currentProject._id) {
+        showToast('프로젝트를 먼저 선택하세요', 'error');
+        return;
+    }
+    if (!state.selectedPptStyleId) {
+        showToast('PPT 스타일을 선택하세요', 'error');
+        return;
+    }
+
+    const instructions = $('#instructionsInput').val().trim();
+    const lang = $('#langSelect').val() || _getPptStyleLang();
+    const slideCount = $('#slideCountSelect').val() || 'auto';
+
+    if (state.resources.length === 0 && !instructions) {
+        showToast(t('msgEnterInstructions') || '지침을 입력하세요', 'error');
+        return;
+    }
+
+    _isGenerating = true;
+    _isPaused = false;
+    state.generatedSlides = [];
+    state.currentSlideIndex = 0;
+
+    _pptStyleBuildState = {
+        slides: [],
+        pptx_url: '',
+        // M7: outline + design 2단계
+        outlineText: '',
+        designText: '',
+        outlineSlides: [],
+        designSpecs: [],
+        outlineDone: false,
+        designDone: false,
+        // legacy alias (Phase A 전체 완료 신호)
+        structureDone: false,
+        buildDone: false,
+        totalDelta: 0,
+        parsedSlideCount: 0,
+        parsedObjectCount: 0,
+        parseFailed: false,
+        parseError: '',
+        previewLoaded: false,
+    };
+
+    _showStopButton();
+
+    // M10.2: 표준 슬라이드 모드와 동일한 초기 streaming UI 사용
+    //  - #slideEmpty 숨김 / #slidePreview 표시 / 아웃라인 탭 전환
+    //  - #streamingProgress (#streamingStatus + #streamingContent) 진행 UI
+    //  - #canvasLoadingOverlay 로딩 애니메이션
+    $('#slideEmpty').hide();
+    $('#slidePreview').css('display', 'flex');
+    $('#wsSlideTools').css('display', 'flex');
+    _setSlideToolsDisabled(true);
+    switchPanelTab('outline');
+
+    // 표준 모드와 동일한 #streamingProgress 마크업
+    $('#slideTextList').addClass('streaming-active').empty().append(`
+        <div id="streamingProgress" class="streaming-progress">
+            <div class="streaming-progress-header">
+                <div class="streaming-spinner-sm"></div>
+                <span id="streamingStatus">PPT 스타일을 분석하고 있습니다...</span>
+            </div>
+            <div id="streamingContent" class="streaming-content"></div>
+        </div>
+    `);
+
+    // 이전 생성 결과 초기화
+    $('#slideThumbnails').empty();
+    $('#slideThumbList').empty();
+    $('#slideCounter').text('0 / 0');
+    $('#slideCounterInline').text('0 / 0');
+    $('#previewCanvas .preview-obj').remove();
+    $('#previewBg').css('background-image', 'none');
+    $('#canvasLoadingOverlay').remove();
+    $('#previewCanvas').append(`
+        <div class="canvas-loading-overlay" id="canvasLoadingOverlay">
+            <div class="canvas-loading-animation">
+                <div class="canvas-loading-ring"></div>
+                <div class="loading-slide"></div>
+                <div class="loading-slide"></div>
+                <div class="loading-slide"></div>
+            </div>
+            <div class="canvas-loading-text">
+                <div class="canvas-loading-title">PPT 스타일 슬라이드를 만들고 있습니다</div>
+                <div class="canvas-loading-sub">스타일에 맞춰 슬라이드를 빌드하는 중<span class="canvas-loading-dots"><span>.</span><span>.</span><span>.</span></span></div>
+            </div>
+        </div>
+    `);
+
+    _abortController = new AbortController();
+
+    try {
+        // ============================================
+        // Phase A (M10.1+M10.2) — 표준 슬라이드 모드와 동일한 이벤트 시퀀스:
+        //   template_analysis → start → delta* → parsing → outline →
+        //   design_start → design_delta* → design_complete → result → complete
+        //
+        // 표준 진행 UI (#streamingProgress / #streamingStatus / #streamingContent /
+        // #slideTextList) 를 사용하고, outline 도착 시 표준의 _renderOutlineSummary()
+        // 마크업을 그대로 #slideTextList 에 렌더한다.
+        // ============================================
+        await streamSSE(
+            apiUrl('/api/generate/pptx-styled/stream'),
+            {
+                project_id: state.currentProject._id,
+                style_id: state.selectedPptStyleId,
+                instructions: instructions,
+                slide_count: slideCount,
+                lang: lang,
+            },
+            {
+                // ---- template_analysis: 표준의 핸들러 분기에서 PPT 스타일 페이로드 처리 ----
+                template_analysis: (p) => {
+                    console.log('[pptx-styled] template_analysis', p);
+                    // 표준 _handleStreamEvent 의 template_analysis 분기를 그대로 호출
+                    // (PPT 스타일 페이로드 {style_id, style_title, total_patterns} 자동 분기)
+                    try { _handleStreamEvent({ event: 'template_analysis', ...(p || {}) }); } catch (_) {}
+                },
+                // ---- start ----
+                start: (p) => {
+                    console.log('[pptx-styled] start', p && p.message);
+                    $('#streamingStatus').text((p && p.message) || 'AI가 슬라이드를 설계하고 있습니다...');
+                },
+                // ---- delta (outline LLM 텍스트) ----
+                delta: (p) => {
+                    _pptStyleBuildState.outlineText += (p && typeof p.text === 'string') ? p.text : '';
+                    _pptStyleBuildState.totalDelta = _pptStyleBuildState.outlineText.length;
+                    const el = document.getElementById('streamingContent');
+                    if (el) {
+                        el.textContent += (p && p.text) || '';
+                        el.scrollTop = el.scrollHeight;
+                    }
+                },
+                // ---- parsing ----
+                parsing: (p) => {
+                    $('#streamingStatus').text((p && p.message) || '슬라이드를 구성하고 있습니다...');
+                    $('#streamingContent').css('opacity', '0.4');
+                },
+                // ---- outline (raw_slides 풀스키마) — 표준과 동일 렌더 ----
+                outline: (p) => {
+                    console.log('[pptx-styled] outline', p);
+                    const raw = Array.isArray(p && p.slides) ? p.slides : [];
+                    _pptStyleBuildState.outlineSlides = raw;
+                    _pptStyleBuildState.outlineDone = true;
+                    // 표준 모드와 100% 동일한 마크업으로 #slideTextList 의
+                    // #streamingProgress 를 outline-summary 로 교체
+                    const outlineHtml = _renderOutlineSummary(raw);
+                    $('#streamingProgress').replaceWith(outlineHtml);
+                    // 빌드 단계용 슬롯 1차 초기화 (outline_type/title)
+                    _pptStyleBuildState.slides = raw.map((s, i) => ({
+                        index: i,
+                        outline_type: s && s.type ? s.type : '',
+                        template_id: '',
+                        layout_hint: '',
+                        title: (s && (s.title || s.name)) || `Slide ${i + 1}`,
+                        status: 'pending',
+                    }));
+                },
+                // ---- design_start (PPT 스타일 전용 단계 — 표준 streaming UI 재사용) ----
+                design_start: (p) => {
+                    console.log('[pptx-styled] design_start', p);
+                    const total = (p && typeof p.total === 'number') ? p.total : ((_pptStyleBuildState.outlineSlides || []).length);
+                    // outline 카드가 이미 #slideTextList 에 들어있으므로,
+                    // 그 뒤에 디자인 단계 진행 UI 를 새로 붙인다
+                    if (!$('#pptStyledDesignProgress').length) {
+                        $('#slideTextList').append(`
+                            <div id="pptStyledDesignProgress" class="streaming-progress">
+                                <div class="streaming-progress-header">
+                                    <div class="streaming-spinner-sm"></div>
+                                    <span id="pptStyledDesignStatus">스타일에 맞는 패턴 매칭 중...</span>
+                                </div>
+                                <div id="pptStyledDesignContent" class="streaming-content"></div>
+                            </div>
+                        `);
+                    }
+                    $('#pptStyledDesignStatus').text((p && p.message) || `스타일에 맞는 패턴 매칭 중... (${total}장)`);
+                },
+                // ---- pattern_matching (M11 신규, design_delta 대체) ----
+                pattern_matching: (p) => {
+                    const total = (p && p.total) || _pptStyleBuildState.outlineSlides.length || 0;
+                    $('#pptStyledDesignStatus').text((p && p.message) || `패턴 매칭 중... (${total}장)`);
+                    $('#streamingStatus').text((p && p.message) || '패턴 매칭 중...');
+                },
+                // ---- pattern_matched (M11 신규, design_complete 앞에서 미리 들어옴) ----
+                pattern_matched: (p) => {
+                    console.log('[pptx-styled] pattern_matched', p);
+                },
+                // ---- pattern_match_info (M11 신규, 디버그) ----
+                pattern_match_info: (p) => {
+                    console.log('[pptx-styled] pattern_match_info', p);
+                    // pattern_usage / fallback_count 표시 (선택)
+                    if (p && p.fallback_count) {
+                        console.warn('[pptx-styled] fallback pattern used for', p.fallback_count, 'slides');
+                    }
+                    // 표준 streamingStatus 도 함께 갱신
+                    $('#streamingStatus').text((p && p.message) || '스타일에 맞는 패턴 매칭 중...');
+                },
+                // ---- design_delta ----
+                design_delta: (p) => {
+                    _pptStyleBuildState.designText += (p && typeof p.text === 'string') ? p.text : '';
+                    const el = document.getElementById('pptStyledDesignContent');
+                    if (el) {
+                        el.textContent += (p && p.text) || '';
+                        el.scrollTop = el.scrollHeight;
+                    }
+                },
+                // ---- design_complete ----
+                design_complete: (p) => {
+                    console.log('[pptx-styled] design_complete', p);
+                    const specs = Array.isArray(p && p.design_specs) ? p.design_specs : [];
+                    _pptStyleBuildState.designSpecs = specs;
+                    _pptStyleBuildState.designDone = true;
+                    // 빌드 단계용 슬롯에 layout_hint enrich
+                    specs.forEach((spec) => {
+                        if (!spec) return;
+                        const idx = (typeof spec.slide_index === 'number') ? spec.slide_index : -1;
+                        if (idx < 0) return;
+                        const slot = _pptStyleBuildState.slides[idx];
+                        if (!slot) return;
+                        if (spec.layout_hint) {
+                            slot.layout_hint = spec.layout_hint;
+                            slot.template_id = spec.layout_hint;
+                        }
+                        if (spec.title && !slot.title) slot.title = spec.title;
+                    });
+                    $('#pptStyledDesignStatus').text(`디자인 스펙 완료 · 슬라이드 ${specs.length}개`);
+                    $('#streamingStatus').text(`디자인 스펙 완료 · 슬라이드 ${specs.length}개`);
+                },
+                // ---- Phase A 종합 결과 ----
+                result: (p) => {
+                    console.log('[pptx-styled] phaseA result', p);
+                    if (p) {
+                        if (Array.isArray(p.design_specs) && p.design_specs.length && !_pptStyleBuildState.designSpecs.length) {
+                            _pptStyleBuildState.designSpecs = p.design_specs;
+                        }
+                        if (p.outline && !_pptStyleBuildState.outlineSlides.length) {
+                            if (Array.isArray(p.outline)) {
+                                _pptStyleBuildState.outlineSlides = p.outline;
+                            } else if (Array.isArray(p.outline.raw_slides)) {
+                                _pptStyleBuildState.outlineSlides = p.outline.raw_slides;
+                            }
+                        }
+                    }
+                },
+                complete: (p) => {
+                    console.log('[pptx-styled] phaseA complete', p);
+                    _pptStyleBuildState.structureDone = true;
+                },
+                stopped: (p) => {
+                    throw new Error((p && p.message) || '생성이 중단되었습니다.');
+                },
+                error: (p) => {
+                    throw new Error((p && p.message) || '구조 생성 오류');
+                },
+            },
+            _abortController.signal
+        );
+
+        if (!_pptStyleBuildState.structureDone) {
+            throw new Error('구조 설계가 완료되지 않았습니다.');
+        }
+        if ((_pptStyleBuildState.slides || []).length === 0) {
+            throw new Error('생성된 슬라이드 구조가 비어 있습니다.');
+        }
+
+        // ============================================
+        // Phase B (M7) — PPT 스타일 전용 빌드 UI 사용 (기존 보존)
+        //   #pptStyledProgress (진행바 + 슬라이드 카드 그리드) 를 outline 뒤에 동적 삽입
+        // ============================================
+        // Phase A 의 design 진행 UI 는 정리하고 Phase B 진행 UI 를 부착한다
+        $('#pptStyledDesignProgress').remove();
+        if (!$('#pptStyledProgress').length) {
+            $('#slideTextList').append(`
+                <div id="pptStyledProgress" class="ppt-styled-progress">
+                    <div class="ppt-styled-progress-header">
+                        <div class="streaming-spinner-sm"></div>
+                        <span id="pptStyledPhaseLabel">PPTX 빌드 중...</span>
+                    </div>
+                    <div class="ppt-style-progress-bar">
+                        <div class="ppt-style-progress-bar-fill" id="pptStyledProgressFill" style="width:0%;"></div>
+                    </div>
+                    <div id="pptStyledDeltaHint" class="ppt-styled-delta-hint" style="margin-top:8px;color:var(--text-muted);font-size:12px;">스타일을 적용하여 슬라이드를 빌드하는 중입니다...</div>
+                    <div id="pptStyledSlideGrid" class="ppt-styled-slide-grid" style="margin-top:14px;"></div>
+                    <div id="pptStyledParseNotice" class="ppt-styled-parse-notice" style="display:none;"></div>
+                    <div class="ppt-styled-actions" style="margin-top:14px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+                        <button id="btnPptStyledViewer" class="ppt-styled-viewer-btn" style="display:none;" aria-hidden="true">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                            슬라이드 보기
+                        </button>
+                        <button id="btnPptStyledDownload" class="ppt-styled-download-btn" style="display:none;" onclick="downloadPptxStyled()">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                            <span>PPTX 다운로드</span>
+                        </button>
+                    </div>
+                </div>
+            `);
+        }
+        _renderPptStyledSlideGrid();
+        _updatePptStyledProgress(0.5);
+        $('#pptStyledPhaseLabel').text('Phase 2/2 · PPTX 빌드 중...');
+        $('#pptStyledDeltaHint').text('스타일을 적용하여 슬라이드를 빌드하는 중입니다...');
+        $('#streamingStatus').text('Phase 2/2 · PPTX 빌드 중...');
+
+        const total = _pptStyleBuildState.slides.length;
+        await streamSSE(
+            apiUrl('/api/generate/pptx-styled/build/stream'),
+            {
+                project_id: state.currentProject._id,
+                style_id: state.selectedPptStyleId,
+            },
+            {
+                start: (p) => {
+                    console.log('[pptx-styled] build start', p && p.message);
+                    $('#pptStyledDeltaHint').text((p && p.message) || '빌드 시작...');
+                },
+                slide_start: (p) => {
+                    const idx = (typeof p.index === 'number') ? p.index : -1;
+                    if (idx < 0) return;
+                    const slot = _pptStyleBuildState.slides[idx];
+                    if (slot) {
+                        slot.status = 'building';
+                        // M7: layout_hint / title 보강
+                        if (p.layout_hint) {
+                            slot.layout_hint = p.layout_hint;
+                            slot.template_id = p.layout_hint;  // legacy 호환
+                        }
+                        if (p.title) slot.title = p.title;
+                    }
+                    _renderPptStyledSlideGrid();
+                    // build 진행률: 50~95%
+                    const done = _pptStyleBuildState.slides.filter(s => s.status === 'done').length;
+                    _updatePptStyledProgress(0.5 + (0.45 * (done / total)));
+                },
+                bg_generated: (p) => {
+                    const idx = (typeof p.index === 'number') ? p.index : -1;
+                    if (idx < 0) return;
+                    const slot = _pptStyleBuildState.slides[idx];
+                    if (slot && slot.status === 'building') {
+                        slot.status = 'building_bg_done';
+                        _renderPptStyledSlideGrid();
+                    }
+                },
+                slide_done: (p) => {
+                    const idx = (typeof p.index === 'number') ? p.index : -1;
+                    if (idx < 0) return;
+                    const slot = _pptStyleBuildState.slides[idx];
+                    if (slot) slot.status = 'done';
+                    _renderPptStyledSlideGrid();
+                    const done = _pptStyleBuildState.slides.filter(s => s.status === 'done').length;
+                    _updatePptStyledProgress(0.5 + (0.45 * (done / total)));
+                    $('#pptStyledDeltaHint').text(`슬라이드 빌드 진행: ${done}/${total}`);
+                },
+                result: (p) => {
+                    console.log('[pptx-styled] build result', p);
+                    _pptStyleBuildState.pptx_url = (p && p.pptx_url) || '';
+                    if (p && typeof p.parsed_slide_count === 'number') {
+                        _pptStyleBuildState.parsedSlideCount = p.parsed_slide_count;
+                    }
+                    if (p && typeof p.parsed_object_count === 'number') {
+                        _pptStyleBuildState.parsedObjectCount = p.parsed_object_count;
+                    }
+                    $('#btnPptStyledDownload').show();
+                    _updatePptStyledProgress(0.95);
+                },
+                parsed: (p) => {
+                    console.log('[pptx-styled] parsed', p);
+                    _pptStyleBuildState.parsedSlideCount = (p && p.slide_count) || 0;
+                    _pptStyleBuildState.parsedObjectCount = (p && p.object_count) || 0;
+                    _pptStyleBuildState.parseFailed = false;
+                    $('#pptStyledDeltaHint').text(`객체 변환 완료 · 슬라이드 ${_pptStyleBuildState.parsedSlideCount}개 / 객체 ${_pptStyleBuildState.parsedObjectCount}개`);
+                    _updatePptStyledProgress(0.98);
+                },
+                parse_failed: (p) => {
+                    _pptStyleBuildState.parseFailed = true;
+                    _pptStyleBuildState.parseError = (p && p.message) || '';
+                    console.warn('[pptx-styled] 객체 변환 실패:', _pptStyleBuildState.parseError);
+                    showToast('미리보기 객체 변환에 실패했습니다. PPTX는 정상 빌드되었습니다.');
+                },
+                complete: (p) => {
+                    console.log('[pptx-styled] build complete', p);
+                    _pptStyleBuildState.buildDone = true;
+                    _updatePptStyledProgress(1);
+                    $('#pptStyledPhaseLabel').text('완료');
+                    $('#pptStyledDeltaHint').text('PPTX 빌드가 완료되었습니다.');
+                    $('#pptStyledProgress .streaming-spinner-sm').hide();
+                },
+                stopped: (p) => {
+                    throw new Error((p && p.message) || '빌드가 중단되었습니다.');
+                },
+                error: (p) => {
+                    throw new Error((p && p.message) || '빌드 오류');
+                },
+            },
+            _abortController.signal
+        );
+
+        if (_pptStyleBuildState.pptx_url || _pptStyleBuildState.buildDone) {
+            showToast('PPT 스타일 슬라이드 빌드가 완료되었습니다', 'success');
+            // 진행 카드를 우선 "완료" 상태로 채운 뒤 썸네일 미리보기 로딩 (M14 복원)
+            try {
+                if (_pptStyleBuildState.slides && _pptStyleBuildState.slides.length) {
+                    _pptStyleBuildState.slides.forEach((slot) => {
+                        if (slot) slot.status = 'done';
+                    });
+                    _renderPptStyledSlideGrid();
+                }
+            } catch (_) { /* noop */ }
+            // 빌드된 PPTX 의 슬라이드 객체를 로드해 카드 그리드를 썸네일 카드로 교체
+            try {
+                await _loadPptStyledPreview();
+            } catch (err) {
+                console.warn('[PPT Styled] 썸네일 로드 실패 — 다운로드 CTA 만 노출:', err);
+            }
+            // 다운로드 영역 CTA 강조
+            const $actions = $('#pptStyledProgress .ppt-styled-actions');
+            $actions.addClass('ppt-styled-actions-cta');
+            // 안내 메시지 카드 (1회만 삽입)
+            if ($actions.length && !$('#pptStyledCompleteHint').length) {
+                $actions.before(`
+                    <div id="pptStyledCompleteHint" class="ppt-styled-complete-hint">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.2">
+                            <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+                            <polyline points="22 4 12 14.01 9 11.01"/>
+                        </svg>
+                        <span>PPT 생성이 완료되었습니다. 아래 버튼을 눌러 다운로드하세요.</span>
+                    </div>
+                `);
+            }
+            // 다운로드 버튼: 큰 primary CTA 로 강조
+            $('#btnPptStyledDownload')
+                .addClass('ppt-styled-download-cta')
+                .prop('disabled', false)
+                .show();
+        }
+
+    } catch (e) {
+        if (e && e.name === 'AbortError') {
+            console.log('PPT styled generation aborted');
+        } else {
+            console.error('[PPT Styled] 생성 실패:', e);
+            showToast(e.message || 'PPT 스타일 생성 중 오류가 발생했습니다', 'error');
+        }
+        if (state.generatedSlides.length === 0 && !_pptStyleBuildState.pptx_url) {
+            // 실패 시에도 진행 UI 는 유지 (사용자가 결과 확인 가능)
+        }
+    } finally {
+        _isGenerating = false;
+        _isPaused = false;
+        _abortController = null;
+        $('#canvasLoadingOverlay').remove();
+        // 빌드까지 정상 완료된 경우 design 단계 임시 UI 는 제거
+        $('#pptStyledDesignProgress').remove();
+        $('#slideTextList').removeClass('streaming-active');
+        _showGenerateOrRestartButton();
+        _setSlideToolsDisabled(false);
+    }
+}
+
+function _renderPptStyledSlideGrid() {
+    if (!_pptStyleBuildState) return;
+    // 미리보기 객체가 이미 로드되어 카드가 썸네일 모드로 교체된 경우, 진행상태 카드로 덮어쓰지 않음
+    if (_pptStyleBuildState.previewLoaded) return;
+    const grid = $('#pptStyledSlideGrid');
+    if (!grid.length) return;
+    grid.empty();
+    _pptStyleBuildState.slides.forEach((slot) => {
+        // M7: 1차(outline)는 outline_type 라벨, 2차(design)는 layout_hint 라벨 우선
+        const layoutLabel = _pptStyleLayoutHintLabel(slot.layout_hint || slot.template_id || '');
+        const outlineLabel = _pptStyleOutlineTypeLabel(slot.outline_type || '');
+        let label;
+        if (layoutLabel) {
+            label = layoutLabel;
+        } else if (outlineLabel) {
+            label = outlineLabel;
+        } else {
+            label = 'pattern';
+        }
+        let statusIcon = '';
+        let statusCls = '';
+        if (slot.status === 'done') {
+            statusCls = 'done';
+            statusIcon = '<svg width="14" height="14" viewBox="0 0 16 16" fill="#10b981"><path d="M8 0a8 8 0 110 16A8 8 0 018 0zm3.78 5.22a.75.75 0 00-1.06 0L7 8.94 5.28 7.22a.75.75 0 10-1.06 1.06l2.25 2.25a.75.75 0 001.06 0l4.25-4.25a.75.75 0 000-1.06z"/></svg>';
+        } else if (slot.status === 'building' || slot.status === 'building_bg_done') {
+            statusCls = 'building';
+            statusIcon = '<div class="ppt-style-spinner"></div>';
+        } else {
+            statusCls = 'pending';
+            statusIcon = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/></svg>';
+        }
+        // 보조 라벨 (outline + design 둘 다 있는 경우 outline_type 도 노출)
+        let subLabel = '';
+        if (slot.outline_type && layoutLabel && outlineLabel && layoutLabel !== outlineLabel) {
+            subLabel = `<span class="ppt-style-slide-card-sub">${escapeHtml(outlineLabel)}</span>`;
+        }
+        const card = $(`
+            <div class="ppt-style-slide-card ${statusCls}">
+                <div class="ppt-style-slide-card-head">
+                    <span class="ppt-style-slide-card-idx">#${slot.index + 1}</span>
+                    <span class="ppt-style-slide-card-status">${statusIcon}</span>
+                </div>
+                <div class="ppt-style-slide-card-pattern">${escapeHtml(label)}${subLabel}</div>
+                <div class="ppt-style-slide-card-title">${escapeHtml(slot.title || '')}</div>
+            </div>
+        `);
+        grid.append(card);
+    });
+}
+
+function _updatePptStyledProgress(ratio) {
+    const pct = Math.max(0, Math.min(1, ratio || 0)) * 100;
+    $('#pptStyledProgressFill').css('width', pct.toFixed(1) + '%');
+}
+
+function downloadPptxStyled() {
+    if (!state.currentProject || !state.currentProject._id) return;
+    const url = apiUrl('/api/generate/' + state.currentProject._id + '/download/pptx-styled');
+    window.open(url, '_blank');
+}
+
+// ============ M5: PPT 스타일 빌드 후 객체 미리보기 ============
+async function _loadPptStyledPreview() {
+    if (!_pptStyleBuildState || !state.currentProject || !state.currentProject._id) return;
+
+    // 파싱 실패 신호가 있으면 fallback 모드
+    if (_pptStyleBuildState.parseFailed) {
+        _showPptStyledFallbackNotice('객체 미리보기는 사용할 수 없습니다. PPTX를 다운로드하여 확인해주세요.');
+        return;
+    }
+    if (_pptStyleBuildState.parsedSlideCount === 0) {
+        // 서버가 parsed 이벤트를 보내지 않은 경우에도, 일단 조회 시도 (백엔드 시퀀스 보호)
+    }
+
+    let slidesData = null;
+    try {
+        slidesData = await apiGet('/api/generate/' + state.currentProject._id + '/slides');
+    } catch (err) {
+        console.warn('[PPT Styled] /slides 조회 실패:', err);
+        _showPptStyledFallbackNotice('객체 미리보기는 사용할 수 없습니다. PPTX를 다운로드하여 확인해주세요.');
+        return;
+    }
+
+    const slides = (slidesData && Array.isArray(slidesData.slides)) ? slidesData.slides : [];
+    if (slides.length === 0) {
+        _showPptStyledFallbackNotice('객체 미리보기는 사용할 수 없습니다. PPTX를 다운로드하여 확인해주세요.');
+        return;
+    }
+
+    // 글로벌 상태에 보관 (기존 state.generatedSlides 와 호환)
+    state.generatedSlides = slides;
+    _pptStyleBuildState.previewLoaded = true;
+
+    // 카드 그리드를 썸네일 카드로 교체
+    _renderPptStyledSlideGridWithThumbs();
+
+    // "슬라이드 보기" 버튼 노출
+    $('#btnPptStyledViewer').show();
+
+    // 미리 이미지 로드 (있다면)
+    if (typeof _preloadSlideImages === 'function') {
+        try { _preloadSlideImages(slides); } catch (_) {}
+    }
+
+    // 메인 캔버스 + 좌측 썸네일도 같이 갱신 (기존 슬라이드 미리보기 UI 재사용)
+    state.currentSlideIndex = 0;
+    try {
+        $('#canvasLoadingOverlay').remove();
+        if (typeof renderSlideAtIndex === 'function') renderSlideAtIndex(0);
+        if (typeof renderSlideThumbnails === 'function') renderSlideThumbnails();
+        if (typeof renderSlideThumbList === 'function') renderSlideThumbList();
+        $('#slideCounter').text('1 / ' + slides.length);
+        $('#slideCounterInline').text('1 / ' + slides.length);
+    } catch (err) {
+        console.warn('[PPT Styled] 메인 캔버스 렌더 실패:', err);
+    }
+}
+
+function _showPptStyledFallbackNotice(message) {
+    const $notice = $('#pptStyledParseNotice');
+    if (!$notice.length) return;
+    $notice.text(message).show();
+    // 보기 버튼 비활성화 (이미 숨겨져 있겠지만 안전)
+    $('#btnPptStyledViewer').hide();
+}
+
+function _renderPptStyledSlideGridWithThumbs() {
+    if (!_pptStyleBuildState) return;
+    const grid = $('#pptStyledSlideGrid');
+    if (!grid.length) return;
+    const slides = state.generatedSlides || [];
+    if (slides.length === 0) return;
+
+    grid.empty();
+
+    // 카드 폭에 맞춘 썸네일 크기 (가로 200px 기준, 16:9 비율)
+    const thumbW = 200;
+    const thumbH = Math.round(thumbW * 9 / 16);
+
+    slides.forEach((slide, idx) => {
+        const slot = _pptStyleBuildState.slides[idx] || {};
+        // M7: layout_hint 우선, fallback outline_type
+        const label = _pptStyleLayoutHintLabel(slot.layout_hint || slot.template_id || '')
+            || _pptStyleOutlineTypeLabel(slot.outline_type || '')
+            || '';
+        const title = slot.title || (slide && slide.slide_meta && slide.slide_meta.title) || '';
+
+        const card = $(`
+            <div class="ppt-style-slide-card done has-thumb" data-slide-idx="${idx}">
+                <div class="ppt-style-slide-card-thumb">
+                    <div class="ppt-style-slide-card-thumb-inner"></div>
+                </div>
+                <div class="ppt-style-slide-card-meta">
+                    <span class="ppt-style-slide-card-idx">#${idx + 1}</span>
+                    <span class="ppt-style-slide-card-title">${escapeHtml(title)}</span>
+                </div>
+            </div>
+        `);
+
+        const inner = card.find('.ppt-style-slide-card-thumb-inner');
+        // 16:9 기준 렌더링 (백엔드 좌표계 960x540 픽셀)
+        try {
+            renderSlideToContainer(inner, slide, thumbW, thumbH, '16:9', idx);
+        } catch (err) {
+            console.warn('[PPT Styled] 썸네일 렌더 실패 idx=' + idx, err);
+        }
+
+        // 카드 클릭 → 풀 미리보기 모달
+        card.on('click', function() {
+            openPptStyledViewer(idx);
+        });
+
+        grid.append(card);
+    });
+
+    // 라벨이 있으면 진행상태 텍스트 갱신
+    const total = slides.length;
+    $('#pptStyledDeltaHint').text(`슬라이드 ${total}개 미리보기가 준비되었습니다.`);
+}
+
+// 풀 미리보기 모달 (보기 전용)
+let _pptStyledViewerIndex = 0;
+
+function openPptStyledViewer(startIdx) {
+    const slides = state.generatedSlides || [];
+    if (slides.length === 0) {
+        showToast('표시할 슬라이드가 없습니다.', 'error');
+        return;
+    }
+    _pptStyledViewerIndex = Math.max(0, Math.min(slides.length - 1, startIdx || 0));
+
+    $('#pptStyledViewerModal').remove();
+
+    const html = `
+        <div id="pptStyledViewerModal" class="modal-overlay ppt-styled-viewer-overlay" style="z-index:10010;">
+            <div class="ppt-styled-viewer-card">
+                <div class="ppt-styled-viewer-header">
+                    <div class="ppt-styled-viewer-title">슬라이드 미리보기</div>
+                    <button class="ppt-styled-viewer-close" id="pptStyledViewerClose" title="닫기">&times;</button>
+                </div>
+                <div class="ppt-styled-viewer-body">
+                    <button class="ppt-styled-viewer-nav prev" id="pptStyledViewerPrev" title="이전">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+                    </button>
+                    <div class="ppt-styled-viewer-stage-wrap">
+                        <div class="ppt-styled-viewer-stage" id="pptStyledViewerStage"></div>
+                    </div>
+                    <button class="ppt-styled-viewer-nav next" id="pptStyledViewerNext" title="다음">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+                    </button>
+                </div>
+                <div class="ppt-styled-viewer-footer">
+                    <span id="pptStyledViewerCounter">1 / 1</span>
+                </div>
+            </div>
+        </div>
+    `;
+    $('body').append(html);
+
+    $('#pptStyledViewerClose').on('click', closePptStyledViewer);
+    $('#pptStyledViewerPrev').on('click', pptStyledViewerPrev);
+    $('#pptStyledViewerNext').on('click', pptStyledViewerNext);
+    $('#pptStyledViewerModal').on('click', function(e) {
+        if (e.target === this) closePptStyledViewer();
+    });
+
+    if (!_pptStyledViewerKeyBound) {
+        $(document).on('keydown.pptStyledViewer', _pptStyledViewerKey);
+        _pptStyledViewerKeyBound = true;
+    }
+
+    _renderPptStyledViewerStage();
+}
+
+let _pptStyledViewerKeyBound = false;
+function _pptStyledViewerKey(e) {
+    if (!$('#pptStyledViewerModal').length) return;
+    if (e.key === 'Escape') { closePptStyledViewer(); }
+    else if (e.key === 'ArrowLeft') { pptStyledViewerPrev(); }
+    else if (e.key === 'ArrowRight') { pptStyledViewerNext(); }
+}
+
+function closePptStyledViewer() {
+    $('#pptStyledViewerModal').remove();
+    if (_pptStyledViewerKeyBound) {
+        $(document).off('keydown.pptStyledViewer');
+        _pptStyledViewerKeyBound = false;
+    }
+}
+
+function pptStyledViewerPrev() {
+    const slides = state.generatedSlides || [];
+    if (slides.length === 0) return;
+    _pptStyledViewerIndex = (_pptStyledViewerIndex - 1 + slides.length) % slides.length;
+    _renderPptStyledViewerStage();
+}
+
+function pptStyledViewerNext() {
+    const slides = state.generatedSlides || [];
+    if (slides.length === 0) return;
+    _pptStyledViewerIndex = (_pptStyledViewerIndex + 1) % slides.length;
+    _renderPptStyledViewerStage();
+}
+
+function _renderPptStyledViewerStage() {
+    const slides = state.generatedSlides || [];
+    if (slides.length === 0) return;
+    const idx = _pptStyledViewerIndex;
+    const slide = slides[idx];
+    if (!slide) return;
+
+    const $stage = $('#pptStyledViewerStage');
+    if (!$stage.length) return;
+
+    // 스테이지 크기는 컨테이너 폭에 맞추고 16:9 비율 유지 (CSS 가 aspect-ratio 보장)
+    $stage.empty();
+    // 배경
+    if (slide.background_image) {
+        $stage.css('background-image', `url(${slide.background_image})`);
+    } else {
+        $stage.css('background-image', 'none');
+    }
+
+    // 실제 스테이지 픽셀 크기를 측정해서 그 크기로 렌더
+    const stageW = $stage.width();
+    const stageH = $stage.height();
+    if (stageW > 0 && stageH > 0) {
+        try {
+            renderSlideToContainer($stage, slide, stageW, stageH, '16:9', idx);
+        } catch (err) {
+            console.warn('[PPT Styled] viewer 렌더 실패:', err);
+        }
+    } else {
+        // 레이아웃이 아직 안 잡혔으면 한 프레임 후 재시도
+        setTimeout(() => {
+            const w = $stage.width();
+            const h = $stage.height();
+            if (w > 0 && h > 0) {
+                try { renderSlideToContainer($stage, slide, w, h, '16:9', idx); }
+                catch (err) { console.warn('[PPT Styled] viewer 재시도 렌더 실패:', err); }
+            }
+        }, 50);
+    }
+
+    $('#pptStyledViewerCounter').text(`${idx + 1} / ${slides.length}`);
+    $('#pptStyledViewerPrev').prop('disabled', slides.length <= 1);
+    $('#pptStyledViewerNext').prop('disabled', slides.length <= 1);
+}
+
 
 // ============ 한장 요약 인포그래픽 ============
 const _summaryStylePresets = [
@@ -3953,6 +4991,7 @@ function selectSummaryInfographic() {
     if (state.customTemplateId) {
         _clearCustomPptxState();
     }
+    _clearPptStyleState();
     state.selectedTemplateId = null;
     state.infographicMode = false;
     state.autoTemplateMode = false;
@@ -4136,6 +5175,8 @@ function selectTemplateFromPicker(templateId) {
     state.autoTemplateMode = false;
     state.aiSlideMode = false;
     state.summaryInfographicMode = false;
+    // PPT 스타일 모드 해제
+    _clearPptStyleState();
     state._selectedStyleId = null;
     state._selectedStylePrompt = '';
     state._selectedStyleName = null;
@@ -4335,6 +5376,11 @@ async function generatePPT() {
     const lang = $('#langSelect').val();
     const slideCount = $('#slideCountSelect').val();
 
+    // PPT 스타일 모드 → 전용 생성 함수 호출 (Structurer + Builder)
+    if (state.pptStyleMode && state.selectedPptStyleId) {
+        return generatePptStyled();
+    }
+
     // AI 슬라이드 모드 → 전용 생성 함수 호출
     if (state.aiSlideMode) {
         return generateAiSlide();
@@ -4496,9 +5542,89 @@ async function generatePPT() {
     }
 }
 
+// 표준 슬라이드/PPT 스타일 공용 — outline 카드 그리드 마크업 생성
+// (raw_slides 풀스키마 입력: type/title/has_table/has_chart/table_data/chart_data 등)
+function _renderOutlineSummary(outlineSlides) {
+    outlineSlides = outlineSlides || [];
+    const typeLabelsMap = {
+        title: 'Cover', toc: 'Contents',
+        section: 'Chapter', content: 'Body', closing: 'Closing',
+    };
+
+    let outlineHtml = '<div class="outline-summary">';
+    outlineHtml += '<div class="outline-summary-title">아웃라인</div>';
+    outlineSlides.forEach((s, i) => {
+        const badge = typeLabelsMap[s.type] || s.type || '';
+        outlineHtml += `<div class="outline-summary-item">`;
+        outlineHtml += `<span class="outline-summary-num">${i + 1}</span>`;
+        outlineHtml += `<span class="outline-summary-text">${escapeHtml(s.title || '슬라이드 ' + (i + 1))}</span>`;
+        if (badge) outlineHtml += `<span class="slide-type-badge">${escapeHtml(String(badge))}</span>`;
+        if (s.has_table) outlineHtml += '<span class="slide-data-badge table-badge">Table</span>';
+        if (s.has_chart) outlineHtml += '<span class="slide-data-badge chart-badge">Chart</span>';
+        outlineHtml += '</div>';
+        // 표/차트 데이터 미리보기
+        if (s.table_data) {
+            const td = s.table_data;
+            const headers = td.headers || [];
+            const rows = td.rows || [];
+            if (headers.length > 0) {
+                outlineHtml += '<div class="outline-data-preview">';
+                outlineHtml += '<div class="outline-data-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg> 표 데이터</div>';
+                outlineHtml += '<table class="outline-mini-table"><thead><tr>';
+                headers.forEach(h => { outlineHtml += `<th>${escapeHtml(String(h))}</th>`; });
+                outlineHtml += '</tr></thead><tbody>';
+                rows.slice(0, 3).forEach(row => {
+                    outlineHtml += '<tr>';
+                    (row || []).forEach(cell => { outlineHtml += `<td>${escapeHtml(String(cell))}</td>`; });
+                    outlineHtml += '</tr>';
+                });
+                if (rows.length > 3) outlineHtml += `<tr><td colspan="${headers.length}" style="text-align:center;color:var(--text-tertiary)">... +${rows.length - 3}행</td></tr>`;
+                outlineHtml += '</tbody></table></div>';
+            }
+        }
+        if (s.chart_data) {
+            const cd = s.chart_data;
+            const chartTypeLabel = {bar:'막대', line:'선', pie:'원형', doughnut:'도넛', area:'영역', radar:'레이더'}[cd.chart_type] || cd.chart_type;
+            outlineHtml += '<div class="outline-data-preview">';
+            outlineHtml += `<div class="outline-data-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="22,6 13.5,15.5 8.5,10.5 2,17"/></svg> ${escapeHtml(cd.title || '차트')} (${chartTypeLabel})</div>`;
+            const labels = (cd.chart_data || {}).labels || [];
+            const datasets = (cd.chart_data || {}).datasets || [];
+            if (labels.length > 0 && datasets.length > 0) {
+                outlineHtml += '<div class="outline-chart-info">';
+                outlineHtml += `<span>항목: ${labels.slice(0, 5).map(l => escapeHtml(String(l))).join(', ')}${labels.length > 5 ? '...' : ''}</span>`;
+                datasets.forEach(ds => {
+                    outlineHtml += `<span>· ${escapeHtml(ds.label || '데이터')}: ${(ds.data || []).slice(0, 5).join(', ')}${(ds.data || []).length > 5 ? '...' : ''}</span>`;
+                });
+                outlineHtml += '</div>';
+            }
+            outlineHtml += '</div>';
+        }
+    });
+    outlineHtml += '</div>';
+    return outlineHtml;
+}
+
 function _handleStreamEvent(data) {
     switch (data.event) {
         case 'template_analysis': {
+            // 표준 모드: {types: {...}}
+            // PPT 스타일 모드: {style_id, style_title, total_patterns} — 별도 분기로 처리
+            if (data.style_id || data.style_title || typeof data.total_patterns === 'number') {
+                const styleTitle = data.style_title || data.style_id || 'PPT 스타일';
+                const totalPatterns = (typeof data.total_patterns === 'number') ? data.total_patterns : 0;
+                let analysisHtml = '<div class="template-analysis">';
+                analysisHtml += '<div class="analysis-title">PPT 스타일 분석</div>';
+                analysisHtml += `<div class="analysis-item available">`;
+                analysisHtml += `<span class="analysis-icon">✓</span>`;
+                analysisHtml += `<span class="analysis-label">${escapeHtml(String(styleTitle))}</span>`;
+                if (totalPatterns > 0) {
+                    analysisHtml += `<span class="analysis-count">${totalPatterns}개 패턴</span>`;
+                }
+                analysisHtml += '</div></div>';
+                const progress = $('#streamingProgress');
+                if (progress.length) progress.before(analysisHtml);
+                break;
+            }
             // 템플릿 타입 분석 결과 표시
             const types = data.types || {};
             const typeOrder = ['title_slide', 'toc', 'section_divider', 'body', 'closing'];
@@ -4547,64 +5673,8 @@ function _handleStreamEvent(data) {
             break;
 
         case 'outline': {
-            // 아웃라인 데이터 표시
-            const outlineSlides = data.slides || [];
-            const typeLabelsMap = {
-                title: 'Cover', toc: 'Contents',
-                section: 'Chapter', content: 'Body', closing: 'Closing',
-            };
-
-            let outlineHtml = '<div class="outline-summary">';
-            outlineHtml += '<div class="outline-summary-title">아웃라인</div>';
-            outlineSlides.forEach((s, i) => {
-                const badge = typeLabelsMap[s.type] || s.type;
-                outlineHtml += `<div class="outline-summary-item">`;
-                outlineHtml += `<span class="outline-summary-num">${i + 1}</span>`;
-                outlineHtml += `<span class="outline-summary-text">${escapeHtml(s.title || '슬라이드 ' + (i + 1))}</span>`;
-                outlineHtml += `<span class="slide-type-badge">${badge}</span>`;
-                if (s.has_table) outlineHtml += '<span class="slide-data-badge table-badge">Table</span>';
-                if (s.has_chart) outlineHtml += '<span class="slide-data-badge chart-badge">Chart</span>';
-                outlineHtml += '</div>';
-                // 표/차트 데이터 미리보기
-                if (s.table_data) {
-                    const td = s.table_data;
-                    const headers = td.headers || [];
-                    const rows = td.rows || [];
-                    if (headers.length > 0) {
-                        outlineHtml += '<div class="outline-data-preview">';
-                        outlineHtml += '<div class="outline-data-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg> 표 데이터</div>';
-                        outlineHtml += '<table class="outline-mini-table"><thead><tr>';
-                        headers.forEach(h => { outlineHtml += `<th>${escapeHtml(String(h))}</th>`; });
-                        outlineHtml += '</tr></thead><tbody>';
-                        rows.slice(0, 3).forEach(row => {
-                            outlineHtml += '<tr>';
-                            (row || []).forEach(cell => { outlineHtml += `<td>${escapeHtml(String(cell))}</td>`; });
-                            outlineHtml += '</tr>';
-                        });
-                        if (rows.length > 3) outlineHtml += `<tr><td colspan="${headers.length}" style="text-align:center;color:var(--text-tertiary)">... +${rows.length - 3}행</td></tr>`;
-                        outlineHtml += '</tbody></table></div>';
-                    }
-                }
-                if (s.chart_data) {
-                    const cd = s.chart_data;
-                    const chartTypeLabel = {bar:'막대', line:'선', pie:'원형', doughnut:'도넛', area:'영역', radar:'레이더'}[cd.chart_type] || cd.chart_type;
-                    outlineHtml += '<div class="outline-data-preview">';
-                    outlineHtml += `<div class="outline-data-label"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="22,6 13.5,15.5 8.5,10.5 2,17"/></svg> ${escapeHtml(cd.title || '차트')} (${chartTypeLabel})</div>`;
-                    const labels = (cd.chart_data || {}).labels || [];
-                    const datasets = (cd.chart_data || {}).datasets || [];
-                    if (labels.length > 0 && datasets.length > 0) {
-                        outlineHtml += '<div class="outline-chart-info">';
-                        outlineHtml += `<span>항목: ${labels.slice(0, 5).map(l => escapeHtml(String(l))).join(', ')}${labels.length > 5 ? '...' : ''}</span>`;
-                        datasets.forEach(ds => {
-                            outlineHtml += `<span>· ${escapeHtml(ds.label || '데이터')}: ${(ds.data || []).slice(0, 5).join(', ')}${(ds.data || []).length > 5 ? '...' : ''}</span>`;
-                        });
-                        outlineHtml += '</div>';
-                    }
-                    outlineHtml += '</div>';
-                }
-            });
-            outlineHtml += '</div>';
-
+            // 아웃라인 데이터 표시 (표준/PPT 스타일 공용 헬퍼 사용)
+            const outlineHtml = _renderOutlineSummary(data.slides || []);
             // 스트리밍 프로그레스를 아웃라인으로 교체
             $('#streamingProgress').replaceWith(outlineHtml);
             break;

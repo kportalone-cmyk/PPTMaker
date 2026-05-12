@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from services.mongo_service import init_indexes, seed_demo_accounts, seed_slide_styles, close_connection, close_connection_sync
 from services.redis_service import init_redis, close_redis, close_redis_sync
-from routers import auth, template, project, resource, generate, font, prompt, collaboration, onlyoffice, external_api
+from routers import auth, template, project, resource, generate, font, prompt, collaboration, onlyoffice, external_api, ppt_style
 from utils.versioning import get_file_version
 
 
@@ -71,7 +71,7 @@ async def lifespan(app: FastAPI):
     print("기본 프롬프트 초기화 완료")
 
     # 업로드 디렉토리 생성
-    for sub in ["backgrounds", "images", "resources", "generated", "documents", "custom_templates"]:
+    for sub in ["backgrounds", "images", "resources", "generated", "documents", "custom_templates", "ppt_style_samples", "ppt_styled"]:
         os.makedirs(os.path.join(settings.UPLOAD_DIR, sub), exist_ok=True)
 
     try:
@@ -122,6 +122,7 @@ app.include_router(prompt.router)
 app.include_router(collaboration.router)
 app.include_router(onlyoffice.router)
 app.include_router(external_api.router)
+app.include_router(ppt_style.router)
 
 # 정적 파일 서빙
 project_root = Path(__file__).resolve().parent.parent

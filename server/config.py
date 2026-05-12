@@ -40,6 +40,34 @@ class Settings:
     GOOGLE_IMAGE_MODEL: str = os.getenv("GOOGLE_IMAGE_MODEL", "gemini-3.1-flash-image-preview")
     GOOGLE_IMAGE_THINKING: str = os.getenv("GOOGLE_IMAGE_THINKING", "HIGH")  # none, LOW, MEDIUM, HIGH
 
+    # OpenAI (콤마 구분으로 여러 키 등록 가능 → 라운드 로빈)
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    OPENAI_API_KEYS: list = [
+        k.strip() for k in os.getenv("OPENAI_API_KEY", "").split(",") if k.strip()
+    ]
+    OPENAI_IMAGE_MODEL: str = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2")
+    OPENAI_IMAGE_SIZE: str = os.getenv("OPENAI_IMAGE_SIZE", "1536x1024")
+    OPENAI_IMAGE_QUALITY: str = os.getenv("OPENAI_IMAGE_QUALITY", "high")
+
+    # 이미지 생성 프로바이더 (google | openai)
+    IMAGE_PROVIDER: str = os.getenv("IMAGE_PROVIDER", "google").strip().lower()
+
+    # ─────────────────────────────────────────────
+    # LLM Provider 선택 (claude | sllm)
+    #  - claude : Anthropic API
+    #  - sllm   : 사설 sglang / vllm 서버 (OpenAI 호환)
+    # ─────────────────────────────────────────────
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "claude").strip().lower()
+
+    # SLLM (sglang / vllm OpenAI-compatible endpoint)
+    SLLM_BASE_URL: str = os.getenv("SLLM_BASE_URL", "").strip()
+    SLLM_MODEL: str = os.getenv("SLLM_MODEL", "").strip()
+    SLLM_API_KEY: str = os.getenv("SLLM_API_KEY", "EMPTY").strip() or "EMPTY"
+    SLLM_MAX_TOKENS: int = int(os.getenv("SLLM_MAX_TOKENS", "32000"))
+    SLLM_VERIFY_SSL: bool = os.getenv("SLLM_VERIFY_SSL", "false").lower() in ("true", "1", "yes")
+    SLLM_REASONING_ENABLED: bool = os.getenv("SLLM_REASONING_ENABLED", "false").lower() in ("true", "1", "yes")
+    SLLM_REASONING_VISIBLE: bool = os.getenv("SLLM_REASONING_VISIBLE", "false").lower() in ("true", "1", "yes")
+
     # Perplexity
     PERPLEXITY_API_KEY: str = os.getenv("PERPLEXITY_API_KEY", "")
 
@@ -112,3 +140,4 @@ class _KeyRotator:
 
 anthropic_key_rotator = _KeyRotator(settings.ANTHROPIC_API_KEYS)
 google_key_rotator = _KeyRotator(settings.GOOGLE_API_KEYS)
+openai_key_rotator = _KeyRotator(settings.OPENAI_API_KEYS)

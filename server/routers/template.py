@@ -782,9 +782,12 @@ async def get_style_sample_image(style_id: int):
 
 @router.post("/api/slide-styles/generate-samples")
 async def generate_style_samples():
-    """모든 스타일의 샘플 이미지를 생성 (SSE 스트림)"""
-    from google import genai
-    from google.genai import types
+    """모든 스타일의 샘플 이미지를 생성 (SSE 스트림).
+
+    .env `IMAGE_PROVIDER` 설정에 따라 Google Gemini(nanobanana) 또는
+    OpenAI(gpt-image-2) 이미지 API를 사용한다.
+    """
+    from services.infographic_service import _call_image_api, _image_provider, _image_provider_available
 
     db = get_db()
 
@@ -805,11 +808,10 @@ async def generate_style_samples():
             styles_to_generate.append(style)
 
     async def event_generator():
-        if not settings.GOOGLE_API_KEY:
-            yield f"data: {json.dumps({'status': 'error', 'message': 'GOOGLE_API_KEY not configured'})}\n\n"
+        if not _image_provider_available():
+            yield f"data: {json.dumps({'status': 'error', 'message': f'IMAGE_PROVIDER={_image_provider()} API key not configured'})}\n\n"
             return
 
-        client = genai.Client(api_key=settings.GOOGLE_API_KEY)
         success_count = 0
         fail_count = 0
         total = len(styles_to_generate)
@@ -842,34 +844,7 @@ Include relevant infographic elements, icons, and data visualizations.
 """
 
             try:
-                # Gemini API 호출 (동기 SDK를 비동기로)
-                def _sync_generate():
-                    parts = [types.Part.from_text(text=prompt)]
-                    contents = [
-                        types.Content(role="user", parts=parts),
-                    ]
-                    generate_config = types.GenerateContentConfig(
-                        thinking_config=types.ThinkingConfig(thinking_level="HIGH"),
-                        image_config=types.ImageConfig(aspect_ratio="16:9", image_size="1K"),
-                        response_modalities=["IMAGE", "TEXT"],
-                    )
-                    data_buffer = None
-                    for chunk in client.models.generate_content_stream(
-                        model="gemini-3.1-flash-image-preview",
-                        contents=contents,
-                        config=generate_config,
-                    ):
-                        if chunk.parts is None:
-                            continue
-                        for part in chunk.parts:
-                            if part.inline_data and part.inline_data.data:
-                                data_buffer = part.inline_data.data
-                            elif part.text:
-                                print(f"[StyleSample] Gemini text for style {style_id}: {part.text[:200]}")
-                    return data_buffer
-
-                loop = asyncio.get_event_loop()
-                image_bytes = await loop.run_in_executor(None, _sync_generate)
+                image_bytes, _file_ext = await _call_image_api(prompt)
 
                 if image_bytes:
                     # 이미지 저장

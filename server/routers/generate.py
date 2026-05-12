@@ -2,16 +2,18 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from bson import ObjectId
 from datetime import datetime
-from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, InfographicSlideAddRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest, DocxModifyRequest, DocxPrepareRequest, RewriteRequest, TranslateProjectRequest, HtmlReportGenerateRequest, InfographicGenerateRequest, AiSlideGenerateRequest, SummaryInfographicRequest
+from models.project import GenerateRequest, SlideReorderRequest, SlideUpdateRequest, ManualSlideRequest, InfographicSlideAddRequest, SlideTextRequest, ExcelGenerateRequest, ExcelModifyRequest, ExcelChartRequest, DocxGenerateRequest, DocxModifyRequest, DocxPrepareRequest, RewriteRequest, TranslateProjectRequest, HtmlReportGenerateRequest, InfographicGenerateRequest, AiSlideGenerateRequest, SummaryInfographicRequest, PPTXStyledGenerateRequest, PPTXStyledBuildRequest
 from services.mongo_service import get_db
-from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible, get_user_by_key
+from services.auth_service import decode_jwt_token, extract_user_key, get_user_flexible, get_user_by_key, is_admin
 from services import redis_service
 from routers.collaboration import check_project_access
 from services.template_service import recommend_slide, get_template_slides
 from services.ppt_service import generate_pptx
 from services.excel_service import generate_xlsx, auto_generate_chart_definition
 from services.word_service import generate_docx, create_empty_docx, extract_docx_template_structure
-from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content, generate_excel_content_stream, modify_excel_content_stream, generate_docx_content_stream, rewrite_text_stream, generate_html_report_stream, generate_html_report_outline_stream, generate_html_report_css_stream, generate_html_page_content, _call_claude_api
+from services.llm_service import generate_slide_content, generate_slide_content_stream, generate_single_slide_content, generate_excel_content_stream, modify_excel_content_stream, generate_docx_content_stream, rewrite_text_stream, generate_html_report_stream, generate_html_report_outline_stream, generate_html_report_css_stream, generate_html_page_content, generate_pptx_styled_content_stream, generate_pptx_styled_outline_stream, generate_pptx_styled_design_stream, _call_claude_api
+from services import ppt_style_service
+from services import ppt_builder_service
 from services.search_service import search_web
 from services.infographic_service import generate_infographic_image, generate_infographic_batch, generate_bg_image, fix_slide_text_image, edit_slide_image, generate_summary_infographic
 from services.onlyoffice_service import create_onlyoffice_document
@@ -2568,6 +2570,456 @@ async def generate_excel_stream(jwt_token: str, data: ExcelGenerateRequest):
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         }
+    )
+
+
+# ============ PPT 스타일 구조화 (M2) ============
+
+@router.post("/{jwt_token}/api/generate/pptx-styled/stream")
+async def generate_pptx_styled_stream(jwt_token: str, data: PPTXStyledGenerateRequest):
+    """PPT 스타일이 적용된 구조화 슬라이드 JSON 을 SSE 로 스트리밍 생성 (M2 Structurer)
+
+    실제 PPTX 빌드는 M3 빌더에서 처리한다. 본 엔드포인트는 LLM 출력 JSON 까지가 범위.
+    """
+    # JWT 인증 (외부 JWT 도 지원)
+    payload = decode_jwt_token(jwt_token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다")
+    user_key = extract_user_key(payload)
+    user = None
+    if not user_key:
+        user = await get_user_flexible(payload)
+        if user:
+            user_key = user.get("ky", "")
+    if not user_key:
+        raise HTTPException(status_code=401, detail="사용자를 확인할 수 없습니다")
+    if user is None:
+        try:
+            user = await get_user_by_key(user_key)
+        except Exception:
+            user = None
+
+    db = get_db()
+
+    # 스타일 로드 → 스킬 파일 생성
+    if not data.style_id:
+        raise HTTPException(status_code=400, detail="style_id 는 필수입니다")
+
+    try:
+        style_oid = ObjectId(data.style_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="유효하지 않은 style_id 입니다")
+
+    style_doc = await db.ppt_styles.find_one({"_id": style_oid})
+    if not style_doc:
+        raise HTTPException(status_code=404, detail="스타일을 찾을 수 없습니다")
+
+    # 게시 여부 검증 (admin 또는 owner 는 미게시도 허용)
+    is_published = bool(style_doc.get("is_published", False))
+    style_owner = style_doc.get("created_by", "")
+    caller_is_admin = bool(user and is_admin(user))
+    caller_is_owner = bool(user_key and style_owner and user_key == style_owner)
+    if not is_published and not (caller_is_admin or caller_is_owner):
+        raise HTTPException(status_code=403, detail="게시되지 않은 스타일입니다")
+
+    skill_file = await ppt_style_service.generate_skill_file(data.style_id)
+    if not skill_file:
+        raise HTTPException(status_code=404, detail="스타일 스킬 파일을 생성할 수 없습니다")
+
+    # 프로젝트 + 리소스 로드
+    try:
+        project = await db.projects.find_one({"_id": ObjectId(data.project_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="유효하지 않은 project_id 입니다")
+    if not project:
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
+
+    # 리소스 텍스트 수집 (엑셀 스트리밍 동일 흐름)
+    cursor = db.resources.find({"project_id": data.project_id})
+    all_content = []
+    async for r in cursor:
+        if r.get("resource_type") == "image":
+            img_desc = r.get("content", "")
+            if img_desc:
+                img_title = r.get("title") or r.get("original_filename") or "이미지"
+                all_content.append(f"[이미지: {img_title}]\n{img_desc}")
+            continue
+        if r.get("content"):
+            all_content.append(r["content"])
+        elif r.get("title"):
+            all_content.append(f"[{r['title']}]")
+    combined_text = "\n\n".join(all_content)
+
+    if not combined_text.strip() and not (data.instructions or "").strip():
+        raise HTTPException(status_code=400, detail="리소스 또는 지침이 필요합니다.")
+
+    generation_id = str(uuid.uuid4())
+    await redis_service.clear_generation_cancel(data.project_id)
+
+    # 프로젝트 상태 업데이트
+    await db.projects.update_one(
+        {"_id": ObjectId(data.project_id)},
+        {"$set": {
+            "instructions": data.instructions,
+            "status": "generating",
+            "generation_id": generation_id,
+            "updated_at": datetime.utcnow(),
+        }}
+    )
+
+    def _sse(event: str, payload: dict) -> str:
+        return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False, default=str)}\n\n"
+
+    async def event_stream():
+        try:
+            # ──────── template_analysis (스타일 정보 — 표준 흐름 호환 synthetic 이벤트) ────────
+            try:
+                pattern_library = skill_file.get("pattern_library") or []
+                extracted_patterns = skill_file.get("extracted_patterns") or []
+                total_patterns = (len(pattern_library) if isinstance(pattern_library, list) else 0) \
+                    + (len(extracted_patterns) if isinstance(extracted_patterns, list) else 0)
+            except Exception:
+                total_patterns = 0
+            yield _sse("template_analysis", {
+                "style_id": data.style_id,
+                "style_title": skill_file.get("title", "") if isinstance(skill_file, dict) else "",
+                "total_patterns": total_patterns,
+            })
+
+            # ──────── start (표준 흐름과 동일한 시작 메시지) ────────
+            yield _sse("start", {"message": "PPT 스타일 모드로 슬라이드 생성을 시작합니다"})
+
+            if await _wait_if_paused(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+            if await _check_cancelled(db, data.project_id, generation_id):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            # ──────── Phase A.1 — outline 스트리밍 (표준 흐름: delta → parsing → outline) ────────
+            outline_result = None
+            chunk_count = 0
+            cancelled = False
+            async for event_type, event_data in generate_pptx_styled_outline_stream(
+                combined_text,
+                data.instructions or "",
+                lang=data.lang or "ko",
+                slide_count=data.slide_count or "auto",
+            ):
+                if event_type == "delta":
+                    # 표준 흐름과 동일하게 delta 이벤트로 송출
+                    yield _sse("delta", {"text": event_data})
+                    chunk_count += 1
+                    if chunk_count % 50 == 0:
+                        if await _wait_if_paused(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
+                        if await _check_cancelled(db, data.project_id, generation_id):
+                            cancelled = True
+                            break
+                elif event_type == "result":
+                    outline_result = event_data
+
+            if cancelled:
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            if not outline_result or not outline_result.get("slides"):
+                fail_doc = {
+                    "project_id": data.project_id,
+                    "style_id": data.style_id,
+                    "outline": outline_result or {},
+                    "design_specs": [],
+                    "lang": data.lang or "ko",
+                    "slide_count": data.slide_count or "auto",
+                    "status": "failed",
+                    "updated_at": datetime.utcnow(),
+                }
+                await db.generated_pptx_styled.update_one(
+                    {"project_id": data.project_id},
+                    {"$set": fail_doc, "$setOnInsert": {"created_at": datetime.utcnow()}},
+                    upsert=True,
+                )
+                await db.projects.update_one(
+                    {"_id": ObjectId(data.project_id)},
+                    {"$set": {"status": "failed", "updated_at": datetime.utcnow()}}
+                )
+                yield _sse("error", {"message": "슬라이드 outline 생성 실패"})
+                return
+
+            raw_slides = outline_result.get("slides") or []
+            outline_meta = outline_result.get("meta") or {}
+            sources = outline_result.get("sources") or []
+            total_outline = len(raw_slides)
+
+            # 표준 흐름과 동일하게 parsing 상태 변경 신호 발행
+            yield _sse("parsing", {"message": "슬라이드를 구성하고 있습니다..."})
+
+            # 표준 흐름의 outline 이벤트와 동일한 payload schema:
+            #   {slides: [...], meta, sources}
+            # 프론트의 _renderOutlineSummary() 가 그대로 렌더 가능
+            yield _sse("outline", {
+                "slides": raw_slides,
+                "meta": outline_meta,
+                "sources": sources,
+            })
+
+            # ──────── Phase A.2 — 실시간 디자이너 LLM (멀티모달, M12) ────────
+            # outline 내용 + skill_file(extracted_patterns 참고용 포함) + 샘플 이미지 + 폰트 글리프
+            # → 멀티모달 LLM 호출로 슬라이드별 design_spec 실시간 생성
+            yield _sse("design_start", {
+                "total": total_outline,
+                "message": "스타일에 맞춰 슬라이드 디자인을 생성 중입니다...",
+            })
+
+            design_result = None
+            design_chunk_count = 0
+            design_cancelled = False
+            async for d_event, d_data in generate_pptx_styled_design_stream(
+                outline_result,
+                skill_file,
+                instructions=data.instructions or "",
+                lang=data.lang or "ko",
+            ):
+                if d_event == "delta":
+                    yield _sse("design_delta", {"text": d_data})
+                    design_chunk_count += 1
+                    if design_chunk_count % 50 == 0:
+                        if await _wait_if_paused(db, data.project_id, generation_id):
+                            design_cancelled = True
+                            break
+                        if await _check_cancelled(db, data.project_id, generation_id):
+                            design_cancelled = True
+                            break
+                elif d_event == "result":
+                    design_result = d_data
+
+            if design_cancelled:
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+                await _set_stopped(db, data.project_id)
+                return
+
+            design_specs = (design_result or {}).get("design_specs") or []
+
+            # 디자인 스펙이 비었으면 폴백: 슬라이드 1장 분의 빈 스펙 (renderer 가 빈 슬라이드 처리)
+            if not design_specs:
+                print(f"[SSE-PPTXStyled] 디자인 스펙이 비어 있음 — 폴백(빈 슬라이드) 생성")
+                design_specs = [
+                    {
+                        "slide_index": 1,
+                        "layout_hint": "freeform",
+                        "background": {"type": "none"},
+                        "regions": [
+                            {
+                                "type": "text",
+                                "x": 0.5, "y": 2.5, "w": 9.0, "h": 1.0,
+                                "text": (outline_meta.get("title") or "발표 자료"),
+                                "font_family": "",
+                                "font_size": 36,
+                                "bold": True,
+                                "color": "#0B1E3F",
+                                "align": "center",
+                                "valign": "middle",
+                            }
+                        ],
+                    }
+                ]
+
+            yield _sse("design_complete", {
+                "design_specs": design_specs,
+                "total_slides": len(design_specs),
+            })
+
+            # ──────── DB 업데이트 (outline + design_specs 저장) ────────
+            now = datetime.utcnow()
+            update_doc = {
+                "project_id": data.project_id,
+                "style_id": data.style_id,
+                "outline": outline_result,
+                "design_specs": design_specs,
+                "lang": data.lang or "ko",
+                "slide_count": data.slide_count or "auto",
+                "status": "designed",
+                "updated_at": now,
+            }
+            await db.generated_pptx_styled.update_one(
+                {"project_id": data.project_id},
+                {"$set": update_doc, "$setOnInsert": {"created_at": now}},
+                upsert=True,
+            )
+
+            project_update = {
+                "status": "designed",
+                "updated_at": now,
+                "ppt_style_id": data.style_id,
+            }
+            if isinstance(outline_meta, dict) and outline_meta:
+                project_update["presentation_meta"] = outline_meta
+            await db.projects.update_one(
+                {"_id": ObjectId(data.project_id)},
+                {"$set": project_update}
+            )
+
+            yield _sse("result", {
+                "outline": outline_result,
+                "design_specs": design_specs,
+                "total_slides": len(design_specs),
+            })
+            yield _sse("complete", {"total_slides": len(design_specs)})
+
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            print(f"[SSE-PPTXStyled] Stream error: {e}")
+            import traceback
+            traceback.print_exc()
+            project = await db.projects.find_one(
+                {"_id": ObjectId(data.project_id)}, {"status": 1}
+            )
+            if project and project.get("status") in ("stop_requested", "stopped"):
+                yield _sse("stopped", {"message": "생성이 중단되었습니다."})
+            else:
+                yield _sse("error", {"message": str(e)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+# ============ PPT 스타일 빌더 (M3) ============
+
+@router.post("/{jwt_token}/api/generate/pptx-styled/build/stream")
+async def build_pptx_styled_stream_endpoint(jwt_token: str, data: PPTXStyledBuildRequest):
+    """M2 가 만든 구조화 슬라이드 JSON 을 실제 .pptx 파일로 빌드하면서 슬라이드 단위
+    진행 상황을 SSE 로 송출 (M3 Builder).
+    """
+    # JWT 인증 (M2 와 동일 패턴)
+    payload = decode_jwt_token(jwt_token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다")
+    user_key = extract_user_key(payload)
+    user = None
+    if not user_key:
+        user = await get_user_flexible(payload)
+        if user:
+            user_key = user.get("ky", "")
+    if not user_key:
+        raise HTTPException(status_code=401, detail="사용자를 확인할 수 없습니다")
+    if user is None:
+        try:
+            user = await get_user_by_key(user_key)
+        except Exception:
+            user = None
+
+    db = get_db()
+
+    # design_specs 존재 확인 (재설계 후 새 필드)
+    rec = await db.generated_pptx_styled.find_one({"project_id": data.project_id})
+    if not rec:
+        raise HTTPException(status_code=400, detail="디자인이 아직 생성되지 않았습니다.")
+    design_specs = rec.get("design_specs") or []
+    if not design_specs:
+        raise HTTPException(status_code=400, detail="디자인이 아직 생성되지 않았습니다.")
+
+    # 스타일 권한 검증 (옵션) - 기존 패턴 유지
+    sid = data.style_id or rec.get("style_id")
+    if sid:
+        try:
+            style_oid = ObjectId(sid)
+            style_doc = await db.ppt_styles.find_one({"_id": style_oid})
+            if style_doc:
+                is_published = bool(style_doc.get("is_published", False))
+                style_owner = style_doc.get("created_by", "")
+                caller_is_admin = bool(user and is_admin(user))
+                caller_is_owner = bool(user_key and style_owner and user_key == style_owner)
+                if not is_published and not (caller_is_admin or caller_is_owner):
+                    raise HTTPException(status_code=403, detail="게시되지 않은 스타일입니다")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    def _sse(event: str, payload: dict) -> str:
+        return f"data: {json.dumps({'event': event, **payload}, ensure_ascii=False, default=str)}\n\n"
+
+    async def event_stream():
+        try:
+            yield _sse("start", {"message": "슬라이드를 PPTX 파일로 빌드 중입니다..."})
+
+            async for event_type, event_data in ppt_builder_service.build_pptx_styled_from_designs_stream(
+                project_id=data.project_id,
+                style_id=data.style_id,
+            ):
+                yield _sse(event_type, event_data if isinstance(event_data, dict) else {"data": event_data})
+
+                if event_type == "error":
+                    # 에러 후 종료
+                    return
+
+            yield _sse("complete", {})
+
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            print(f"[SSE-PPTXStyledBuild] Stream error: {e}")
+            import traceback
+            traceback.print_exc()
+            yield _sse("error", {"message": str(e)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@router.get("/{jwt_token}/api/generate/{project_id}/download/pptx-styled")
+async def download_pptx_styled(jwt_token: str, project_id: str):
+    """M3 빌드 결과 .pptx 파일 다운로드"""
+    await get_user_key(jwt_token)
+    db = get_db()
+
+    rec = await db.generated_pptx_styled.find_one({"project_id": project_id})
+    if not rec or not rec.get("pptx_path"):
+        raise HTTPException(status_code=404, detail="빌드된 PPTX 파일이 없습니다. 먼저 빌드를 수행하세요.")
+
+    file_path = rec.get("pptx_path")
+    if not file_path or not os.path.exists(file_path):
+        # URL 기반 fallback
+        pptx_url = rec.get("pptx_url", "")
+        if pptx_url:
+            rel = pptx_url.replace("/uploads/", "", 1)
+            file_path = os.path.join(settings.UPLOAD_DIR, rel)
+        if not file_path or not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="PPTX 파일을 찾을 수 없습니다.")
+
+    # 프로젝트 이름으로 다운로드 파일명 결정
+    try:
+        project = await db.projects.find_one({"_id": ObjectId(project_id)})
+    except Exception:
+        project = None
+    base_name = "presentation"
+    if project:
+        base_name = project.get("name") or project.get("title") or base_name
+    filename = f"{base_name}.pptx"
+
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
     )
 
 

@@ -138,6 +138,21 @@ class AiSlideGenerateRequest(BaseModel):
     ai_slide_style_id: Optional[int] = None  # 선택한 스타일 ID
 
 
+class PPTXStyledGenerateRequest(BaseModel):
+    """PPT 스타일(M2 Structurer) 슬라이드 구조 생성 요청"""
+    project_id: str
+    style_id: str
+    instructions: str = ""
+    slide_count: str = "auto"
+    lang: str = "ko"
+
+
+class PPTXStyledBuildRequest(BaseModel):
+    """PPT 스타일(M3 Builder) 빌드 요청 - structured JSON → .pptx"""
+    project_id: str
+    style_id: Optional[str] = None  # 없으면 generated_pptx_styled 의 저장값 사용
+
+
 class HtmlReportGenerateRequest(BaseModel):
     project_id: str
     skill_id: str

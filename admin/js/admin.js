@@ -296,39 +296,252 @@ const FONT_PRESETS = {
 
 function showFontManageModal() {
     renderFontList();
+    // URL 탭 초기화
     $('#newFontName').val('');
     $('#newFontFamily').val('');
     $('#newFontUrl').val('');
     $('#fontPreset').val('');
     $('#fontPreviewArea').hide();
+    // 업로드 탭 초기화
+    resetFontUploadForm();
+    // 기본 탭 = 업로드
+    switchFontTab('upload');
     $('#fontManageModal').show();
+    // 드래그앤드롭 핸들러 1회만 바인딩
+    initFontUploadDropzone();
+}
+
+function switchFontTab(tab) {
+    $('.font-tab-btn').removeClass('active');
+    $('.font-tab-btn[data-tab="' + tab + '"]').addClass('active');
+    if (tab === 'upload') {
+        $('#fontTabUpload').show();
+        $('#fontTabUrl').hide();
+    } else {
+        $('#fontTabUpload').hide();
+        $('#fontTabUrl').show();
+    }
 }
 
 function renderFontList() {
     const container = $('#fontListContainer');
     container.empty();
 
-    if (state.fonts.length === 0) {
-        container.html('<div style="padding:16px;text-align:center;color:#999;font-size:13px;">등록된 폰트가 없습니다</div>');
+    // 업로드된 로컬 폰트만 표시 (웹폰트/URL 등록 분은 목록에서 제외)
+    const uploadedFonts = (state.fonts || []).filter(function(f) {
+        return !!(f.original_filename || f.local_path || f.preview_url);
+    });
+
+    if (uploadedFonts.length === 0) {
+        container.html('<div style="padding:16px;text-align:center;color:#999;font-size:13px;">업로드된 폰트가 없습니다.<br>아래 "파일 업로드" 탭에서 .ttf/.otf 파일을 등록하세요.</div>');
         return;
     }
 
-    state.fonts.forEach(function(font) {
-        const badge = font.url
-            ? '<span class="font-badge web">웹폰트</span>'
-            : '<span class="font-badge system">시스템</span>';
+    uploadedFonts.forEach(function(font) {
+        const thumb = font.preview_url
+            ? `<img class="font-preview-thumb" src="${escapeHtml(font.preview_url)}" alt="${escapeHtml(font.family)}">`
+            : `<span class="font-preview-placeholder">no preview</span>`;
+        const sizeInfo = (typeof font.file_size === 'number' && font.file_size > 0)
+            ? ` · ${formatFileSize(font.file_size)}`
+            : '';
         container.append(`
             <div class="font-list-item">
-                <div>
-                    <span style="font-size:13px;font-weight:500;font-family:'${escapeHtml(font.family)}',sans-serif;">${escapeHtml(font.name)}</span>
-                    <span style="font-size:11px;color:#888;margin-left:6px;">(${escapeHtml(font.family)})</span>
-                    ${badge}
+                <div class="font-info-block">
+                    ${thumb}
+                    <div class="font-text-block">
+                        <div>
+                            <span style="font-size:13px;font-weight:500;font-family:'${escapeHtml(font.family)}',sans-serif;">${escapeHtml(font.name)}</span>
+                            <span style="font-size:11px;color:#888;margin-left:6px;">(${escapeHtml(font.family)})</span>
+                        </div>
+                        <div style="font-size:10px;color:#999;margin-top:2px;">${escapeHtml(font.original_filename || '')}${sizeInfo}</div>
+                    </div>
                 </div>
                 <button class="btn" style="padding:2px 10px;font-size:11px;color:#dc3545;border-color:#dc3545;"
                         onclick="deleteFontItem('${font._id}', '${escapeHtml(font.name)}', '${escapeHtml(font.family)}')">삭제</button>
             </div>
         `);
     });
+}
+
+function formatFileSize(bytes) {
+    if (!bytes && bytes !== 0) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+}
+
+// ============ 폰트 파일 업로드 (다중) ============
+let _fontUploadSelectedFiles = [];   // File[] — 사용자가 선택한 모든 파일
+let _fontUploadDropzoneInit = false;
+
+const _ALLOWED_FONT_EXT = ['.ttf', '.otf', '.ttc', '.woff', '.woff2'];
+
+function _isAllowedFontFile(file) {
+    const lower = (file.name || '').toLowerCase();
+    return _ALLOWED_FONT_EXT.some(function(ext) { return lower.endsWith(ext); });
+}
+
+function resetFontUploadForm() {
+    _fontUploadSelectedFiles = [];
+    $('#fontUploadInput').val('');
+    $('#fontUploadFileInfo').text('선택된 파일 없음').css('color', '#888');
+    $('#fontUploadFileList').empty().hide();
+    $('#fontUploadResultArea').hide().empty();
+    $('#btnUploadFont').prop('disabled', false).text('업로드');
+}
+
+function initFontUploadDropzone() {
+    if (_fontUploadDropzoneInit) return;
+    _fontUploadDropzoneInit = true;
+
+    const zone = document.getElementById('fontUploadDropzone');
+    const input = document.getElementById('fontUploadInput');
+    if (!zone || !input) return;
+
+    zone.addEventListener('click', function() { input.click(); });
+    input.addEventListener('change', function(e) {
+        onFontUploadFilesSelected(e.target.files || []);
+    });
+    zone.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        zone.classList.add('dragover');
+    });
+    zone.addEventListener('dragleave', function() {
+        zone.classList.remove('dragover');
+    });
+    zone.addEventListener('drop', function(e) {
+        e.preventDefault();
+        zone.classList.remove('dragover');
+        onFontUploadFilesSelected(e.dataTransfer.files || []);
+    });
+}
+
+function onFontUploadFilesSelected(fileListLike) {
+    // FileList → Array, 확장자 필터 + 누적
+    const arr = Array.prototype.slice.call(fileListLike);
+    const accepted = arr.filter(_isAllowedFontFile);
+    const rejected = arr.length - accepted.length;
+
+    if (accepted.length === 0) {
+        if (rejected > 0) {
+            showToast('지원하지 않는 폰트 파일 형식입니다 (.ttf/.otf/.ttc/.woff/.woff2)', 'error');
+        }
+        return;
+    }
+
+    // 기존 선택분 + 신규 추가 (이름+크기 기준 중복 제거)
+    accepted.forEach(function(f) {
+        const dup = _fontUploadSelectedFiles.find(function(x) {
+            return x.name === f.name && x.size === f.size;
+        });
+        if (!dup) _fontUploadSelectedFiles.push(f);
+    });
+
+    if (rejected > 0) {
+        showToast(rejected + '개 파일은 형식 미지원으로 제외됨', 'warning');
+    }
+
+    _renderFontUploadFileList();
+}
+
+function _renderFontUploadFileList() {
+    const container = $('#fontUploadFileList');
+    container.empty();
+
+    if (_fontUploadSelectedFiles.length === 0) {
+        container.hide();
+        $('#fontUploadFileInfo').text('선택된 파일 없음').css('color', '#888');
+        return;
+    }
+
+    $('#fontUploadFileInfo').text(_fontUploadSelectedFiles.length + '개 파일 선택됨').css('color', '#333');
+    container.show();
+
+    _fontUploadSelectedFiles.forEach(function(f, idx) {
+        const sz = formatFileSize(f.size);
+        container.append(`
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border:1px solid #e5e5e5;border-radius:4px;margin-bottom:4px;font-size:12px;background:#fff;">
+                <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;margin-right:8px;">
+                    <span style="color:#333;">${escapeHtml(f.name)}</span>
+                    <span style="color:#999;font-size:11px;margin-left:6px;">${sz}</span>
+                </div>
+                <button type="button" class="btn" style="padding:1px 8px;font-size:11px;color:#888;border-color:#ccc;"
+                        onclick="_removeFontUploadFile(${idx})" title="제거">×</button>
+            </div>
+        `);
+    });
+}
+
+function _removeFontUploadFile(idx) {
+    if (idx < 0 || idx >= _fontUploadSelectedFiles.length) return;
+    _fontUploadSelectedFiles.splice(idx, 1);
+    _renderFontUploadFileList();
+}
+
+async function submitFontUpload() {
+    if (_fontUploadSelectedFiles.length === 0) {
+        showToast('업로드할 폰트 파일을 선택하세요', 'error');
+        return;
+    }
+
+    $('#btnUploadFont').prop('disabled', true).text('업로드 중... (' + _fontUploadSelectedFiles.length + '개)');
+    $('#fontUploadResultArea').hide().empty();
+
+    try {
+        const fd = new FormData();
+        _fontUploadSelectedFiles.forEach(function(f) {
+            fd.append('files', f);
+        });
+        // Content-Type 헤더는 명시하지 않음 — 브라우저가 boundary 포함해서 자동 설정
+        const res = await fetch(apiUrl('/api/admin/fonts/upload'), {
+            method: 'POST',
+            body: fd,
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(function() { return {}; });
+            throw new Error(err.detail || ('HTTP ' + res.status));
+        }
+        const data = await res.json();
+        const successCount = data.success_count || 0;
+        const failedCount = data.failed_count || 0;
+        const results = data.results || [];
+
+        // 결과 요약 표시
+        let html = '<div style="font-weight:500;margin-bottom:6px;">업로드 결과: 성공 ' + successCount + ', 실패 ' + failedCount + '</div>';
+        results.forEach(function(r) {
+            const icon = r.success ? '✓' : '✗';
+            const color = r.success ? '#28a745' : '#dc3545';
+            const detail = r.success
+                ? ((r.font && r.font.name) ? '— ' + escapeHtml(r.font.name) : '')
+                : '— ' + escapeHtml(r.error || '실패');
+            html += `<div style="color:${color};font-size:11px;line-height:1.5;">${icon} ${escapeHtml(r.filename || '')} ${detail}</div>`;
+        });
+        $('#fontUploadResultArea').html(html).show();
+
+        if (successCount > 0) {
+            showToast(successCount + '개 폰트 업로드 완료', 'success');
+        }
+        if (failedCount > 0 && successCount === 0) {
+            showToast(failedCount + '개 모두 실패', 'error');
+        }
+
+        // 폰트 캐시 새로고침 + PPT 스타일 셀렉트 갱신
+        await loadFonts();
+        renderFontList();
+        if (typeof loadPPTStyleFonts === 'function') {
+            await loadPPTStyleFonts();
+        }
+
+        // 성공한 파일은 큐에서 제거, 실패한 것만 남겨 재시도 가능
+        const failedFilenames = new Set(results.filter(function(r) { return !r.success; }).map(function(r) { return r.filename; }));
+        _fontUploadSelectedFiles = _fontUploadSelectedFiles.filter(function(f) { return failedFilenames.has(f.name); });
+        $('#fontUploadInput').val('');
+        _renderFontUploadFileList();
+    } catch (e) {
+        showToast('업로드 실패: ' + (e.message || ''), 'error');
+    } finally {
+        $('#btnUploadFont').prop('disabled', false).text('업로드');
+    }
 }
 
 function applyFontPreset(key) {
@@ -373,7 +586,8 @@ async function addNewFont() {
 }
 
 async function deleteFontItem(fontId, fontName, fontFamily) {
-    if (!confirm('"' + fontName + '" 폰트를 삭제하시겠습니까?')) return;
+    const ok = await showConfirm('폰트 삭제', '"' + fontName + '" 폰트를 삭제하시겠습니까?', { confirmText: '삭제', danger: true });
+    if (!ok) return;
 
     try {
         await apiDelete('/api/admin/fonts/' + fontId);
@@ -381,6 +595,9 @@ async function deleteFontItem(fontId, fontName, fontFamily) {
         showToast('폰트가 삭제되었습니다', 'success');
         await loadFonts();
         renderFontList();
+        if (typeof loadPPTStyleFonts === 'function') {
+            await loadPPTStyleFonts();
+        }
     } catch (e) {
         showToast('삭제 실패: ' + e.message, 'error');
     }
@@ -5568,15 +5785,20 @@ function switchAdminTab(tab) {
     $('.sidebar-tab').removeClass('active');
     $(`.sidebar-tab[data-tab="${tab}"]`).addClass('active');
 
+    // 공통: 모든 탭 콘텐츠 숨김
+    $('#tabContentTemplates').removeClass('active').hide();
+    $('#tabContentSkills').removeClass('active').hide();
+    $('#tabContentPPTStyles').removeClass('active').hide();
+    $('#skillEditorWrapper').hide();
+    $('#pptStyleEditorWrapper').hide();
+
     if (tab === 'templates') {
         // 템플릿 탭 활성화
         $('#tabContentTemplates').addClass('active').show();
-        $('#tabContentSkills').removeClass('active').hide();
 
         // 캔버스/툴바 영역 복원
         $('#canvasWrapper').show();
         $('#toolbar').show();
-        $('#skillEditorWrapper').hide();
 
         // 템플릿 관련 헤더 버튼 표시
         $('#btnGridToggle').show();
@@ -5593,8 +5815,7 @@ function switchAdminTab(tab) {
             hideEditor();
         }
     } else if (tab === 'skills') {
-        // 스킬 탭 활성화
-        $('#tabContentTemplates').removeClass('active').hide();
+        // 스킬 탭 (UI는 숨김 상태이지만 코드 유지)
         $('#tabContentSkills').addClass('active').show();
 
         // 캔버스/툴바/속성패널 숨기기
@@ -5612,6 +5833,26 @@ function switchAdminTab(tab) {
 
         // 스킬 목록 로드
         loadSkills();
+    } else if (tab === 'ppt-styles') {
+        // PPT 스타일 탭 활성화
+        $('#tabContentPPTStyles').addClass('active').show();
+
+        // 캔버스/툴바/속성패널 숨기기
+        $('#canvasWrapper').hide();
+        $('#toolbar').hide();
+        $('#propertiesPanel').hide();
+        $('#templateNameBar').hide();
+        $('#btnDeleteTemplate').hide();
+        $('#btnPublishTemplate').hide();
+        $('#btnBulkFont').hide();
+        $('#btnGridToggle').hide();
+
+        // PPT 스타일 에디터 표시
+        $('#pptStyleEditorWrapper').show();
+
+        // 목록 + 폰트 로드 (지연 로딩)
+        loadPPTStyles();
+        loadPPTStyleFonts();
     }
 }
 
@@ -5816,5 +6057,799 @@ async function toggleSkillPublish() {
         await loadSkills();
     } catch (e) {
         showToast('공개 상태 변경 실패', 'error');
+    }
+}
+
+
+// ============ 범용 다이얼로그 (alert/confirm/prompt 대체) ============
+function _showDialog({ title, message, input, inputValue, placeholder, confirmText, cancelText, danger, onConfirm }) {
+    return new Promise(resolve => {
+        $('#customDialog').remove();
+        const inputHtml = input
+            ? `<input type="text" class="dialog-input" id="dialogInput" value="${escapeHtml(inputValue || '')}" placeholder="${escapeHtml(placeholder || '')}" autocomplete="off">`
+            : '';
+        const cancelBtn = cancelText !== false
+            ? `<button class="dialog-btn dialog-cancel" id="dialogCancel">${escapeHtml(cancelText || '취소')}</button>`
+            : '';
+        const confirmClass = danger ? 'dialog-confirm danger' : 'dialog-confirm';
+
+        const html = `
+            <div class="modal-overlay" id="customDialog" style="z-index:10000;">
+                <div class="dialog-card">
+                    <div class="dialog-title">${escapeHtml(title || '')}</div>
+                    ${message ? `<div class="dialog-message">${escapeHtml(message)}</div>` : ''}
+                    ${inputHtml}
+                    <div class="dialog-actions">
+                        ${cancelBtn}
+                        <button class="dialog-btn ${confirmClass}" id="dialogConfirm">${escapeHtml(confirmText || '확인')}</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        $('body').append(html);
+
+        const $dialog = $('#customDialog');
+        const $input = $('#dialogInput');
+        if ($input.length) {
+            setTimeout(() => { $input.focus(); $input[0].select(); }, 100);
+            $input.on('keydown', e => {
+                if (e.key === 'Enter') { e.preventDefault(); $('#dialogConfirm').click(); }
+                if (e.key === 'Escape') { e.preventDefault(); $('#dialogCancel').click(); }
+            });
+        }
+
+        $('#dialogConfirm').on('click', () => {
+            const val = input ? $input.val() : true;
+            $dialog.remove();
+            resolve(val);
+        });
+        $('#dialogCancel').on('click', () => {
+            $dialog.remove();
+            resolve(input ? null : false);
+        });
+        // 배경 클릭 시 취소
+        $dialog.on('click', e => {
+            if (e.target === $dialog[0]) {
+                $dialog.remove();
+                resolve(input ? null : false);
+            }
+        });
+    });
+}
+
+function showConfirm(title, message, opts) {
+    return _showDialog({ title, message, confirmText: '확인', cancelText: '취소', ...opts });
+}
+function showPrompt(title, placeholder, defaultValue, opts) {
+    return _showDialog({ title, input: true, placeholder, inputValue: defaultValue, confirmText: '확인', cancelText: '취소', ...opts });
+}
+function showAlert(title, message, opts) {
+    return _showDialog({ title, message, confirmText: '확인', cancelText: false, ...opts });
+}
+
+
+// ============ PPT 스타일 관리 ============
+
+// 글로벌 상태
+let currentPPTStyleId = null;
+let pptStylesList = [];
+let fontsCache = [];
+
+// 색상 슬롯 메타 (한글 별칭)
+const PPT_STYLE_COLOR_SLOTS = [
+    { key: 'primary', label: '메인',    desc: 'Primary' },
+    { key: 'light',   label: '보조',    desc: 'Light / Accent' },
+    { key: 'white',   label: '배경',    desc: 'White / Surface' },
+    { key: 'ink',     label: '제목',    desc: 'Ink / Heading' },
+    { key: 'grey',    label: '본문',    desc: 'Grey / Body' },
+    { key: 'line',    label: '구분선',  desc: 'Line / Divider' },
+    { key: 'darker',  label: '암색',    desc: 'Darker' },
+];
+
+// 12개 패턴 정의
+const PPT_STYLE_PATTERNS = [
+    { id: 'cover',                     name: '표지' },
+    { id: 'toc',                       name: '목차' },
+    { id: 'chapter',                   name: '챕터 디바이더' },
+    { id: 'content_3col',              name: '3컬럼 카드' },
+    { id: 'content_2col_hero',         name: '2컬럼 + 히어로' },
+    { id: 'content_2x2',               name: '2×2 그리드' },
+    { id: 'big_stat',                  name: '빅 스탯' },
+    { id: 'content_3col_icon_block',   name: '3컬럼 아이콘' },
+    { id: 'content_2_numbered',        name: '2 카드 (번호)' },
+    { id: 'content_3col_sidebar',      name: '3컬럼 + 사이드바' },
+    { id: 'content_2x2_top_line',      name: '2×2 + 상단 라인' },
+    { id: 'closing',                   name: '마무리' },
+];
+
+// ---------- 콤보 / 목록 ----------
+function togglePPTStyleDropdown() {
+    $('#pptStyleComboDropdown').toggleClass('open');
+}
+$(document).on('click', function(e) {
+    if (!$(e.target).closest('#pptStyleCombo').length) {
+        $('#pptStyleComboDropdown').removeClass('open');
+    }
+});
+function updatePPTStyleComboText() {
+    const cur = pptStylesList.find(s => s._id === currentPPTStyleId);
+    $('#pptStyleComboText').text(cur ? cur.title : '스타일을 선택하세요');
+}
+
+async function loadPPTStyles() {
+    try {
+        const res = await apiGet('/api/admin/ppt-styles');
+        pptStylesList = res.styles || [];
+        renderPPTStyleList();
+    } catch (e) {
+        showToast('PPT 스타일 목록 로드 실패: ' + (e.message || ''), 'error');
+    }
+}
+
+function renderPPTStyleList() {
+    const list = $('#pptStyleList');
+    list.empty();
+    if (pptStylesList.length === 0) {
+        list.html('<div style="padding:12px;text-align:center;color:#999;font-size:12px;">등록된 스타일이 없습니다</div>');
+        updatePPTStyleComboText();
+        return;
+    }
+    pptStylesList.forEach(s => {
+        const active = currentPPTStyleId === s._id ? 'active' : '';
+        const statusBadge = s.is_published
+            ? '<span class="skill-status-badge published" title="공개 중">공개</span>'
+            : '<span class="skill-status-badge draft" title="비공개">비공개</span>';
+        list.append(`
+            <div class="template-option ${active}" onclick="selectPPTStyle('${s._id}')">
+                <div class="option-title-row">
+                    <span class="option-title">${escapeHtml(s.title)}</span>
+                    ${statusBadge}
+                </div>
+                <div class="option-meta">${s.description ? escapeHtml(s.description) : ''}</div>
+            </div>
+        `);
+    });
+    updatePPTStyleComboText();
+}
+
+async function selectPPTStyle(styleId) {
+    $('#pptStyleComboDropdown').removeClass('open');
+    try {
+        const res = await apiGet('/api/admin/ppt-styles/' + styleId);
+        const style = res.style || res;
+        currentPPTStyleId = style._id;
+        renderPPTStyleList();
+        await showPPTStyleEditor(style);
+    } catch (e) {
+        showToast('스타일 로드 실패: ' + (e.message || ''), 'error');
+    }
+}
+
+// ---------- 폰트 셀렉트 ----------
+async function loadPPTStyleFonts() {
+    try {
+        const res = await apiGet('/api/fonts');
+        fontsCache = res.fonts || [];
+        refreshPPTStyleFontSelects();
+    } catch (e) {
+        fontsCache = [];
+        refreshPPTStyleFontSelects();
+    }
+}
+
+function refreshPPTStyleFontSelects() {
+    const titleSel = $('#pptStyleTitleFont');
+    const bodySel = $('#pptStyleBodyFont');
+    const prevTitle = titleSel.val();
+    const prevBody = bodySel.val();
+    titleSel.empty();
+    bodySel.empty();
+    titleSel.append('<option value="">(시스템 기본)</option>');
+    bodySel.append('<option value="">(시스템 기본)</option>');
+    fontsCache.forEach(f => {
+        const id = f._id || '';
+        const label = f.family || f.name || id;
+        const opt = `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
+        titleSel.append(opt);
+        bodySel.append(opt);
+    });
+    if (prevTitle) titleSel.val(prevTitle);
+    if (prevBody) bodySel.val(prevBody);
+    // 셀렉트 옆 미리보기 갱신
+    updatePPTStyleFontPreview('title');
+    updatePPTStyleFontPreview('body');
+}
+
+function updatePPTStyleFontPreview(which) {
+    const selId = which === 'title' ? '#pptStyleTitleFont' : '#pptStyleBodyFont';
+    const boxId = which === 'title' ? '#pptStyleTitleFontPreview' : '#pptStyleBodyFontPreview';
+    const $box = $(boxId);
+    const $img = $box.find('img');
+    const fontId = $(selId).val();
+    if (!fontId) {
+        $box.hide();
+        $img.attr('src', '');
+        return;
+    }
+    const f = (fontsCache || []).find(function(x) { return (x._id || '') === fontId; });
+    if (f && f.preview_url) {
+        $img.attr('src', f.preview_url);
+        $box.show();
+    } else {
+        $box.hide();
+        $img.attr('src', '');
+    }
+}
+
+// ---------- 새 스타일 생성 ----------
+async function createNewPPTStyle() {
+    return createPPTStyle();
+}
+async function createPPTStyle() {
+    const title = await showPrompt('새 PPT 스타일', '스타일 제목을 입력하세요', '', { confirmText: '생성' });
+    if (title === null) return;
+    const trimmed = (title || '').trim();
+    if (!trimmed) {
+        await showAlert('입력 오류', '제목을 입력해주세요');
+        return;
+    }
+    try {
+        const res = await apiPost('/api/admin/ppt-styles', { title: trimmed });
+        const style = res.style || res;
+        currentPPTStyleId = style._id;
+        await loadPPTStyles();
+        await showPPTStyleEditor(style);
+        showToast('새 스타일이 생성되었습니다', 'success');
+    } catch (e) {
+        showToast('생성 실패: ' + (e.message || ''), 'error');
+    }
+}
+
+// ---------- 편집기 채우기 ----------
+async function showPPTStyleEditor(style) {
+    // 폰트 옵션이 준비되지 않았을 수 있으니 보장
+    if (!fontsCache.length) {
+        await loadPPTStyleFonts();
+    }
+
+    // 메타
+    $('#pptStyleTitle').val(style.title || '');
+    $('#pptStyleDescription').val(style.description || '');
+    $('#pptStyleLang').val(style.lang || 'ko');
+
+    // 디자인 토큰
+    const dt = style.design_tokens || {};
+    const colors = dt.colors || {};
+    renderPPTStyleColorSlots(colors);
+
+    const sizes = (dt.fonts && dt.fonts.sizes) || {};
+    $('#pptStyleSizeH1').val(sizes.h1 ?? '');
+    $('#pptStyleSizeH2').val(sizes.h2 ?? '');
+    $('#pptStyleSizeBody').val(sizes.body ?? '');
+    $('#pptStyleSizeLabel').val(sizes.label ?? '');
+    $('#pptStyleSizeStat').val(sizes.stat ?? '');
+
+    refreshPPTStyleFontSelects();
+    const fonts = dt.fonts || {};
+    if (fonts.title_font_id) $('#pptStyleTitleFont').val(fonts.title_font_id);
+    if (fonts.body_font_id) $('#pptStyleBodyFont').val(fonts.body_font_id);
+    updatePPTStyleFontPreview('title');
+    updatePPTStyleFontPreview('body');
+
+    // 샘플 이미지
+    renderPPTStyleSampleGrid(style.sample_image_refs || []);
+
+    // 패턴 라이브러리 (기본)
+    renderPatternLibrary(style.pattern_library || []);
+
+    // 자동 추출 패턴 (M8.3)
+    renderExtractedPatterns(style.extracted_patterns || []);
+
+    // Structurer 지침
+    $('#pptStyleStructurerPrompt').val(style.structurer_prompt || '');
+
+    // Vision 분석 결과
+    renderPPTStyleVisionResult(style.vision_analysis || null);
+
+    // 헤더
+    $('#pptStyleEditorTitle').text(style.title || '스타일 편집');
+    $('#btnPPTStylePublish').show();
+    updatePPTStylePublishButton(style.is_published);
+    $('#btnPPTStyleDelete').show();
+
+    $('#pptStyleEditorEmpty').hide();
+    $('#pptStyleEditorForm').show();
+}
+
+function updatePPTStylePublishButton(isPublished) {
+    const btn = $('#btnPPTStylePublish');
+    btn.removeClass('btn-publish btn-unpublish');
+    if (isPublished) {
+        btn.addClass('btn-unpublish').text('비공개 전환');
+    } else {
+        btn.addClass('btn-publish').text('공개 전환');
+    }
+}
+
+// ---------- 색상 슬롯 ----------
+function renderPPTStyleColorSlots(colors) {
+    const grid = $('#pptStyleColorGrid');
+    grid.empty();
+    PPT_STYLE_COLOR_SLOTS.forEach(slot => {
+        const hex = (colors[slot.key] || '').toString();
+        const safe = /^#?[0-9a-fA-F]{6}$/.test(hex) ? (hex.startsWith('#') ? hex : '#' + hex) : '';
+        const pickerValue = safe || '#000000';
+        const row = $(`
+            <div class="ppt-style-color-slot" data-key="${slot.key}">
+                <div class="color-label">${escapeHtml(slot.label)}<small>${escapeHtml(slot.desc)} · ${escapeHtml(slot.key)}</small></div>
+                <input type="text" class="ppt-style-color-hex" maxlength="7" placeholder="#RRGGBB" value="${escapeHtml(safe)}">
+                <input type="color" class="ppt-style-color-picker" value="${escapeHtml(pickerValue)}">
+            </div>
+        `);
+        const $hex = row.find('.ppt-style-color-hex');
+        const $picker = row.find('.ppt-style-color-picker');
+
+        // 양방향 동기화
+        $hex.on('input change', function() {
+            let v = ($(this).val() || '').trim();
+            if (v && !v.startsWith('#')) v = '#' + v;
+            if (/^#[0-9a-fA-F]{6}$/.test(v)) {
+                $picker.val(v);
+            }
+        });
+        $picker.on('input change', function() {
+            const v = ($(this).val() || '').toUpperCase();
+            $hex.val(v);
+        });
+        grid.append(row);
+    });
+}
+
+function collectPPTStyleColors() {
+    const out = {};
+    $('#pptStyleColorGrid .ppt-style-color-slot').each(function() {
+        const key = $(this).data('key');
+        let v = ($(this).find('.ppt-style-color-hex').val() || '').trim();
+        if (v && !v.startsWith('#')) v = '#' + v;
+        if (/^#[0-9a-fA-F]{6}$/.test(v)) {
+            out[key] = v.toUpperCase();
+        }
+    });
+    return out;
+}
+
+// ---------- 샘플 이미지 ----------
+function renderPPTStyleSampleGrid(refs) {
+    const grid = $('#pptStyleSampleGrid');
+    grid.empty();
+    if (!refs || refs.length === 0) {
+        grid.html('<div style="grid-column:1/-1;text-align:center;color:#888;font-size:12px;padding:12px;">등록된 샘플 이미지가 없습니다</div>');
+        return;
+    }
+    refs.forEach(r => {
+        const url = r.url || '';
+        const fileId = r.file_id || '';
+        const name = r.original_filename || r.filename || fileId;
+        const card = $(`
+            <div class="ppt-style-sample-card" data-file-id="${escapeHtml(fileId)}">
+                <img src="${escapeHtml(url)}" alt="${escapeHtml(name)}">
+                <div class="sample-filename" title="${escapeHtml(name)}">${escapeHtml(name)}</div>
+                <button class="sample-remove" type="button" title="삭제">×</button>
+            </div>
+        `);
+        card.find('.sample-remove').on('click', () => deletePPTStyleSample(fileId, name));
+        grid.append(card);
+    });
+}
+
+async function handlePPTStyleSampleSelect(event) {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+    await uploadPPTStyleSamples(files);
+    // input 초기화 (같은 파일 재선택 가능)
+    event.target.value = '';
+}
+
+async function uploadPPTStyleSamples(files) {
+    if (!currentPPTStyleId) {
+        await showAlert('알림', '먼저 스타일을 저장하거나 선택해주세요');
+        return;
+    }
+    const fd = new FormData();
+    for (let i = 0; i < files.length; i++) {
+        fd.append('files', files[i]);
+    }
+    try {
+        await apiUpload('/api/admin/ppt-styles/' + currentPPTStyleId + '/samples', fd);
+        showToast('샘플 이미지가 업로드되었습니다', 'success');
+        await reloadCurrentPPTStyle();
+    } catch (e) {
+        showToast('업로드 실패: ' + (e.message || ''), 'error');
+    }
+}
+
+async function deletePPTStyleSample(fileId, name) {
+    if (!currentPPTStyleId || !fileId) return;
+    const ok = await showConfirm('샘플 삭제', `"${name}" 이미지를 삭제하시겠습니까?`, { danger: true, confirmText: '삭제' });
+    if (!ok) return;
+    try {
+        await apiDelete('/api/admin/ppt-styles/' + currentPPTStyleId + '/samples/' + fileId);
+        showToast('샘플이 삭제되었습니다', 'success');
+        await reloadCurrentPPTStyle();
+    } catch (e) {
+        showToast('삭제 실패: ' + (e.message || ''), 'error');
+    }
+}
+
+// 드래그&드롭 핸들러 (탭 진입 후 한 번만 바인딩되도록 가드)
+function _bindPPTStyleDropzone() {
+    if (window.__pptStyleDropzoneBound) return;
+    const $dz = $('#pptStyleSampleDropzone');
+    if (!$dz.length) return;
+    window.__pptStyleDropzoneBound = true;
+    $dz[0].addEventListener('dragover', e => { e.preventDefault(); $dz.addClass('dragover'); });
+    $dz[0].addEventListener('dragleave', e => { $dz.removeClass('dragover'); });
+    $dz[0].addEventListener('drop', async e => {
+        e.preventDefault();
+        $dz.removeClass('dragover');
+        const files = e.dataTransfer && e.dataTransfer.files;
+        if (files && files.length) {
+            await uploadPPTStyleSamples(files);
+        }
+    });
+}
+$(document).ready(() => setTimeout(_bindPPTStyleDropzone, 200));
+
+// ---------- 패턴 라이브러리 ----------
+function renderPatternLibrary(patterns) {
+    const grid = $('#pptStylePatternGrid');
+    grid.empty();
+    // 서버에서 받은 patterns를 id 기준으로 맵핑
+    const byId = {};
+    (patterns || []).forEach(p => { if (p && p.id) byId[p.id] = p; });
+
+    PPT_STYLE_PATTERNS.forEach(meta => {
+        const cur = byId[meta.id] || { id: meta.id, enabled: true, options: {} };
+        const enabled = cur.enabled !== false;
+        const card = $(`
+            <div class="ppt-style-pattern-card ${enabled ? 'enabled' : ''}" data-pattern-id="${escapeHtml(meta.id)}">
+                <label>
+                    <input type="checkbox" class="pattern-enabled" ${enabled ? 'checked' : ''}>
+                    <div>
+                        <div class="pattern-name">${escapeHtml(meta.name)}</div>
+                        <div class="pattern-id">${escapeHtml(meta.id)}</div>
+                    </div>
+                </label>
+            </div>
+        `);
+        card.find('.pattern-enabled').on('change', function() {
+            if ($(this).is(':checked')) card.addClass('enabled');
+            else card.removeClass('enabled');
+        });
+        // 카드 전체 클릭으로도 토글
+        card.on('click', function(e) {
+            if (e.target.tagName === 'INPUT') return;
+            const $chk = card.find('.pattern-enabled');
+            $chk.prop('checked', !$chk.prop('checked')).trigger('change');
+        });
+        grid.append(card);
+    });
+}
+
+function collectPatternLibrary() {
+    const out = [];
+    $('#pptStylePatternGrid .ppt-style-pattern-card').each(function() {
+        const id = $(this).data('pattern-id');
+        const enabled = $(this).find('.pattern-enabled').is(':checked');
+        out.push({ id: id, enabled: enabled, options: {} });
+    });
+    return out;
+}
+
+// ---------- 자동 추출 패턴 (M8.3) ----------
+// 원본 추출 패턴 데이터를 보관 (regions 등 비-DOM 필드 유지용)
+let _extractedPatternsCache = [];
+
+function renderExtractedPatterns(patterns) {
+    _extractedPatternsCache = Array.isArray(patterns) ? patterns.slice() : [];
+    const grid = $('#pptStyleExtractedPatternsGrid');
+    const empty = $('#pptStyleExtractedPatternsEmpty');
+    const heading = $('#pptStyleExtractedPatternsHeading');
+    grid.empty();
+
+    const n = _extractedPatternsCache.length;
+    heading.text(`샘플에서 추출된 패턴 (${n}개)`);
+
+    if (n === 0) {
+        grid.hide();
+        empty.show();
+        return;
+    }
+    empty.hide();
+    grid.show();
+
+    _extractedPatternsCache.forEach((p, idx) => {
+        if (!p || !p.id) return;
+        const enabled = p.enabled !== false; // 명시되지 않으면 true
+        const label = p.label || '(이름 없음)';
+        const sourceIdx = (typeof p.source_sample_index === 'number') ? p.source_sample_index : null;
+        const sourceChip = (sourceIdx !== null)
+            ? `<span class="ppt-style-extracted-pattern-source-chip" title="샘플 인덱스">샘플 #${sourceIdx + 1}</span>`
+            : '';
+        const keywords = Array.isArray(p.visual_keywords) ? p.visual_keywords : [];
+        const keywordsHtml = keywords.map(kw =>
+            `<span class="ppt-style-extracted-pattern-keyword-chip">${escapeHtml(String(kw))}</span>`
+        ).join('');
+        const suitableArr = Array.isArray(p.suitable_for_outline_types) ? p.suitable_for_outline_types : [];
+        const suitableHtml = suitableArr.length
+            ? `적합 outline: ${escapeHtml(suitableArr.join(', '))}`
+            : '적합 outline: (미지정)';
+        const cardCount = (typeof p.card_count === 'number') ? p.card_count : '?';
+
+        const card = $(`
+            <div class="ppt-style-extracted-pattern-card ${enabled ? '' : 'disabled'}" data-pattern-id="${escapeHtml(p.id)}" data-idx="${idx}">
+                <label>
+                    <input type="checkbox" class="extracted-pattern-enabled" ${enabled ? 'checked' : ''}>
+                    <div class="ppt-style-extracted-pattern-card-body">
+                        <div class="ppt-style-extracted-pattern-card-label">${escapeHtml(label)}</div>
+                        <div class="ppt-style-extracted-pattern-card-chips">
+                            ${sourceChip}
+                            ${keywordsHtml}
+                        </div>
+                        <div class="ppt-style-extracted-pattern-card-meta">${suitableHtml}</div>
+                        <div class="ppt-style-extracted-pattern-card-meta">카드 수: ${escapeHtml(String(cardCount))}</div>
+                        <div class="ppt-style-extracted-pattern-card-meta ppt-style-extracted-pattern-card-id">id: ${escapeHtml(p.id)}</div>
+                    </div>
+                </label>
+            </div>
+        `);
+
+        card.find('.extracted-pattern-enabled').on('change', function(e) {
+            e.stopPropagation();
+            if ($(this).is(':checked')) card.removeClass('disabled');
+            else card.addClass('disabled');
+        });
+        // 카드 영역 클릭으로도 토글 (체크박스 직접 클릭은 기본 동작 유지)
+        card.on('click', function(e) {
+            if (e.target.tagName === 'INPUT') return;
+            const $chk = card.find('.extracted-pattern-enabled');
+            $chk.prop('checked', !$chk.prop('checked')).trigger('change');
+        });
+        grid.append(card);
+    });
+}
+
+function toggleExtractedPattern(patternId) {
+    const $card = $(`#pptStyleExtractedPatternsGrid .ppt-style-extracted-pattern-card[data-pattern-id="${$.escapeSelector(patternId)}"]`);
+    if (!$card.length) return;
+    const $chk = $card.find('.extracted-pattern-enabled');
+    $chk.prop('checked', !$chk.prop('checked')).trigger('change');
+}
+
+function collectExtractedPatterns() {
+    // DOM의 enabled 상태를 캐시된 원본 패턴에 머지하여 반환 (regions 등 보존)
+    const stateById = {};
+    $('#pptStyleExtractedPatternsGrid .ppt-style-extracted-pattern-card').each(function() {
+        const id = $(this).data('pattern-id');
+        const enabled = $(this).find('.extracted-pattern-enabled').is(':checked');
+        if (id) stateById[id] = enabled;
+    });
+    return (_extractedPatternsCache || []).map(p => {
+        if (!p || !p.id) return p;
+        const merged = Object.assign({}, p);
+        if (Object.prototype.hasOwnProperty.call(stateById, p.id)) {
+            merged.enabled = stateById[p.id];
+        } else if (typeof merged.enabled === 'undefined') {
+            merged.enabled = true;
+        }
+        return merged;
+    });
+}
+
+// ---------- Vision 결과 ----------
+function renderPPTStyleVisionResult(vision) {
+    if (!vision || (!vision.extracted_colors && !vision.detected_fonts && !vision.layout_hints)) {
+        $('#pptStyleVisionResult').hide();
+        return;
+    }
+    $('#pptStyleVisionResult').show();
+
+    const $colors = $('#pptStyleVisionColors').empty();
+    (vision.extracted_colors || []).forEach(hex => {
+        const safe = (hex || '').toString();
+        const chip = `<span class="color-chip"><span class="swatch" style="background:${escapeHtml(safe)};"></span>${escapeHtml(safe)}</span>`;
+        $colors.append(chip);
+    });
+
+    const $fonts = $('#pptStyleVisionFonts').empty();
+    (vision.detected_fonts || []).forEach(f => {
+        const s = (typeof f === 'string') ? f : (f.name || f.family || JSON.stringify(f));
+        $fonts.append(`<span>${escapeHtml(s)}</span>`);
+    });
+
+    const $layout = $('#pptStyleVisionLayout').empty();
+    (vision.layout_hints || []).forEach(h => {
+        const s = (typeof h === 'string') ? h : JSON.stringify(h);
+        $layout.append(`<span>${escapeHtml(s)}</span>`);
+    });
+}
+
+// ---------- 폼 데이터 수집 + 저장 ----------
+function collectFormData() {
+    const titleFontId = $('#pptStyleTitleFont').val() || null;
+    const bodyFontId = $('#pptStyleBodyFont').val() || null;
+    const sizes = {};
+    const numH1 = parseInt($('#pptStyleSizeH1').val(), 10);
+    const numH2 = parseInt($('#pptStyleSizeH2').val(), 10);
+    const numBody = parseInt($('#pptStyleSizeBody').val(), 10);
+    const numLabel = parseInt($('#pptStyleSizeLabel').val(), 10);
+    const numStat = parseInt($('#pptStyleSizeStat').val(), 10);
+    if (!isNaN(numH1)) sizes.h1 = numH1;
+    if (!isNaN(numH2)) sizes.h2 = numH2;
+    if (!isNaN(numBody)) sizes.body = numBody;
+    if (!isNaN(numLabel)) sizes.label = numLabel;
+    if (!isNaN(numStat)) sizes.stat = numStat;
+
+    const fontRefs = [];
+    if (titleFontId) fontRefs.push(titleFontId);
+    if (bodyFontId && bodyFontId !== titleFontId) fontRefs.push(bodyFontId);
+
+    return {
+        title: ($('#pptStyleTitle').val() || '').trim(),
+        description: ($('#pptStyleDescription').val() || '').trim(),
+        lang: $('#pptStyleLang').val() || 'ko',
+        design_tokens: {
+            colors: collectPPTStyleColors(),
+            fonts: {
+                title_font_id: titleFontId,
+                body_font_id: bodyFontId,
+                sizes: sizes,
+            },
+        },
+        font_refs: fontRefs,
+        pattern_library: collectPatternLibrary(),
+        extracted_patterns: collectExtractedPatterns(),
+        structurer_prompt: $('#pptStyleStructurerPrompt').val() || '',
+    };
+}
+
+async function savePPTStyle() {
+    if (!currentPPTStyleId) {
+        await showAlert('알림', '먼저 새 스타일을 생성해주세요');
+        return;
+    }
+    const data = collectFormData();
+    if (!data.title) {
+        showToast('스타일 제목을 입력하세요', 'error');
+        return;
+    }
+    try {
+        const res = await apiPut('/api/admin/ppt-styles/' + currentPPTStyleId, data);
+        const style = res.style || res;
+        showToast('저장되었습니다', 'success');
+        await loadPPTStyles();
+        await showPPTStyleEditor(style);
+    } catch (e) {
+        showToast('저장 실패: ' + (e.message || ''), 'error');
+    }
+}
+
+async function deletePPTStyle() {
+    if (!currentPPTStyleId) return;
+    const cur = pptStylesList.find(s => s._id === currentPPTStyleId);
+    const title = cur ? cur.title : '이 스타일';
+    const ok = await showConfirm('스타일 삭제', `"${title}" 스타일을 삭제하시겠습니까?\n샘플 이미지도 함께 삭제됩니다.`, { danger: true, confirmText: '삭제' });
+    if (!ok) return;
+    try {
+        await apiDelete('/api/admin/ppt-styles/' + currentPPTStyleId);
+        currentPPTStyleId = null;
+        showToast('스타일이 삭제되었습니다', 'success');
+        $('#pptStyleEditorForm').hide();
+        $('#pptStyleEditorEmpty').show();
+        await loadPPTStyles();
+    } catch (e) {
+        showToast('삭제 실패: ' + (e.message || ''), 'error');
+    }
+}
+
+async function togglePPTStylePublish() {
+    if (!currentPPTStyleId) return;
+    try {
+        const res = await apiPut('/api/admin/ppt-styles/' + currentPPTStyleId + '/publish', {});
+        updatePPTStylePublishButton(res.is_published);
+        showToast(res.is_published ? '공개로 전환되었습니다' : '비공개로 전환되었습니다', 'success');
+        await loadPPTStyles();
+    } catch (e) {
+        showToast('공개 상태 변경 실패: ' + (e.message || ''), 'error');
+    }
+}
+
+// ---------- 자동 분석 ----------
+async function autoAnalyzePPTStyle() {
+    if (!currentPPTStyleId) {
+        await showAlert('알림', '먼저 스타일을 저장하거나 선택해주세요');
+        return;
+    }
+    // 현재 편집기에 표시된 샘플이 0장이면 안내 후 중단
+    const sampleCount = $('#pptStyleSampleGrid .ppt-style-sample-card').length;
+    if (sampleCount === 0) {
+        await showAlert('샘플 이미지 없음', '먼저 샘플 이미지를 1장 이상 업로드해주세요');
+        return;
+    }
+    const $btn = $('#btnPPTStyleAnalyze');
+    $btn.prop('disabled', true);
+    $('#pptStyleAnalyzeIcon').html('<span class="ppt-style-spinner"></span>');
+    $('#pptStyleAnalyzeLabel').text('분석 중...');
+    try {
+        const res = await apiPost('/api/admin/ppt-styles/' + currentPPTStyleId + '/analyze', {});
+        // 응답 형식 (M8.3): { style, vision_analysis, extracted_patterns, total_patterns_extracted }
+        // 하위 호환: style 만 / vision_analysis 만 오는 경우도 지원
+        let vision = null;
+        let style = null;
+        let extracted = null;
+        let totalExtracted = null;
+        if (res && res.style) {
+            style = res.style;
+            vision = res.vision_analysis || style.vision_analysis || null;
+            extracted = (typeof res.extracted_patterns !== 'undefined')
+                ? res.extracted_patterns
+                : (style.extracted_patterns || null);
+            totalExtracted = (typeof res.total_patterns_extracted === 'number')
+                ? res.total_patterns_extracted
+                : (Array.isArray(extracted) ? extracted.length : null);
+        } else if (res && (res.vision_analysis || res.extracted_patterns)) {
+            vision = res.vision_analysis || null;
+            extracted = res.extracted_patterns || null;
+            totalExtracted = (typeof res.total_patterns_extracted === 'number')
+                ? res.total_patterns_extracted
+                : (Array.isArray(extracted) ? extracted.length : null);
+        } else {
+            vision = res || null;
+        }
+
+        renderPPTStyleVisionResult(vision);
+        if (Array.isArray(extracted)) {
+            renderExtractedPatterns(extracted);
+        }
+
+        // 서버가 design_tokens 빈 슬롯/extracted_patterns 를 채웠을 수 있으므로 항상 reload
+        await reloadCurrentPPTStyle();
+
+        const n = (typeof totalExtracted === 'number') ? totalExtracted : (_extractedPatternsCache.length || 0);
+        showToast(`색상/폰트 분석 완료, 패턴 ${n}개 추출됨`, 'success');
+    } catch (e) {
+        showToast('분석 실패: ' + (e.message || ''), 'error');
+    } finally {
+        $btn.prop('disabled', false);
+        $('#pptStyleAnalyzeIcon').text('🔮');
+        $('#pptStyleAnalyzeLabel').text('샘플 이미지 자동 분석');
+    }
+}
+
+// ---------- 폰트 첨부 (font_refs 등록) ----------
+async function attachFonts() {
+    if (!currentPPTStyleId) return;
+    const titleFontId = $('#pptStyleTitleFont').val() || null;
+    const bodyFontId = $('#pptStyleBodyFont').val() || null;
+    const fontIds = [];
+    if (titleFontId) fontIds.push(titleFontId);
+    if (bodyFontId && bodyFontId !== titleFontId) fontIds.push(bodyFontId);
+    try {
+        await apiPost('/api/admin/ppt-styles/' + currentPPTStyleId + '/fonts', { font_ids: fontIds });
+    } catch (e) {
+        // 저장과 별개로 동작 (조용히 실패)
+        console.warn('font attach failed', e);
+    }
+}
+
+// ---------- 현재 스타일 재조회 (편집기 reload) ----------
+async function reloadCurrentPPTStyle() {
+    if (!currentPPTStyleId) return;
+    try {
+        const res = await apiGet('/api/admin/ppt-styles/' + currentPPTStyleId);
+        const style = res.style || res;
+        await showPPTStyleEditor(style);
+    } catch (e) {
+        showToast('재조회 실패: ' + (e.message || ''), 'error');
     }
 }

@@ -1,17 +1,19 @@
 """
-Google Gemini 기반 인포그래픽 슬라이드 이미지 생성 서비스
+인포그래픽 슬라이드 이미지 생성 서비스
 
-google-genai SDK와 gemini-3.1-flash-image-preview 모델을 사용하여
-각 슬라이드 아웃라인 기반 인포그래픽 이미지를 생성합니다.
+.env `IMAGE_PROVIDER` 값에 따라 Google Gemini(nanobanana) 또는
+OpenAI(gpt-image-2) 이미지 API를 호출합니다.
 """
 
+import io
 import uuid
+import base64
 import mimetypes
 import asyncio
 from pathlib import Path
 from google import genai
 from google.genai import types
-from config import settings, google_key_rotator
+from config import settings, google_key_rotator, openai_key_rotator
 from routers.prompt import get_prompt_content
 
 
@@ -21,6 +23,22 @@ INFOGRAPHIC_DIR.mkdir(parents=True, exist_ok=True)
 
 # Gemini 클라이언트 (키별 캐시)
 _clients = {}
+# OpenAI 클라이언트 (키별 캐시)
+_openai_clients = {}
+
+
+def _image_provider() -> str:
+    """현재 이미지 생성 프로바이더 (google | openai)"""
+    return (settings.IMAGE_PROVIDER or "google").strip().lower()
+
+
+def _image_provider_available() -> bool:
+    """현재 선택된 프로바이더의 API 키가 설정되어 있는지 확인"""
+    provider = _image_provider()
+    if provider == "openai":
+        return bool(settings.OPENAI_API_KEYS)
+    return bool(settings.GOOGLE_API_KEYS)
+
 
 def _get_client():
     """라운드 로빈으로 Google API 키를 선택하여 클라이언트 반환"""
@@ -28,6 +46,72 @@ def _get_client():
     if api_key not in _clients:
         _clients[api_key] = genai.Client(api_key=api_key)
     return _clients[api_key]
+
+
+def _get_openai_client():
+    """라운드 로빈으로 OpenAI API 키를 선택하여 AsyncOpenAI 클라이언트 반환"""
+    from openai import AsyncOpenAI
+    api_key = openai_key_rotator.next()
+    if api_key not in _openai_clients:
+        _openai_clients[api_key] = AsyncOpenAI(api_key=api_key)
+    return _openai_clients[api_key]
+
+
+def _pad_to_16x9(image_bytes: bytes) -> bytes:
+    """
+    이미지를 16:9 비율로 letterbox 패딩한다.
+    OpenAI gpt-image는 1536x1024(3:2) 등 16:9가 아닌 landscape만 지원하므로,
+    슬라이드 캔버스(16:9)에서 잘리지 않도록 가장자리 색으로 좌우(또는 상하)에 여백을 덧댄다.
+
+    이미 16:9(오차 1% 이내)이거나 열기 실패 시 원본을 그대로 돌려준다.
+    """
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    except Exception as e:
+        print(f"[Infographic] 이미지 열기 실패 (패딩 스킵): {e}")
+        return image_bytes
+
+    w, h = img.size
+    target_ratio = 16 / 9
+    current_ratio = w / h
+    if abs(current_ratio - target_ratio) / target_ratio < 0.01:
+        return image_bytes
+
+    if current_ratio < target_ratio:
+        # 가로가 부족 → 좌우에 패딩 (왼쪽 열/오른쪽 열 색으로 채움)
+        new_w = int(round(h * target_ratio))
+        pad_total = new_w - w
+        pad_left = pad_total // 2
+        pad_right = pad_total - pad_left
+
+        left_col = img.crop((0, 0, 1, h)).resize((pad_left, h))
+        right_col = img.crop((w - 1, 0, w, h)).resize((pad_right, h))
+
+        canvas = Image.new("RGB", (new_w, h))
+        canvas.paste(left_col, (0, 0))
+        canvas.paste(img, (pad_left, 0))
+        canvas.paste(right_col, (pad_left + w, 0))
+    else:
+        # 세로가 부족 → 상하에 패딩
+        new_h = int(round(w / target_ratio))
+        pad_total = new_h - h
+        pad_top = pad_total // 2
+        pad_bottom = pad_total - pad_top
+
+        top_row = img.crop((0, 0, w, 1)).resize((w, pad_top))
+        bottom_row = img.crop((0, h - 1, w, h)).resize((w, pad_bottom))
+
+        canvas = Image.new("RGB", (w, new_h))
+        canvas.paste(top_row, (0, 0))
+        canvas.paste(img, (0, pad_top))
+        canvas.paste(bottom_row, (0, pad_top + h))
+
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG", optimize=True)
+    out = buf.getvalue()
+    print(f"[Infographic] 16:9 패딩 적용: {w}x{h} → {canvas.size[0]}x{canvas.size[1]}")
+    return out
 
 
 async def generate_infographic_image(
@@ -48,8 +132,8 @@ async def generate_infographic_image(
     Returns:
         (생성된 이미지의 URL 경로, 원본 이미지 바이트) 튜플. 실패 시 (None, None)
     """
-    if not settings.GOOGLE_API_KEYS:
-        print("[Infographic] GOOGLE_API_KEY가 설정되지 않았습니다.")
+    if not _image_provider_available():
+        print(f"[Infographic] IMAGE_PROVIDER={_image_provider()} API 키가 설정되지 않았습니다.")
         return None, None
 
     prompt = await _build_image_prompt(
@@ -60,10 +144,10 @@ async def generate_infographic_image(
         has_reference=reference_image is not None,
     )
 
-    print(f"[Infographic] 슬라이드 이미지 생성 요청 (참조이미지: {'있음' if reference_image else '없음'})")
+    print(f"[Infographic] 슬라이드 이미지 생성 요청 (provider={_image_provider()}, 참조이미지: {'있음' if reference_image else '없음'})")
 
     try:
-        image_bytes, file_ext = await _call_gemini_image_api(prompt, reference_image=reference_image)
+        image_bytes, file_ext = await _call_image_api(prompt, reference_image=reference_image)
         if not image_bytes:
             return None, None
 
@@ -232,6 +316,89 @@ async def _call_gemini_image_api(prompt: str, reference_image: bytes | None = No
     return result
 
 
+async def _call_openai_image_api(prompt: str, reference_image: bytes | None = None) -> tuple[bytes | None, str | None]:
+    """
+    OpenAI Image API (AsyncOpenAI SDK)를 호출하여 이미지를 생성합니다.
+    .env `OPENAI_IMAGE_MODEL` 값의 모델(gpt-image-2 등)을 사용합니다.
+
+    Args:
+        prompt: 이미지 생성 프롬프트
+        reference_image: 스타일 참조용 이미지 바이트 (있을 경우 images.edit 사용)
+
+    Returns:
+        (image_bytes, file_extension) 또는 (None, None)
+    """
+    client = _get_openai_client()
+    model = settings.OPENAI_IMAGE_MODEL
+    size = settings.OPENAI_IMAGE_SIZE
+    quality = settings.OPENAI_IMAGE_QUALITY
+
+    try:
+        if reference_image:
+            # 참조 이미지가 있으면 edit 엔드포인트 사용
+            img_file = io.BytesIO(reference_image)
+            img_file.name = "reference.png"
+            response = await client.images.edit(
+                model=model,
+                image=img_file,
+                prompt=prompt,
+                size=size,
+                quality=quality,
+                n=1,
+            )
+        else:
+            response = await client.images.generate(
+                model=model,
+                prompt=prompt,
+                size=size,
+                quality=quality,
+                n=1,
+            )
+    except Exception as e:
+        print(f"[Infographic] OpenAI 이미지 API 호출 실패: {e}")
+        return None, None
+
+    if not response.data:
+        print("[Infographic] OpenAI API 응답에 이미지 데이터가 없습니다.")
+        return None, None
+
+    item = response.data[0]
+    b64 = getattr(item, "b64_json", None)
+    if b64:
+        image_bytes = base64.b64decode(b64)
+    else:
+        url = getattr(item, "url", None)
+        if not url:
+            print("[Infographic] OpenAI 응답에 b64_json/url 모두 없음")
+            return None, None
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=60.0) as hx:
+                r = await hx.get(url)
+                r.raise_for_status()
+                image_bytes = r.content
+        except Exception as e:
+            print(f"[Infographic] OpenAI 이미지 URL 다운로드 실패: {e}")
+            return None, None
+
+    print(f"[Infographic] OpenAI 이미지 데이터 수신: {len(image_bytes)} bytes")
+
+    # 슬라이드 캔버스(16:9)에서 잘리지 않도록 letterbox 패딩
+    image_bytes = _pad_to_16x9(image_bytes)
+    return image_bytes, ".png"
+
+
+async def _call_image_api(prompt: str, reference_image: bytes | None = None) -> tuple[bytes | None, str | None]:
+    """
+    .env `IMAGE_PROVIDER` 값에 따라 Google Gemini 또는 OpenAI 이미지 API를 호출하는 디스패처.
+
+    Returns:
+        (image_bytes, file_extension) 또는 (None, None)
+    """
+    provider = _image_provider()
+    if provider == "openai":
+        return await _call_openai_image_api(prompt, reference_image=reference_image)
+    return await _call_gemini_image_api(prompt, reference_image=reference_image)
 
 
 def _build_slide_content_text(slide: dict) -> str:
@@ -412,17 +579,17 @@ async def generate_infographic_batch(
 async def fix_slide_text_image(image_bytes: bytes) -> tuple[str | None, bytes | None]:
     """
     기존 슬라이드 이미지의 깨진 텍스트를 수정하여 재생성합니다.
-    원본 이미지를 Gemini에 보내 동일 디자인 + 수정된 텍스트로 재생성.
+    원본 이미지를 이미지 프로바이더에 보내 동일 디자인 + 수정된 텍스트로 재생성.
     """
-    if not settings.GOOGLE_API_KEYS:
+    if not _image_provider_available():
         return None, None
 
     prompt = await get_prompt_content("fix_slide_text")
 
-    print(f"[FixText] 텍스트 수정 이미지 재생성 시작")
+    print(f"[FixText] 텍스트 수정 이미지 재생성 시작 (provider={_image_provider()})")
 
     try:
-        new_image_bytes, file_ext = await _call_gemini_image_api(
+        new_image_bytes, file_ext = await _call_image_api(
             prompt, reference_image=image_bytes,
         )
         if not new_image_bytes:
@@ -445,18 +612,18 @@ async def fix_slide_text_image(image_bytes: bytes) -> tuple[str | None, bytes | 
 async def edit_slide_image(image_bytes: bytes, instruction: str) -> tuple[str | None, bytes | None]:
     """
     사용자 지침에 따라 인포그래픽 슬라이드 이미지를 수정하여 재생성합니다.
-    원본 이미지 + 사용자 지침을 Gemini에 보내 수정된 이미지를 생성.
+    원본 이미지 + 사용자 지침을 이미지 프로바이더에 보내 수정된 이미지를 생성.
     """
-    if not settings.GOOGLE_API_KEYS:
+    if not _image_provider_available():
         return None, None
 
     prompt_template = await get_prompt_content("edit_slide_image")
     prompt = prompt_template.format(instruction=instruction)
 
-    print(f"[EditSlide] 슬라이드 이미지 수정 요청: {instruction[:80]}...")
+    print(f"[EditSlide] 슬라이드 이미지 수정 요청 (provider={_image_provider()}): {instruction[:80]}...")
 
     try:
-        new_image_bytes, file_ext = await _call_gemini_image_api(
+        new_image_bytes, file_ext = await _call_image_api(
             prompt, reference_image=image_bytes,
         )
         if not new_image_bytes:
@@ -486,7 +653,7 @@ async def generate_bg_image(
     배경 이미지만 생성 (텍스트 없이 추상적/테마 배경).
     AI 슬라이드 모드에서 사용.
     """
-    if not settings.GOOGLE_API_KEYS:
+    if not _image_provider_available():
         return None, None
 
     prompt_template = await get_prompt_content("ai_slide_bg_image")
@@ -507,10 +674,10 @@ async def generate_bg_image(
             "Only change the specific visual elements described above."
         )
 
-    print(f"[AI Slide BG] 배경 이미지 생성: {bg_prompt[:80]}...")
+    print(f"[AI Slide BG] 배경 이미지 생성 (provider={_image_provider()}): {bg_prompt[:80]}...")
 
     try:
-        image_bytes, file_ext = await _call_gemini_image_api(prompt, reference_image=reference_image)
+        image_bytes, file_ext = await _call_image_api(prompt, reference_image=reference_image)
         if not image_bytes:
             return None, None
 
@@ -541,8 +708,8 @@ async def generate_summary_infographic(
     Returns:
         (이미지 URL, 이미지 bytes) 또는 (None, None)
     """
-    if not settings.GOOGLE_API_KEYS:
-        print("[SummaryInfographic] GOOGLE_API_KEY가 설정되지 않았습니다.")
+    if not _image_provider_available():
+        print(f"[SummaryInfographic] IMAGE_PROVIDER={_image_provider()} API 키가 설정되지 않았습니다.")
         return None, None
 
     title = summary_data.get("title", "Summary")
@@ -639,10 +806,10 @@ VISUAL vs TEXT RATIO — STRICTLY FOLLOW:
         ratio_instruction += "\n- Almost ALL GRAPHICS. Minimal text — only short labels, numbers. Visual storytelling."
     prompt += "\n" + ratio_instruction
 
-    print(f"[SummaryInfographic] 한장 요약 인포그래픽 이미지 생성 요청")
+    print(f"[SummaryInfographic] 한장 요약 인포그래픽 이미지 생성 요청 (provider={_image_provider()})")
 
     try:
-        image_bytes, file_ext = await _call_gemini_image_api(prompt)
+        image_bytes, file_ext = await _call_image_api(prompt)
         if not image_bytes:
             return None, None
 

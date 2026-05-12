@@ -67,6 +67,103 @@ body {
 }
 .font-badge.web { background: #d4edda; color: #155724; }
 .font-badge.system { background: #e9ecef; color: #6c757d; }
+.font-badge.uploaded { background: #cfe2ff; color: #084298; }
+
+/* 폰트 목록 썸네일 */
+.font-list-item .font-preview-thumb {
+    height: 32px;
+    max-width: 160px;
+    object-fit: contain;
+    background: #fff;
+    border: 1px solid #eee;
+    border-radius: 4px;
+    margin-right: 10px;
+    display: inline-block;
+    vertical-align: middle;
+}
+.font-list-item .font-preview-placeholder {
+    display: inline-block;
+    width: 80px;
+    height: 32px;
+    background: #f1f3f5;
+    border: 1px dashed #dee2e6;
+    border-radius: 4px;
+    margin-right: 10px;
+    font-size: 10px;
+    color: #adb5bd;
+    text-align: center;
+    line-height: 32px;
+    vertical-align: middle;
+}
+.font-list-item .font-info-block {
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+}
+.font-list-item .font-text-block {
+    flex: 1;
+    min-width: 0;
+}
+
+/* 폰트 모달 탭 */
+.font-tab-bar {
+    display: flex;
+    border-bottom: 1px solid #e5e7eb;
+    margin-bottom: 14px;
+}
+.font-tab-btn {
+    background: transparent;
+    border: none;
+    padding: 8px 16px;
+    font-size: 13px;
+    color: #6b7280;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+}
+.font-tab-btn.active {
+    color: #2563eb;
+    border-bottom-color: #2563eb;
+    font-weight: 600;
+}
+.font-tab-btn:hover { color: #2563eb; }
+
+/* 폰트 드래그앤드롭 */
+.font-dropzone {
+    border: 2px dashed #cbd5e1;
+    border-radius: 8px;
+    padding: 22px 16px;
+    text-align: center;
+    cursor: pointer;
+    background: #f8fafc;
+    transition: background 0.15s, border-color 0.15s;
+}
+.font-dropzone:hover {
+    border-color: #2563eb;
+    background: #eff6ff;
+}
+.font-dropzone.dragover {
+    border-color: #2563eb;
+    background: #dbeafe;
+}
+
+/* PPT 스타일 편집기 — 폰트 미리보기 */
+.ppt-style-font-preview {
+    margin-top: 6px;
+    padding: 6px 8px;
+    background: #f8fafc;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+}
+.ppt-style-font-preview img {
+    max-height: 28px;
+    max-width: 100%;
+    object-fit: contain;
+}
 
 .prompt-list-item {
     display: flex;
@@ -2340,4 +2437,463 @@ button.mixed {
     border: 1px solid #fecaca;
     font-size: 13px;
     color: #dc2626;
+}
+
+/* ============ PPT 스타일 편집기 ============ */
+.ppt-style-editor-wrapper {
+    flex: 1;
+    overflow-y: auto;
+    background: #f7f8fa;
+    padding: 0;
+}
+.ppt-style-editor-empty {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.ppt-style-editor-form {
+    padding: 16px 24px 80px;
+    max-width: 980px;
+    margin: 0 auto;
+}
+.ppt-style-section {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+}
+.ppt-style-section > legend {
+    font-size: 13px;
+    font-weight: 700;
+    color: #1e3a5f;
+    padding: 2px 10px;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+}
+.ppt-style-subheading {
+    font-size: 12px;
+    font-weight: 700;
+    color: #444;
+    margin: 14px 0 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* 색상 슬롯 7개 */
+.ppt-style-color-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+}
+.ppt-style-color-slot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: #fafafa;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+}
+.ppt-style-color-slot .color-label {
+    flex-shrink: 0;
+    min-width: 78px;
+    font-size: 12px;
+    color: #444;
+    font-weight: 600;
+}
+.ppt-style-color-slot .color-label small {
+    display: block;
+    font-size: 10px;
+    color: #999;
+    font-weight: 400;
+    margin-top: 1px;
+}
+.ppt-style-color-slot input[type="text"] {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 8px;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: 'Consolas', monospace;
+    text-transform: uppercase;
+}
+.ppt-style-color-slot input[type="color"] {
+    flex-shrink: 0;
+    width: 32px;
+    height: 28px;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    padding: 0;
+    cursor: pointer;
+    background: #fff;
+}
+
+/* 사이즈 그리드 (2~3열) */
+.ppt-style-size-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+}
+
+/* 샘플 이미지 영역 */
+.ppt-style-sample-dropzone {
+    border: 2px dashed #c1c7d0;
+    border-radius: 10px;
+    padding: 24px 16px;
+    text-align: center;
+    background: #fafafa;
+    transition: all 0.15s;
+    margin-bottom: 14px;
+}
+.ppt-style-sample-dropzone.dragover {
+    border-color: #2d5a8e;
+    background: #eff6ff;
+}
+.ppt-style-sample-dropzone p {
+    color: #888;
+    font-size: 13px;
+    margin-bottom: 10px;
+}
+.ppt-style-sample-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 10px;
+}
+.ppt-style-sample-card {
+    position: relative;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    overflow: hidden;
+    aspect-ratio: 4 / 3;
+    display: flex;
+    flex-direction: column;
+}
+.ppt-style-sample-card img {
+    width: 100%;
+    height: 70%;
+    object-fit: cover;
+    background: #f0f0f0;
+}
+.ppt-style-sample-card .sample-filename {
+    flex: 1;
+    padding: 4px 6px;
+    font-size: 10px;
+    color: #555;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    background: #fff;
+}
+.ppt-style-sample-card .sample-remove {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 20px;
+    height: 20px;
+    background: rgba(0,0,0,0.6);
+    color: #fff;
+    border: none;
+    border-radius: 50%;
+    font-size: 12px;
+    cursor: pointer;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.ppt-style-sample-card .sample-remove:hover {
+    background: #dc2626;
+}
+
+/* 패턴 라이브러리 그리드 (4열) */
+.ppt-style-pattern-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px;
+}
+.ppt-style-pattern-card {
+    position: relative;
+    padding: 12px;
+    background: #fafafa;
+    border: 1.5px solid #e5e7eb;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.ppt-style-pattern-card:hover {
+    border-color: #2d5a8e;
+}
+.ppt-style-pattern-card.enabled {
+    background: #eff6ff;
+    border-color: #2d5a8e;
+}
+.ppt-style-pattern-card label {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 13px;
+}
+.ppt-style-pattern-card input[type="checkbox"] {
+    margin-top: 2px;
+    flex-shrink: 0;
+}
+.ppt-style-pattern-card .pattern-name {
+    font-weight: 600;
+    color: #1e3a5f;
+    margin-bottom: 2px;
+}
+.ppt-style-pattern-card .pattern-id {
+    font-size: 11px;
+    color: #888;
+    font-family: 'Consolas', monospace;
+}
+
+/* 자동 추출 패턴 그리드 (M8.3) */
+.ppt-style-extracted-patterns-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 10px;
+    margin-top: 6px;
+}
+.ppt-style-extracted-patterns-empty {
+    margin-top: 8px;
+    padding: 14px 16px;
+    background: #fdf4ff;
+    border: 1px dashed #d8b4fe;
+    border-radius: 8px;
+    color: #6b21a8;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.ppt-style-extracted-pattern-card {
+    position: relative;
+    padding: 12px;
+    background: #faf5ff;
+    border: 1.5px solid #e9d5ff;
+    border-left: 4px solid #a855f7;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.ppt-style-extracted-pattern-card:hover {
+    border-color: #a855f7;
+    box-shadow: 0 2px 6px rgba(168, 85, 247, 0.15);
+}
+.ppt-style-extracted-pattern-card.disabled {
+    background: #f5f5f5;
+    border-color: #d4d4d4;
+    border-left-color: #a3a3a3;
+    opacity: 0.65;
+}
+.ppt-style-extracted-pattern-card label {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    margin: 0;
+}
+.ppt-style-extracted-pattern-card input[type="checkbox"] {
+    margin-top: 3px;
+    flex-shrink: 0;
+}
+.ppt-style-extracted-pattern-card-body {
+    flex: 1;
+    min-width: 0;
+}
+.ppt-style-extracted-pattern-card-label {
+    font-weight: 600;
+    color: #581c87;
+    font-size: 13px;
+    margin-bottom: 6px;
+    word-break: keep-all;
+    line-height: 1.4;
+}
+.ppt-style-extracted-pattern-card.disabled .ppt-style-extracted-pattern-card-label {
+    color: #525252;
+}
+.ppt-style-extracted-pattern-card-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+.ppt-style-extracted-pattern-keyword-chip {
+    display: inline-block;
+    padding: 2px 7px;
+    background: #f3e8ff;
+    color: #6b21a8;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 500;
+}
+.ppt-style-extracted-pattern-source-chip {
+    display: inline-block;
+    padding: 2px 7px;
+    background: #ede9fe;
+    color: #4c1d95;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+}
+.ppt-style-extracted-pattern-card.disabled .ppt-style-extracted-pattern-keyword-chip,
+.ppt-style-extracted-pattern-card.disabled .ppt-style-extracted-pattern-source-chip {
+    background: #e5e5e5;
+    color: #525252;
+}
+.ppt-style-extracted-pattern-card-meta {
+    font-size: 11px;
+    color: #6b7280;
+    margin-top: 2px;
+    line-height: 1.4;
+}
+.ppt-style-extracted-pattern-card-id {
+    font-family: 'Consolas', monospace;
+    color: #9ca3af;
+}
+
+/* Vision 결과 */
+.ppt-style-vision-colors {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+.ppt-style-vision-colors .color-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 999px;
+    font-size: 12px;
+    font-family: 'Consolas', monospace;
+}
+.ppt-style-vision-colors .color-chip .swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1px solid rgba(0,0,0,0.1);
+}
+.ppt-style-vision-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 12px;
+    color: #444;
+    margin-bottom: 8px;
+}
+.ppt-style-vision-list span {
+    padding: 3px 8px;
+    background: #f1f5f9;
+    border-radius: 6px;
+}
+
+/* 분석 중 버튼 스피너 */
+#btnPPTStyleAnalyze:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+.ppt-style-spinner {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border: 2px solid #fff;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: ppt-style-spin 0.6s linear infinite;
+    vertical-align: middle;
+    margin-right: 4px;
+}
+@keyframes ppt-style-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ============ 범용 다이얼로그 (showAlert/showConfirm/showPrompt) ============ */
+.dialog-card {
+    background: #fff;
+    border-radius: 14px;
+    padding: 26px;
+    max-width: 380px;
+    width: 90%;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    animation: dialogSlideIn 0.18s ease;
+}
+@keyframes dialogSlideIn {
+    from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.dialog-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #1e3a5f;
+    margin-bottom: 8px;
+}
+.dialog-message {
+    font-size: 13px;
+    color: #555;
+    line-height: 1.6;
+    margin-bottom: 18px;
+    white-space: pre-line;
+}
+.dialog-input {
+    width: 100%;
+    padding: 9px 12px;
+    border: 1.5px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: inherit;
+    color: #222;
+    background: #fff;
+    outline: none;
+    transition: border-color 0.15s;
+    margin-bottom: 18px;
+    box-sizing: border-box;
+}
+.dialog-input:focus {
+    border-color: #2d5a8e;
+    box-shadow: 0 0 0 3px rgba(45,90,142,0.12);
+}
+.dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+.dialog-btn {
+    padding: 8px 18px;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.dialog-cancel {
+    background: #eef0f4;
+    color: #444;
+}
+.dialog-cancel:hover {
+    background: #d9dde2;
+    color: #222;
+}
+.dialog-confirm {
+    background: #2d5a8e;
+    color: #fff;
+}
+.dialog-confirm:hover {
+    background: #1e3a5f;
+}
+.dialog-confirm.danger {
+    background: #dc2626;
+}
+.dialog-confirm.danger:hover {
+    background: #b91c1c;
 }

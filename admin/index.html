@@ -50,7 +50,9 @@
             <!-- 탭 헤더 -->
             <div class="sidebar-tabs">
                 <button class="sidebar-tab active" data-tab="templates" onclick="switchAdminTab('templates')">슬라이드 템플릿</button>
-                <button class="sidebar-tab" data-tab="skills" onclick="switchAdminTab('skills')">HTML 리포트 스킬</button>
+                <button class="sidebar-tab" data-tab="ppt-styles" onclick="switchAdminTab('ppt-styles')">PPT 스타일</button>
+                <!-- HTML 리포트 스킬: 백엔드는 유지, UI만 숨김 (PPT 스타일로 대체) -->
+                <button class="sidebar-tab" data-tab="skills" onclick="switchAdminTab('skills')" style="display:none;">HTML 리포트 스킬</button>
             </div>
 
             <!-- 템플릿 탭 콘텐츠 -->
@@ -81,6 +83,26 @@
                 </div>
             </div>
 
+            <!-- PPT 스타일 탭 콘텐츠 -->
+            <div id="tabContentPPTStyles" class="tab-content" style="display:none;">
+                <div class="sidebar-header">
+                    <h2>스타일</h2>
+                    <button class="btn btn-primary" style="padding:4px 10px;font-size:12px;" onclick="createNewPPTStyle()">+ 새 스타일</button>
+                </div>
+                <div style="padding:8px;">
+                    <div class="template-combo" id="pptStyleCombo">
+                        <div class="template-combo-selected" id="pptStyleComboSelected" onclick="togglePPTStyleDropdown()">
+                            <span id="pptStyleComboText">스타일을 선택하세요</span>
+                            <svg width="12" height="12" viewBox="0 0 12 12" fill="#888"><path d="M2 4l4 4 4-4z"/></svg>
+                        </div>
+                        <div class="template-combo-dropdown" id="pptStyleComboDropdown">
+                            <div id="pptStyleList"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- HTML 리포트 스킬: 백엔드는 유지, UI만 숨김 (PPT 스타일로 대체) -->
             <!-- 스킬 탭 콘텐츠 -->
             <div id="tabContentSkills" class="tab-content" style="display:none;">
                 <div class="sidebar-header">
@@ -217,6 +239,172 @@
                 <div class="canvas-container" id="canvas" style="display:none;">
                     <div class="canvas-grid grid-50" id="canvasGrid"></div>
                     <div class="canvas-bg" id="canvasBg"></div>
+                </div>
+            </div>
+
+            <!-- PPT 스타일 에디터 (캔버스 대신 표시) -->
+            <div class="ppt-style-editor-wrapper" id="pptStyleEditorWrapper" style="display:none;">
+                <div class="ppt-style-editor-empty" id="pptStyleEditorEmpty">
+                    <div class="empty-state">
+                        <div class="icon">🎨</div>
+                        <p>스타일을 선택하거나 새 스타일을 생성하세요</p>
+                        <p style="font-size:13px;color:#bbb;">샘플 이미지·디자인 토큰·패턴 라이브러리를 통합 관리합니다</p>
+                    </div>
+                </div>
+                <div class="ppt-style-editor-form" id="pptStyleEditorForm" style="display:none;">
+                    <div class="skill-editor-header">
+                        <h2 id="pptStyleEditorTitle">새 스타일</h2>
+                        <div class="skill-editor-actions">
+                            <button class="btn btn-primary" onclick="savePPTStyle()">
+                                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M13 1H3a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2V3a2 2 0 00-2-2zm-1 4H4V3h8v2zm0 8H4V7h8v6z"/></svg>
+                                저장
+                            </button>
+                            <button class="btn" id="btnPPTStylePublish" onclick="togglePPTStylePublish()" style="display:none;">공개</button>
+                            <button class="btn btn-danger" id="btnPPTStyleDelete" onclick="deletePPTStyle()" style="display:none;">삭제</button>
+                        </div>
+                    </div>
+                    <div class="skill-editor-body" id="pptStyleEditorBody">
+
+                        <!-- 섹션 1: 메타 -->
+                        <fieldset class="ppt-style-section">
+                            <legend>1. 메타</legend>
+                            <div class="skill-form-group">
+                                <label>스타일 제목 <span style="color:#e74c3c;">*</span></label>
+                                <input type="text" id="pptStyleTitle" placeholder="예: 코퍼레이트 블루">
+                            </div>
+                            <div class="skill-form-group">
+                                <label>설명</label>
+                                <textarea id="pptStyleDescription" rows="3" placeholder="이 스타일의 특징/사용 컨텍스트를 설명하세요"></textarea>
+                            </div>
+                            <div class="skill-form-group" style="max-width:200px;">
+                                <label>언어</label>
+                                <select id="pptStyleLang">
+                                    <option value="ko">한국어</option>
+                                    <option value="en">English</option>
+                                    <option value="ja">日本語</option>
+                                    <option value="zh">中文</option>
+                                </select>
+                            </div>
+                        </fieldset>
+
+                        <!-- 섹션 2: 디자인 토큰 -->
+                        <fieldset class="ppt-style-section">
+                            <legend>2. 디자인 토큰</legend>
+                            <div class="ppt-style-color-grid" id="pptStyleColorGrid">
+                                <!-- 색상 7개 슬롯이 JS로 렌더링됨 -->
+                            </div>
+
+                            <h4 class="ppt-style-subheading">폰트 사이즈 (pt)</h4>
+                            <div class="ppt-style-size-grid">
+                                <div class="skill-form-group">
+                                    <label>H1 (제목)</label>
+                                    <input type="number" id="pptStyleSizeH1" min="8" max="120" step="1">
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>H2 (부제)</label>
+                                    <input type="number" id="pptStyleSizeH2" min="8" max="80" step="1">
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>본문</label>
+                                    <input type="number" id="pptStyleSizeBody" min="6" max="48" step="1">
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>라벨</label>
+                                    <input type="number" id="pptStyleSizeLabel" min="6" max="36" step="1">
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>스탯 (큰 숫자)</label>
+                                    <input type="number" id="pptStyleSizeStat" min="12" max="200" step="1">
+                                </div>
+                            </div>
+                        </fieldset>
+
+                        <!-- 섹션 3: 폰트 -->
+                        <fieldset class="ppt-style-section">
+                            <legend>3. 폰트</legend>
+                            <div class="ppt-style-size-grid">
+                                <div class="skill-form-group">
+                                    <label>제목 폰트</label>
+                                    <select id="pptStyleTitleFont" onchange="updatePPTStyleFontPreview('title')"></select>
+                                    <div class="ppt-style-font-preview" id="pptStyleTitleFontPreview" style="display:none;">
+                                        <img alt="제목 폰트 미리보기">
+                                    </div>
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>본문 폰트</label>
+                                    <select id="pptStyleBodyFont" onchange="updatePPTStyleFontPreview('body')"></select>
+                                    <div class="ppt-style-font-preview" id="pptStyleBodyFontPreview" style="display:none;">
+                                        <img alt="본문 폰트 미리보기">
+                                    </div>
+                                </div>
+                            </div>
+                            <div style="margin-top:8px;">
+                                <button class="btn" type="button" onclick="showFontManageModal()" title="폰트 추가/관리">+ 폰트 업로드</button>
+                                <span style="margin-left:8px;font-size:12px;color:#888;">폰트 관리 모달에서 등록 후, 위 셀렉트에서 선택하세요</span>
+                            </div>
+                        </fieldset>
+
+                        <!-- 섹션 4: 샘플 이미지 -->
+                        <fieldset class="ppt-style-section">
+                            <legend>4. 샘플 이미지</legend>
+                            <div class="ppt-style-sample-dropzone" id="pptStyleSampleDropzone">
+                                <p>드래그&드롭 또는 클릭하여 이미지 업로드</p>
+                                <input type="file" id="pptStyleSampleInput" accept="image/*" multiple style="display:none;" onchange="handlePPTStyleSampleSelect(event)">
+                                <button class="btn btn-primary" type="button" onclick="$('#pptStyleSampleInput').click()">파일 선택</button>
+                            </div>
+                            <div class="ppt-style-sample-grid" id="pptStyleSampleGrid">
+                                <!-- 썸네일이 JS로 렌더링됨 -->
+                            </div>
+                        </fieldset>
+
+                        <!-- 섹션 5: 패턴 라이브러리 -->
+                        <fieldset class="ppt-style-section">
+                            <legend>5. 패턴 라이브러리 (사용 가능한 슬라이드 유형)</legend>
+
+                            <!-- 5-A. 기본 패턴 (12개 표준) -->
+                            <h4 class="ppt-style-subheading" style="margin-top:0;">기본 패턴 (12개 표준)</h4>
+                            <div class="ppt-style-pattern-grid" id="pptStylePatternGrid">
+                                <!-- 12개 패턴 카드가 JS로 렌더링됨 -->
+                            </div>
+
+                            <!-- 5-B. 자동 추출 패턴 -->
+                            <h4 class="ppt-style-subheading" id="pptStyleExtractedPatternsHeading" style="margin-top:18px;">샘플에서 추출된 패턴 (0개)</h4>
+                            <div class="ppt-style-extracted-patterns-grid" id="pptStyleExtractedPatternsGrid">
+                                <!-- 추출 패턴 카드가 JS로 렌더링됨 -->
+                            </div>
+                            <div class="ppt-style-extracted-patterns-empty" id="pptStyleExtractedPatternsEmpty">
+                                🔮 자동 분석을 실행하면 샘플 이미지에서 슬라이드 레이아웃 패턴이 자동 추출됩니다.
+                            </div>
+                        </fieldset>
+
+                        <!-- 섹션 6: Structurer 지침 -->
+                        <fieldset class="ppt-style-section">
+                            <legend>6. Structurer 추가 지침</legend>
+                            <div class="skill-form-group">
+                                <textarea id="pptStyleStructurerPrompt" rows="10" placeholder="이 스타일을 적용해 슬라이드 콘텐츠를 구조화할 때 LLM에게 줄 추가 지시. 예: '톤은 격식 있게, 카드당 60-90자로 압축'"></textarea>
+                                <small style="color:#888;font-size:12px;">이 스타일을 적용해 슬라이드 콘텐츠를 구조화할 때 LLM에게 줄 추가 지시입니다.</small>
+                            </div>
+                        </fieldset>
+
+                        <!-- 섹션 7: 자동 분석 -->
+                        <fieldset class="ppt-style-section">
+                            <legend>7. 자동 분석 (Vision)</legend>
+                            <p style="font-size:13px;color:#666;margin-bottom:12px;">업로드된 샘플 이미지를 분석하여 색상/폰트/레이아웃 힌트를 추출합니다.</p>
+                            <button class="btn btn-primary" id="btnPPTStyleAnalyze" type="button" onclick="autoAnalyzePPTStyle()">
+                                <span id="pptStyleAnalyzeIcon">🔮</span>
+                                <span id="pptStyleAnalyzeLabel">샘플 이미지 자동 분석</span>
+                            </button>
+                            <div id="pptStyleVisionResult" style="margin-top:16px;display:none;">
+                                <h4 class="ppt-style-subheading">추출된 색상</h4>
+                                <div id="pptStyleVisionColors" class="ppt-style-vision-colors"></div>
+                                <h4 class="ppt-style-subheading">감지된 폰트</h4>
+                                <div id="pptStyleVisionFonts" class="ppt-style-vision-list"></div>
+                                <h4 class="ppt-style-subheading">레이아웃 힌트</h4>
+                                <div id="pptStyleVisionLayout" class="ppt-style-vision-list"></div>
+                            </div>
+                        </fieldset>
+
+                    </div>
                 </div>
             </div>
 
@@ -756,54 +944,81 @@
 
     <!-- 폰트 관리 모달 -->
     <div class="modal-overlay" id="fontManageModal" style="display:none;">
-        <div class="modal" style="max-width:600px;">
+        <div class="modal" style="max-width:640px;">
             <h2>폰트 관리</h2>
 
             <!-- 등록된 폰트 목록 -->
             <div style="margin-bottom:16px;">
                 <h3 style="font-size:13px;font-weight:600;color:#555;margin-bottom:8px;">등록된 폰트</h3>
-                <div id="fontListContainer" style="max-height:200px;overflow-y:auto;border:1px solid #eee;border-radius:6px;">
+                <div id="fontListContainer" style="max-height:220px;overflow-y:auto;border:1px solid #eee;border-radius:6px;">
                     <div style="padding:16px;text-align:center;color:#999;font-size:13px;">등록된 폰트가 없습니다</div>
                 </div>
             </div>
 
-            <!-- 프리셋 선택 -->
-            <div class="form-group">
-                <label>프리셋 (자주 사용되는 웹 폰트)</label>
-                <select id="fontPreset" onchange="applyFontPreset(this.value)">
-                    <option value="">직접 입력</option>
-                    <option value="pretendard">Pretendard</option>
-                    <option value="notosanskr">Noto Sans KR</option>
-                    <option value="nanumgothic">나눔고딕 (NanumGothic)</option>
-                    <option value="nanummyeongjo">나눔명조 (NanumMyeongjo)</option>
-                    <option value="spoqahansansneo">Spoqa Han Sans Neo</option>
-                    <option value="ibmplexsanskr">IBM Plex Sans KR</option>
-                </select>
+            <!-- 탭 -->
+            <div class="font-tab-bar">
+                <button type="button" class="font-tab-btn active" data-tab="upload" onclick="switchFontTab('upload')">파일 업로드</button>
+                <button type="button" class="font-tab-btn" data-tab="url" onclick="switchFontTab('url')">URL 등록</button>
             </div>
 
-            <!-- 새 폰트 입력 -->
-            <div class="form-group">
-                <label>표시 이름</label>
-                <input type="text" id="newFontName" placeholder="예: Pretendard">
-            </div>
-            <div class="form-group">
-                <label>Font Family (CSS)</label>
-                <input type="text" id="newFontFamily" placeholder="예: Pretendard">
-            </div>
-            <div class="form-group">
-                <label>웹 폰트 URL (선택)</label>
-                <input type="text" id="newFontUrl" placeholder="예: https://fonts.googleapis.com/css2?family=...">
-                <div style="font-size:11px;color:#999;margin-top:2px;">Google Fonts, CDN URL 등. 비워두면 시스템 폰트 사용</div>
-            </div>
-
-            <!-- 프리뷰 -->
-            <div id="fontPreviewArea" style="display:none;padding:12px;background:#f8f9fa;border-radius:6px;margin-bottom:16px;">
-                <p id="fontPreviewText" style="font-size:18px;margin:0;">가나다라마바사 ABCDEF 1234567890</p>
+            <!-- 탭 1: 파일 업로드 (다중) -->
+            <div id="fontTabUpload" class="font-tab-panel">
+                <div class="font-dropzone" id="fontUploadDropzone">
+                    <p style="margin:0 0 4px 0;font-size:13px;color:#555;">.ttf / .otf / .ttc / .woff / .woff2 파일을 드래그하거나 클릭해서 선택<br><span style="font-size:11px;color:#888;">여러 개를 한 번에 선택할 수 있습니다</span></p>
+                    <p id="fontUploadFileInfo" style="margin:6px 0 0 0;font-size:12px;color:#888;">선택된 파일 없음</p>
+                    <input type="file" id="fontUploadInput" accept=".ttf,.otf,.ttc,.woff,.woff2" multiple style="display:none;">
+                </div>
+                <div id="fontUploadFileList" style="margin-top:10px;max-height:160px;overflow-y:auto;display:none;"></div>
+                <div style="font-size:11px;color:#888;margin-top:8px;line-height:1.5;">
+                    ※ 이름·패밀리는 파일명에서 자동 추출됩니다. 업로드 후 폰트 목록에서 수정 가능합니다.
+                </div>
+                <div id="fontUploadResultArea" style="display:none;margin-top:10px;padding:10px;background:#f8f9fa;border-radius:6px;font-size:12px;"></div>
+                <div class="modal-actions" style="margin-top:12px;">
+                    <button class="btn" onclick="closeModal('fontManageModal')">닫기</button>
+                    <button class="btn btn-primary" id="btnUploadFont" onclick="submitFontUpload()">업로드</button>
+                </div>
             </div>
 
-            <div class="modal-actions">
-                <button class="btn" onclick="closeModal('fontManageModal')">닫기</button>
-                <button class="btn btn-primary" onclick="addNewFont()">추가</button>
+            <!-- 탭 2: URL 등록 (기존) -->
+            <div id="fontTabUrl" class="font-tab-panel" style="display:none;">
+                <!-- 프리셋 선택 -->
+                <div class="form-group">
+                    <label>프리셋 (자주 사용되는 웹 폰트)</label>
+                    <select id="fontPreset" onchange="applyFontPreset(this.value)">
+                        <option value="">직접 입력</option>
+                        <option value="pretendard">Pretendard</option>
+                        <option value="notosanskr">Noto Sans KR</option>
+                        <option value="nanumgothic">나눔고딕 (NanumGothic)</option>
+                        <option value="nanummyeongjo">나눔명조 (NanumMyeongjo)</option>
+                        <option value="spoqahansansneo">Spoqa Han Sans Neo</option>
+                        <option value="ibmplexsanskr">IBM Plex Sans KR</option>
+                    </select>
+                </div>
+
+                <!-- 새 폰트 입력 -->
+                <div class="form-group">
+                    <label>표시 이름</label>
+                    <input type="text" id="newFontName" placeholder="예: Pretendard">
+                </div>
+                <div class="form-group">
+                    <label>Font Family (CSS)</label>
+                    <input type="text" id="newFontFamily" placeholder="예: Pretendard">
+                </div>
+                <div class="form-group">
+                    <label>웹 폰트 URL (선택)</label>
+                    <input type="text" id="newFontUrl" placeholder="예: https://fonts.googleapis.com/css2?family=...">
+                    <div style="font-size:11px;color:#999;margin-top:2px;">Google Fonts, CDN URL 등. 비워두면 시스템 폰트 사용</div>
+                </div>
+
+                <!-- 프리뷰 -->
+                <div id="fontPreviewArea" style="display:none;padding:12px;background:#f8f9fa;border-radius:6px;margin-bottom:16px;">
+                    <p id="fontPreviewText" style="font-size:18px;margin:0;">가나다라마바사 ABCDEF 1234567890</p>
+                </div>
+
+                <div class="modal-actions">
+                    <button class="btn" onclick="closeModal('fontManageModal')">닫기</button>
+                    <button class="btn btn-primary" onclick="addNewFont()">추가</button>
+                </div>
             </div>
         </div>
     </div>

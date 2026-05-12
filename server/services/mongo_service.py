@@ -136,6 +136,16 @@ async def init_indexes():
     await db.slide_styles.create_index("category")
     await db.slide_styles.create_index("is_active")
 
+    # ppt_styles 컬렉션 (파워포인트 스타일 관리 시스템)
+    await db.ppt_styles.create_index([("created_at", -1)])
+    await db.ppt_styles.create_index("is_published")
+    await db.ppt_styles.create_index("created_by")
+
+    # generated_pptx_styled 컬렉션 (PPT 스타일 적용 구조화 결과 — M2)
+    await db.generated_pptx_styled.create_index("project_id", unique=True)
+    await db.generated_pptx_styled.create_index("style_id")
+    await db.generated_pptx_styled.create_index([("updated_at", -1)])
+
     # 조직도 인덱스
     org_db = get_org_db()
     org_col = org_db[settings.ORG_COLLECTION]
