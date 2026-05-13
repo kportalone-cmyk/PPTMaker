@@ -22,16 +22,20 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from bson import ObjectId
+from lxml import etree
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+from pptx.oxml.ns import qn
 
 from config import settings
 from services.mongo_service import get_db
@@ -855,6 +859,15 @@ async def build_pptx_styled_stream(
         yield ("error", {"message": f"PPTX 저장 실패: {e}"})
         return
 
+    # 6a) M16.A — 빌드 후 후처리 (폰트 임베드 등)
+    post_result = {"embedded_fonts": 0, "errors": []}
+    try:
+        post_result = _post_process_pptx(str(pptx_path), skill_file)
+        if post_result.get("embedded_fonts"):
+            yield ("fonts_embedded", {"count": post_result["embedded_fonts"]})
+    except Exception as e:
+        print(f"[Builder] post_process 전체 실패: {e}")
+
     # 7) DB 업데이트 (빌드 완료)
     pptx_url = f"/uploads/ppt_styled/{project_id}/presentation.pptx"
     await db.generated_pptx_styled.update_one(
@@ -863,6 +876,7 @@ async def build_pptx_styled_stream(
             "status": "built",
             "pptx_path": str(pptx_path),
             "pptx_url": pptx_url,
+            "embedded_fonts_count": post_result.get("embedded_fonts", 0),
             "built_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
         }},
@@ -950,6 +964,10 @@ __all__ = [
     "build_content_3col", "build_closing", "build_fallback",
     "add_page_indicator", "add_content_header",
     "add_chapter_divider_content", "split_stat_text",
+    # M16.A — OOXML 헬퍼
+    "_apply_run_text_alpha", "_apply_shape_fill_alpha",
+    "_apply_gradient_fill", "_set_run_char_spacing",
+    "_post_process_pptx",
 ]
 
 
@@ -1001,6 +1019,382 @@ def _clamp_rect(x: float, y: float, w: float, h: float) -> tuple:
     return x, y, w, h
 
 
+# ============ M16.A — OOXML 깊은 조작 헬퍼 ============
+
+_A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+
+def _alpha_val(opacity: float) -> str:
+    """opacity 0.0~1.0 → OOXML alpha val (0~100000 1/1000 단위 문자열)."""
+    op = max(0.0, min(1.0, float(opacity)))
+    return str(int(op * 100000))
+
+
+def _apply_solid_fill_with_alpha(fill_xml, hex_color: str, opacity: float) -> None:
+    """fill 의 a:solidFill > a:srgbClr 자식에 a:alpha 를 보장.
+
+    fill_xml: pptx 의 fill XML element (보통 shape.fill._xPr)
+    """
+    if fill_xml is None:
+        return
+    sf = fill_xml.find(qn("a:solidFill"))
+    if sf is None:
+        # solidFill 노드가 없으면 추가
+        sf = etree.SubElement(fill_xml, qn("a:solidFill"))
+    # 기존 자식 제거 후 srgbClr 추가 (일관성 유지)
+    for child in list(sf):
+        sf.remove(child)
+    srgb = etree.SubElement(sf, qn("a:srgbClr"))
+    srgb.set("val", hex_color.lstrip("#").upper())
+    if 0.0 <= opacity < 1.0:
+        alpha_el = etree.SubElement(srgb, qn("a:alpha"))
+        alpha_el.set("val", _alpha_val(opacity))
+
+
+def _apply_shape_fill_alpha(shape, opacity: float) -> None:
+    """이미 solid fill 이 설정된 shape 에 alpha 만 주입 (색 변경 없음)."""
+    if not (0.0 <= opacity < 1.0):
+        return
+    try:
+        fill_xml = shape.fill._xPr
+        sf = fill_xml.find(qn("a:solidFill"))
+        if sf is None:
+            return
+        srgb = sf.find(qn("a:srgbClr"))
+        if srgb is None:
+            return
+        # 기존 alpha 제거 후 재추가
+        for ch in list(srgb):
+            if ch.tag == qn("a:alpha"):
+                srgb.remove(ch)
+        alpha_el = etree.SubElement(srgb, qn("a:alpha"))
+        alpha_el.set("val", _alpha_val(opacity))
+    except Exception as e:
+        print(f"[OOXML] shape alpha 실패: {e}")
+
+
+def _apply_run_text_alpha(run, opacity: float) -> None:
+    """text run 의 솔리드 fill 에 alpha 주입 → 텍스트 자체 투명도."""
+    if not (0.0 <= opacity < 1.0):
+        return
+    try:
+        rPr = run._r.get_or_add_rPr()
+        # 기존 solidFill 찾기, 없으면 추가
+        sf = rPr.find(qn("a:solidFill"))
+        if sf is None:
+            # run.font.color 가 설정돼 있어도 OOXML 상으로는 a:solidFill 이 아닌
+            # a:fill 계열일 수 있다. 그 경우 새 solidFill 을 추가
+            sf = etree.SubElement(rPr, qn("a:solidFill"))
+        srgb = sf.find(qn("a:srgbClr"))
+        if srgb is None:
+            # run.font.color.rgb 값에서 hex 추출 시도
+            try:
+                rgb = run.font.color.rgb
+                hex_val = str(rgb)
+            except Exception:
+                hex_val = "000000"
+            srgb = etree.SubElement(sf, qn("a:srgbClr"))
+            srgb.set("val", hex_val.upper())
+        # 기존 alpha 제거 후 재추가
+        for ch in list(srgb):
+            if ch.tag == qn("a:alpha"):
+                srgb.remove(ch)
+        alpha_el = etree.SubElement(srgb, qn("a:alpha"))
+        alpha_el.set("val", _alpha_val(opacity))
+    except Exception as e:
+        print(f"[OOXML] run alpha 실패: {e}")
+
+
+def _set_run_char_spacing(run, spacing_pt: float) -> None:
+    """text run 에 a:rPr/@spc 설정 (1/100 pt 단위).
+
+    spacing_pt 0.0 이면 노옵.
+    """
+    if not spacing_pt:
+        return
+    try:
+        rPr = run._r.get_or_add_rPr()
+        rPr.set("spc", str(int(float(spacing_pt) * 100)))
+    except Exception as e:
+        print(f"[OOXML] char spacing 실패: {e}")
+
+
+def _apply_gradient_fill(shape, color_from_hex: str, color_to_hex: str,
+                          angle_deg: float = 0.0,
+                          opacity_from: float = 1.0,
+                          opacity_to: float = 1.0) -> None:
+    """shape 에 선형 그라데이션 fill 적용 (OOXML a:gradFill).
+
+    python-pptx 0.6.x 는 gradFill 직접 지원이 부족하므로 spPr 의 fill 자식을 교체.
+    angle_deg: 0=좌→우, 90=상→하 (OOXML 의 a:lin angle 단위는 1/60000 deg).
+    """
+    try:
+        spPr = shape.fill._xPr  # spPr 또는 그 후손
+        # 기존 fill 자식 모두 제거 (solidFill, noFill, gradFill, blipFill, pattFill)
+        FILL_TAGS = {qn("a:noFill"), qn("a:solidFill"), qn("a:gradFill"),
+                     qn("a:blipFill"), qn("a:pattFill"), qn("a:grpFill")}
+        for ch in list(spPr):
+            if ch.tag in FILL_TAGS:
+                spPr.remove(ch)
+
+        # gradFill 노드 추가
+        gradFill = etree.SubElement(spPr, qn("a:gradFill"))
+        gradFill.set("flip", "none")
+        gradFill.set("rotWithShape", "1")
+
+        gsLst = etree.SubElement(gradFill, qn("a:gsLst"))
+
+        # gs0 (start)
+        gs0 = etree.SubElement(gsLst, qn("a:gs"))
+        gs0.set("pos", "0")
+        srgb0 = etree.SubElement(gs0, qn("a:srgbClr"))
+        srgb0.set("val", color_from_hex.lstrip("#").upper())
+        if 0.0 <= opacity_from < 1.0:
+            a0 = etree.SubElement(srgb0, qn("a:alpha"))
+            a0.set("val", _alpha_val(opacity_from))
+
+        # gs1 (end)
+        gs1 = etree.SubElement(gsLst, qn("a:gs"))
+        gs1.set("pos", "100000")
+        srgb1 = etree.SubElement(gs1, qn("a:srgbClr"))
+        srgb1.set("val", color_to_hex.lstrip("#").upper())
+        if 0.0 <= opacity_to < 1.0:
+            a1 = etree.SubElement(srgb1, qn("a:alpha"))
+            a1.set("val", _alpha_val(opacity_to))
+
+        # lin (direction)
+        lin = etree.SubElement(gradFill, qn("a:lin"))
+        # OOXML lin angle 은 1/60000 deg, 0 = 좌→우
+        lin.set("ang", str(int(float(angle_deg) * 60000) % (360 * 60000)))
+        lin.set("scaled", "0")
+
+        # tileRect 빈 자식 (mandatory in some renderers)
+        etree.SubElement(gradFill, qn("a:tileRect"))
+    except Exception as e:
+        print(f"[OOXML] gradient fill 실패: {e}")
+
+
+# ============ M16.A — 새 region 타입 ============
+
+def _render_ghost_text_region(slide, region: dict, skill_file: dict):
+    """거대 반투명 배경 텍스트 (장식용)."""
+    x = _safe_float(region.get("x"), 0.5)
+    y = _safe_float(region.get("y"), 0.5)
+    w = _safe_float(region.get("w"), 5.0)
+    h = _safe_float(region.get("h"), 4.0)
+    x, y, w, h = _clamp_rect(x, y, w, h)
+
+    text = str(region.get("text", "") or "")
+    font_family = (region.get("font_family") or "").strip() \
+        or _font_family(skill_file, "title")
+    font_size = _safe_int(region.get("font_size"), 200)
+    bold = bool(region.get("bold", True))
+    italic = bool(region.get("italic", False))
+    color_hex = region.get("color") or "#1C60EF"
+    if not isinstance(color_hex, str) or not color_hex.strip():
+        color_hex = "#1C60EF"
+    opacity = _safe_float(region.get("opacity"), 0.08)
+    align = (region.get("align") or "left").lower()
+    if align not in ("left", "center", "right"):
+        align = "left"
+    valign = (region.get("valign") or "top").lower()
+    anchor = {"top": "top", "middle": "middle", "bottom": "bottom"}.get(valign, "top")
+
+    box = _add_textbox(
+        slide, text,
+        x_in=x, y_in=y, w_in=w, h_in=h,
+        font_family=font_family,
+        font_size=font_size,
+        bold=bold,
+        italic=italic,
+        color=_hex_to_rgbcolor(color_hex, "#1C60EF"),
+        align=align,
+        anchor=anchor,
+    )
+    # 첫 run 에 alpha 주입
+    try:
+        run = box.text_frame.paragraphs[0].runs[0]
+        _apply_run_text_alpha(run, opacity)
+    except Exception:
+        pass
+
+
+def _render_page_indicator_region(slide, region: dict, skill_file: dict):
+    """페이지 인디케이터: 작은 숫자 + 가는 가로 라인."""
+    x = _safe_float(region.get("x"), 8.5)
+    y = _safe_float(region.get("y"), 5.2)
+    w = _safe_float(region.get("w"), 1.2)
+    h = _safe_float(region.get("h"), 0.3)
+    x, y, w, h = _clamp_rect(x, y, w, h)
+
+    number = str(region.get("number", "") or "")
+    total = region.get("total")
+    color_hex = region.get("color") or "#1C60EF"
+    if not isinstance(color_hex, str) or not color_hex.strip():
+        color_hex = "#1C60EF"
+    color = _hex_to_rgbcolor(color_hex, "#1C60EF")
+    font_family = (region.get("font_family") or "").strip() \
+        or _font_family(skill_file, "body")
+    font_size = _safe_int(region.get("font_size"), 9)
+
+    # 숫자 (좌측)
+    text = number
+    if total is not None:
+        try:
+            text = f"{number} / {int(total):02d}"
+        except (TypeError, ValueError):
+            pass
+    num_w = w * 0.55
+    _add_textbox(
+        slide, text,
+        x_in=x, y_in=y, w_in=num_w, h_in=h,
+        font_family=font_family, font_size=font_size, bold=True,
+        color=color, align="right", anchor="middle", char_spacing=3,
+    )
+    # 우측 짧은 라인
+    line_y = y + h / 2 - 0.008
+    line_x = x + num_w + 0.06
+    line_w = max(0.1, w - num_w - 0.06)
+    _add_rect(slide, line_x, line_y, line_w, 0.015, fill_color=color)
+
+
+def _render_chip_region(slide, region: dict, skill_file: dict):
+    """라벨 chip: 보더 박스 + 중앙 텍스트."""
+    x = _safe_float(region.get("x"), 8.0)
+    y = _safe_float(region.get("y"), 2.5)
+    w = _safe_float(region.get("w"), 1.4)
+    h = _safe_float(region.get("h"), 0.4)
+    x, y, w, h = _clamp_rect(x, y, w, h)
+
+    text = str(region.get("text", "") or "")
+    color_hex = region.get("color") or "#1C60EF"
+    if not isinstance(color_hex, str) or not color_hex.strip():
+        color_hex = "#1C60EF"
+    color = _hex_to_rgbcolor(color_hex, "#1C60EF")
+
+    fill_raw = region.get("fill") or "none"
+    fill_color: Optional[RGBColor] = None
+    fill_opacity = _safe_float(region.get("fill_opacity"), 1.0)
+    if isinstance(fill_raw, str) and fill_raw and fill_raw.lower() != "none":
+        fill_color = _hex_to_rgbcolor(fill_raw, "#FFFFFF")
+
+    stroke_width = _safe_float(region.get("stroke_width"), 0.75)
+
+    font_family = (region.get("font_family") or "").strip() \
+        or _font_family(skill_file, "body")
+    font_size = _safe_int(region.get("font_size"), 10)
+    bold = bool(region.get("bold", True))
+
+    align = (region.get("align") or "center").lower()
+    if align not in ("left", "center", "right"):
+        align = "center"
+    valign = (region.get("valign") or "middle").lower()
+    anchor = {"top": "top", "middle": "middle", "bottom": "bottom"}.get(valign, "middle")
+
+    char_spacing_raw = region.get("char_spacing")
+    try:
+        char_spacing = int(char_spacing_raw) if char_spacing_raw is not None else 2
+    except (TypeError, ValueError):
+        char_spacing = 2
+
+    # 보더 박스
+    shape = _add_rect(
+        slide, x, y, w, h,
+        fill_color=fill_color,
+        line_color=color,
+        line_width_pt=stroke_width,
+    )
+    # fill opacity (fill 색이 있을 때만)
+    if fill_color is not None and 0.0 <= fill_opacity < 1.0:
+        _apply_shape_fill_alpha(shape, fill_opacity)
+
+    # 중앙 텍스트
+    _add_textbox(
+        slide, text,
+        x_in=x, y_in=y, w_in=w, h_in=h,
+        font_family=font_family, font_size=font_size, bold=bold,
+        color=color, align=align, anchor=anchor, char_spacing=char_spacing,
+    )
+
+
+def _render_accent_line_region(slide, region: dict):
+    """카드/섹션 상단 강조용 짧은 라인 (얇은 직사각형 또는 connector)."""
+    x = _safe_float(region.get("x"), 0.5)
+    y = _safe_float(region.get("y"), 1.7)
+    w = _safe_float(region.get("w"), 3.0)
+    h = _safe_float(region.get("h"), 0.05)
+    x, y, w, h = _clamp_rect(x, y, w, h)
+
+    color_hex = region.get("color") or "#1C60EF"
+    if not isinstance(color_hex, str) or not color_hex.strip():
+        color_hex = "#1C60EF"
+    color = _hex_to_rgbcolor(color_hex, "#1C60EF")
+    opacity = _safe_float(region.get("opacity"), 1.0)
+
+    orientation = (region.get("orientation") or "horizontal").lower()
+    if orientation == "vertical" and h < w:
+        # 세로 라인이지만 사용자가 w/h 를 잘못 줬을 때 → 보정
+        w, h = h, w
+
+    shape = _add_rect(slide, x, y, w, h, fill_color=color)
+    if 0.0 <= opacity < 1.0:
+        _apply_shape_fill_alpha(shape, opacity)
+
+
+def _render_decoration_set_region(slide, region: dict):
+    """여러 도형(원/사각형)을 한꺼번에 렌더. 내부 shapes 배열을 순회."""
+    shapes_list = region.get("shapes") or []
+    if not isinstance(shapes_list, list):
+        return
+    for sub in shapes_list:
+        if not isinstance(sub, dict):
+            continue
+        # type 키가 없는 sub-shape 도 shape region 으로 취급
+        try:
+            _render_shape_region(slide, sub)
+        except Exception as e:
+            print(f"[Builder-Spec] decoration_set sub-shape 실패: {e}")
+
+
+# ============ M16.A — gradient 도형 (shape region 확장) ============
+
+def _render_gradient_shape_region(slide, region: dict):
+    """gradient fill 을 가진 shape region.
+
+    region 필수 필드: gradient_from, gradient_to, (gradient_angle)
+    """
+    x = _safe_float(region.get("x"), 0.0)
+    y = _safe_float(region.get("y"), 0.0)
+    w = _safe_float(region.get("w"), 1.0)
+    h = _safe_float(region.get("h"), 1.0)
+    x, y, w, h = _clamp_rect(x, y, w, h)
+
+    shape_kind = (region.get("shape") or "rectangle").lower()
+    shape_type = MSO_SHAPE.RECTANGLE if shape_kind != "ellipse" else MSO_SHAPE.OVAL
+
+    g_from = region.get("gradient_from") or "#1C60EF"
+    g_to = region.get("gradient_to") or "#DBE8FE"
+    g_angle = _safe_float(region.get("gradient_angle"), 0.0)
+    op_from = _safe_float(region.get("gradient_opacity_from"), 1.0)
+    op_to = _safe_float(region.get("gradient_opacity_to"), 1.0)
+
+    stroke_raw = region.get("stroke")
+    stroke_width = _safe_float(region.get("stroke_width"), 0.0)
+    stroke_color: Optional[RGBColor] = None
+    if isinstance(stroke_raw, str) and stroke_raw and stroke_raw.lower() != "none":
+        stroke_color = _hex_to_rgbcolor(stroke_raw, "#000000")
+
+    # 일단 solid fill 로 만든 뒤 fill XML 을 gradient 로 교체
+    shape = _add_rect(
+        slide, x, y, w, h,
+        fill_color=_hex_to_rgbcolor(g_from, "#FFFFFF"),
+        line_color=stroke_color,
+        line_width_pt=stroke_width if stroke_color is not None else 0.0,
+        shape_type=shape_type,
+    )
+    _apply_gradient_fill(shape, g_from, g_to, g_angle, op_from, op_to)
+
+
 def _render_text_region(slide, region: dict, skill_file: dict):
     """text region 렌더."""
     x = _safe_float(region.get("x"), 0.5)
@@ -1040,7 +1434,9 @@ def _render_text_region(slide, region: dict, skill_file: dict):
         except (TypeError, ValueError):
             char_spacing = None
 
-    _add_textbox(
+    opacity = _safe_float(region.get("opacity"), 1.0)
+
+    box = _add_textbox(
         slide, text,
         x_in=x, y_in=y, w_in=w, h_in=h,
         font_family=font_family,
@@ -1052,10 +1448,21 @@ def _render_text_region(slide, region: dict, skill_file: dict):
         anchor=anchor,
         char_spacing=char_spacing,
     )
+    # 텍스트 자체 opacity (run alpha)
+    if 0.0 <= opacity < 1.0:
+        try:
+            run = box.text_frame.paragraphs[0].runs[0]
+            _apply_run_text_alpha(run, opacity)
+        except Exception:
+            pass
 
 
 def _render_shape_region(slide, region: dict):
-    """shape region 렌더 (rectangle | ellipse | line)."""
+    """shape region 렌더 (rectangle | ellipse | line).
+
+    M16.A: gradient fill / opacity / stroke opacity 지원.
+    region 에 gradient_from/gradient_to 가 있으면 gradient 우선 적용.
+    """
     x = _safe_float(region.get("x"), 0.0)
     y = _safe_float(region.get("y"), 0.0)
     w = _safe_float(region.get("w"), 1.0)
@@ -1068,6 +1475,14 @@ def _render_shape_region(slide, region: dict):
     stroke_raw = region.get("stroke")
     stroke_width = _safe_float(region.get("stroke_width"), 1.0)
     opacity = _safe_float(region.get("opacity"), 1.0)
+
+    # gradient 우선 처리
+    g_from = region.get("gradient_from")
+    g_to = region.get("gradient_to")
+    if isinstance(g_from, str) and g_from and isinstance(g_to, str) and g_to \
+            and shape_kind != "line":
+        _render_gradient_shape_region(slide, region)
+        return
 
     fill_color: Optional[RGBColor] = None
     if isinstance(fill_raw, str) and fill_raw and fill_raw.lower() != "none":
@@ -1106,18 +1521,7 @@ def _render_shape_region(slide, region: dict):
 
     # opacity (fill 만 적용. 1.0 이외일 때만 OOXML 으로 alpha 주입)
     if fill_color is not None and 0.0 <= opacity < 1.0:
-        try:
-            from pptx.oxml.ns import qn
-            from lxml import etree
-            sppr = shape.fill._xPr.find(qn("a:solidFill"))
-            if sppr is not None:
-                srgb = sppr.find(qn("a:srgbClr"))
-                if srgb is not None:
-                    alpha_val = int(max(0, min(100000, opacity * 100000)))
-                    alpha_el = etree.SubElement(srgb, qn("a:alpha"))
-                    alpha_el.set("val", str(alpha_val))
-        except Exception:
-            pass
+        _apply_shape_fill_alpha(shape, opacity)
 
 
 def _render_icon_region(slide, region: dict, icon_dir: Path):
@@ -1263,6 +1667,271 @@ def _render_background(slide, prs, design_spec: dict, asset_dir: Path, slide_ind
     # btype == "none" 또는 알 수 없음 → 흰 배경 유지
 
 
+# ============ M16.A — 빌드 후 PPTX 후처리 (폰트 임베드) ============
+
+# OOXML 네임스페이스
+_PRES_NS = {
+    "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
+    "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+    "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+}
+_CT_NS = {"ct": "http://schemas.openxmlformats.org/package/2006/content-types"}
+_REL_NS = {"r": "http://schemas.openxmlformats.org/package/2006/relationships"}
+
+
+def _resolve_font_local_path(font_meta: dict) -> Optional[str]:
+    """font_meta (skill_file.fonts 의 한 항목) → 디스크 ttf/otf 절대경로.
+
+    우선순위: local_path > url(/uploads/...) → 로컬 경로 변환.
+    """
+    if not isinstance(font_meta, dict):
+        return None
+    # 직접 local_path 가 주어진 경우
+    lp = font_meta.get("local_path")
+    if isinstance(lp, str) and lp and os.path.isfile(lp):
+        return lp
+    # url 로 시도
+    url = font_meta.get("url")
+    if isinstance(url, str) and url:
+        if url.startswith("/uploads/"):
+            rel = url[len("/uploads/"):]
+            full = os.path.join(settings.UPLOAD_DIR, rel.replace("/", os.sep))
+            if os.path.isfile(full):
+                return full
+        elif os.path.isfile(url):
+            return url
+    return None
+
+
+def _embed_fonts_in_pptx(pptx_path: str, font_entries: list) -> int:
+    """빌드 완료된 .pptx (zip) 에 폰트 파일을 임베드.
+
+    font_entries: [{"family": str, "local_path": str}] (이미 로컬 경로 확정된 폰트만)
+
+    OOXML 변경 사항:
+      1. ppt/fonts/font<N>.ttf 추가
+      2. ppt/presentation.xml 의 <p:presentation> 안에 <p:embeddedFontLst> 추가
+      3. ppt/_rels/presentation.xml.rels 에 관계 4개 추가 (font/relationship)
+      4. [Content_Types].xml 에 Override 추가
+
+    반환: 실제 임베드 성공한 폰트 개수.
+    """
+    if not font_entries:
+        return 0
+
+    pptx_path = str(pptx_path)
+    if not os.path.isfile(pptx_path):
+        return 0
+
+    # 임시 작업 디렉토리에 zip 풀기
+    tmp_dir = Path(pptx_path + ".embed_tmp")
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with zipfile.ZipFile(pptx_path, "r") as zf:
+            zf.extractall(tmp_dir)
+
+        # 1. ppt/fonts 디렉토리에 폰트 복사
+        fonts_dir = tmp_dir / "ppt" / "fonts"
+        fonts_dir.mkdir(parents=True, exist_ok=True)
+
+        # 폰트 파일명 결정 + 복사
+        embedded: list[dict] = []
+        for idx, fe in enumerate(font_entries, start=1):
+            family = (fe.get("family") or "").strip()
+            src = fe.get("local_path")
+            if not family or not src or not os.path.isfile(src):
+                continue
+            ext = os.path.splitext(src)[1].lower()
+            if ext not in (".ttf", ".otf"):
+                # PPTX 임베드는 TTF/OTF 만 — 그 외 형식 스킵
+                continue
+            font_filename = f"font{idx}{ext}"
+            target = fonts_dir / font_filename
+            try:
+                shutil.copy2(src, target)
+            except Exception as e:
+                print(f"[Embed] 폰트 복사 실패 {src}: {e}")
+                continue
+            embedded.append({
+                "family": family,
+                "filename": font_filename,
+                "ext": ext,
+            })
+
+        if not embedded:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return 0
+
+        # 2. ppt/_rels/presentation.xml.rels — 관계 추가
+        rels_path = tmp_dir / "ppt" / "_rels" / "presentation.xml.rels"
+        if not rels_path.is_file():
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return 0
+
+        rels_tree = etree.parse(str(rels_path))
+        rels_root = rels_tree.getroot()
+        existing_ids = set()
+        for r in rels_root.findall("{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"):
+            rid = r.get("Id")
+            if rid:
+                existing_ids.add(rid)
+
+        # 고유 rId 생성
+        def _next_rid() -> str:
+            n = 1
+            while f"rId_emb_font_{n}" in existing_ids:
+                n += 1
+            rid = f"rId_emb_font_{n}"
+            existing_ids.add(rid)
+            return rid
+
+        # OOXML font relationship type
+        FONT_REL_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/font"
+        for e in embedded:
+            rid = _next_rid()
+            e["rid"] = rid
+            new_rel = etree.SubElement(
+                rels_root,
+                "{http://schemas.openxmlformats.org/package/2006/relationships}Relationship",
+            )
+            new_rel.set("Id", rid)
+            new_rel.set("Type", FONT_REL_TYPE)
+            new_rel.set("Target", f"fonts/{e['filename']}")
+
+        rels_tree.write(str(rels_path), xml_declaration=True, encoding="UTF-8", standalone=True)
+
+        # 3. ppt/presentation.xml — embeddedFontLst 추가
+        pres_path = tmp_dir / "ppt" / "presentation.xml"
+        if not pres_path.is_file():
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return 0
+
+        pres_tree = etree.parse(str(pres_path))
+        pres_root = pres_tree.getroot()
+
+        # 기존 embeddedFontLst 가 있으면 제거 후 재생성
+        for child in pres_root.findall(qn("p:embeddedFontLst")):
+            pres_root.remove(child)
+
+        emb_lst = etree.SubElement(pres_root, qn("p:embeddedFontLst"))
+        for e in embedded:
+            emb_font = etree.SubElement(emb_lst, qn("p:embeddedFont"))
+            font_el = etree.SubElement(emb_font, qn("p:font"))
+            font_el.set("typeface", e["family"])
+            font_el.set("panose", "020F0502020204030204")  # generic sans-serif panose
+            font_el.set("pitchFamily", "34")
+            font_el.set("charset", "0")
+            regular_el = etree.SubElement(emb_font, qn("p:regular"))
+            regular_el.set(qn("r:id"), e["rid"])
+
+        # ppt:presentation 의 자식 순서가 까다로움 → embeddedFontLst 는
+        # defaultTextStyle 뒤에 와야 함. 위에서 SubElement 로 마지막에 붙였으므로
+        # 일반적으로 OK 지만, 명세상 위치 조정.
+        try:
+            default_text_style = pres_root.find(qn("p:defaultTextStyle"))
+            if default_text_style is not None:
+                # embeddedFontLst 를 defaultTextStyle 뒤로 이동
+                pres_root.remove(emb_lst)
+                idx = list(pres_root).index(default_text_style) + 1
+                pres_root.insert(idx, emb_lst)
+        except Exception:
+            pass
+
+        pres_tree.write(str(pres_path), xml_declaration=True, encoding="UTF-8", standalone=True)
+
+        # 4. [Content_Types].xml — Default(또는 Override) 추가
+        ct_path = tmp_dir / "[Content_Types].xml"
+        if not ct_path.is_file():
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return 0
+
+        ct_tree = etree.parse(str(ct_path))
+        ct_root = ct_tree.getroot()
+        CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
+        existing_defaults = {d.get("Extension"): d.get("ContentType")
+                             for d in ct_root.findall(f"{{{CT_NS}}}Default")}
+
+        # TTF default 가 없으면 추가
+        if "ttf" not in existing_defaults:
+            d = etree.SubElement(ct_root, f"{{{CT_NS}}}Default")
+            d.set("Extension", "ttf")
+            d.set("ContentType", "application/x-fontTTF")
+        if "otf" not in existing_defaults and any(e["ext"] == ".otf" for e in embedded):
+            d = etree.SubElement(ct_root, f"{{{CT_NS}}}Default")
+            d.set("Extension", "otf")
+            d.set("ContentType", "application/vnd.ms-opentype")
+
+        ct_tree.write(str(ct_path), xml_declaration=True, encoding="UTF-8", standalone=True)
+
+        # 5. 새 zip 으로 패키징 (원본 덮어쓰기)
+        new_pptx = str(tmp_dir) + ".out.pptx"
+        with zipfile.ZipFile(new_pptx, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, _dirs, files in os.walk(tmp_dir):
+                for fname in files:
+                    fpath = os.path.join(root, fname)
+                    rel = os.path.relpath(fpath, tmp_dir).replace(os.sep, "/")
+                    zf.write(fpath, rel)
+
+        # 원본 교체
+        shutil.move(new_pptx, pptx_path)
+        return len(embedded)
+    except Exception as e:
+        print(f"[Embed] 폰트 임베드 전체 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        return 0
+    finally:
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
+def _post_process_pptx(pptx_path: str, skill_file: dict) -> dict:
+    """python-pptx 저장 후 호출하는 깊은 OOXML 후처리.
+
+    현재 기능:
+      1. skill_file.fonts 의 TTF/OTF 파일을 PPTX 에 임베드
+
+    반환: {"embedded_fonts": int, "errors": [...] }
+    """
+    result = {"embedded_fonts": 0, "errors": []}
+    if not isinstance(skill_file, dict):
+        return result
+
+    fonts_list = skill_file.get("fonts") or []
+    if not isinstance(fonts_list, list):
+        return result
+
+    # 로컬 경로 확정된 폰트만 추출
+    font_entries = []
+    for f in fonts_list:
+        if not isinstance(f, dict):
+            continue
+        family = (f.get("family") or f.get("name") or "").strip()
+        if not family:
+            continue
+        local = _resolve_font_local_path(f)
+        if not local:
+            continue
+        font_entries.append({"family": family, "local_path": local})
+
+    if not font_entries:
+        return result
+
+    try:
+        embedded_n = _embed_fonts_in_pptx(pptx_path, font_entries)
+        result["embedded_fonts"] = embedded_n
+    except Exception as e:
+        result["errors"].append(f"font_embed: {e}")
+        print(f"[PostProcess] 폰트 임베드 실패: {e}")
+
+    return result
+
+
 def render_design_spec(prs, design_spec: dict, skill_file: dict, asset_dir: Path):
     """단일 디자인 스펙(dict) → python-pptx 슬라이드 렌더.
 
@@ -1306,6 +1975,17 @@ def render_design_spec(prs, design_spec: dict, skill_file: dict, asset_dir: Path
                 _render_icon_region(slide, r, icon_dir)
             elif rtype == "image":
                 _render_image_region(slide, r)
+            # M16.A — 새 region 타입
+            elif rtype == "ghost_text":
+                _render_ghost_text_region(slide, r, skill_file)
+            elif rtype == "page_indicator":
+                _render_page_indicator_region(slide, r, skill_file)
+            elif rtype == "chip":
+                _render_chip_region(slide, r, skill_file)
+            elif rtype == "accent_line":
+                _render_accent_line_region(slide, r)
+            elif rtype == "decoration_set":
+                _render_decoration_set_region(slide, r)
             else:
                 print(f"[Builder-Spec] 알 수 없는 region.type: {rtype} (skip)")
         except Exception as e:
@@ -1416,6 +2096,15 @@ async def build_pptx_styled_from_designs_stream(
         yield ("error", {"message": f"PPTX 저장 실패: {e}"})
         return
 
+    # 6a) M16.A — 빌드 후 후처리 (폰트 임베드 등)
+    post_result = {"embedded_fonts": 0, "errors": []}
+    try:
+        post_result = _post_process_pptx(str(pptx_path), skill_file)
+        if post_result.get("embedded_fonts"):
+            yield ("fonts_embedded", {"count": post_result["embedded_fonts"]})
+    except Exception as e:
+        print(f"[Builder-Spec] post_process 전체 실패: {e}")
+
     pptx_url = f"/uploads/ppt_styled/{project_id}/presentation.pptx"
     await db.generated_pptx_styled.update_one(
         {"project_id": project_id},
@@ -1423,6 +2112,7 @@ async def build_pptx_styled_from_designs_stream(
             "status": "built",
             "pptx_path": str(pptx_path),
             "pptx_url": pptx_url,
+            "embedded_fonts_count": post_result.get("embedded_fonts", 0),
             "built_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
         }},

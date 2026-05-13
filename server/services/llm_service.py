@@ -4354,6 +4354,9 @@ async def generate_pptx_styled_design_stream(
                 "slide_from": slide_from,
                 "slide_to": slide_to,
                 "parsed_count": len(normalized),
+                # M15: 청크에서 만들어진 design_specs 를 즉시 프론트로 전달 →
+                # 프론트가 슬라이드 캔버스/썸네일에 점진적으로 추가 렌더
+                "specs": normalized,
             })
 
         except Exception as e:

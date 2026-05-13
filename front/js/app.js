@@ -4387,13 +4387,25 @@ async function generatePptStyled() {
                         el.scrollTop = el.scrollHeight;
                     }
                 },
-                // ---- design_complete ----
-                design_complete: (p) => {
-                    console.log('[pptx-styled] design_complete', p);
-                    const specs = Array.isArray(p && p.design_specs) ? p.design_specs : [];
-                    _pptStyleBuildState.designSpecs = specs;
-                    _pptStyleBuildState.designDone = true;
-                    // 빌드 단계용 슬롯에 layout_hint enrich
+                // ---- chunk_start (M15: 5장 청크 시작 알림) ----
+                chunk_start: (p) => {
+                    const ci = (p && p.chunk_index) || 1;
+                    const tc = (p && p.total_chunks) || 1;
+                    const sf = (p && p.slide_from) || 1;
+                    const st = (p && p.slide_to) || 1;
+                    $('#pptStyledDesignStatus').text(`디자인 청크 ${ci}/${tc} 처리 중 · 슬라이드 ${sf}~${st}`);
+                    $('#streamingStatus').text(`디자인 청크 ${ci}/${tc} (슬라이드 ${sf}~${st}) 생성 중...`);
+                },
+                // ---- chunk_done (M15: 청크 단위 진행 누적 — M16: 캔버스/썸네일 렌더 제거) ----
+                chunk_done: (p) => {
+                    console.log('[pptx-styled] chunk_done', p);
+                    const specs = (p && Array.isArray(p.specs)) ? p.specs : [];
+
+                    // designSpecs 누적 (빌드 phase 에서 사용)
+                    if (!Array.isArray(_pptStyleBuildState.designSpecs)) _pptStyleBuildState.designSpecs = [];
+                    specs.forEach((s) => _pptStyleBuildState.designSpecs.push(s));
+
+                    // 빌드 슬롯 enrich (layout_hint, title) — 진행 카드 텍스트용
                     specs.forEach((spec) => {
                         if (!spec) return;
                         const idx = (typeof spec.slide_index === 'number') ? spec.slide_index : -1;
@@ -4406,8 +4418,22 @@ async function generatePptStyled() {
                         }
                         if (spec.title && !slot.title) slot.title = spec.title;
                     });
-                    $('#pptStyledDesignStatus').text(`디자인 스펙 완료 · 슬라이드 ${specs.length}개`);
-                    $('#streamingStatus').text(`디자인 스펙 완료 · 슬라이드 ${specs.length}개`);
+
+                    // M16: 캔버스/썸네일 렌더 제거 — 사용자는 다운로드만 받음
+                    // _designSpecToSlide 변환 및 renderSlideAtIndex/renderSlideThumbnails 호출 모두 제거
+                    // (함수 정의는 보존되어 있어 필요 시 복원 가능)
+                },
+                // ---- design_complete (모든 청크 완료) ----
+                design_complete: (p) => {
+                    console.log('[pptx-styled] design_complete', p);
+                    const specs = Array.isArray(p && p.design_specs) ? p.design_specs : [];
+                    // chunk_done 에서 이미 누적된 경우 그대로 사용, 아니면 result 의 값으로 채움
+                    if (!Array.isArray(_pptStyleBuildState.designSpecs) || _pptStyleBuildState.designSpecs.length === 0) {
+                        _pptStyleBuildState.designSpecs = specs;
+                    }
+                    _pptStyleBuildState.designDone = true;
+                    $('#pptStyledDesignStatus').text(`디자인 스펙 완료 · 슬라이드 ${_pptStyleBuildState.designSpecs.length}개`);
+                    $('#streamingStatus').text(`디자인 스펙 완료 · 슬라이드 ${_pptStyleBuildState.designSpecs.length}개`);
                 },
                 // ---- Phase A 종합 결과 ----
                 result: (p) => {
@@ -4579,7 +4605,8 @@ async function generatePptStyled() {
 
         if (_pptStyleBuildState.pptx_url || _pptStyleBuildState.buildDone) {
             showToast('PPT 스타일 슬라이드 빌드가 완료되었습니다', 'success');
-            // 진행 카드를 우선 "완료" 상태로 채운 뒤 썸네일 미리보기 로딩 (M14 복원)
+            // M16: 미리보기 단계 제거 — 진행 카드 모두 "완료" 상태로 마킹 + 다운로드 CTA 만 강조
+            // (_loadPptStyledPreview / openPptStyledViewer 함수 정의는 보존, 호출만 차단)
             try {
                 if (_pptStyleBuildState.slides && _pptStyleBuildState.slides.length) {
                     _pptStyleBuildState.slides.forEach((slot) => {
@@ -4588,12 +4615,6 @@ async function generatePptStyled() {
                     _renderPptStyledSlideGrid();
                 }
             } catch (_) { /* noop */ }
-            // 빌드된 PPTX 의 슬라이드 객체를 로드해 카드 그리드를 썸네일 카드로 교체
-            try {
-                await _loadPptStyledPreview();
-            } catch (err) {
-                console.warn('[PPT Styled] 썸네일 로드 실패 — 다운로드 CTA 만 노출:', err);
-            }
             // 다운로드 영역 CTA 강조
             const $actions = $('#pptStyledProgress .ppt-styled-actions');
             $actions.addClass('ppt-styled-actions-cta');
@@ -4638,6 +4659,127 @@ async function generatePptStyled() {
         _setSlideToolsDisabled(false);
     }
 }
+
+// ============================================
+// M15: design_spec → slide 객체 변환기
+//   - design_spec 좌표: 인치 (캔버스 10 × 5.625")
+//   - slide.objects 좌표: 픽셀 (캔버스 960 × 540 px, 96 dpi)
+//   변환: x_px = x_inch * 96
+// ============================================
+function _designSpecToSlide(spec) {
+    if (!spec || typeof spec !== 'object') return null;
+
+    const DPI = 96;
+    const inchToPx = (v) => (typeof v === 'number' ? v * DPI : 0);
+
+    const objects = [];
+    const regions = Array.isArray(spec.regions) ? spec.regions : [];
+
+    // 배경 처리: gradient/solid 면 z_index=-1 의 전체 사각형으로 그리기
+    const bg = spec.background;
+    let backgroundImage = null;
+    if (bg && typeof bg === 'object') {
+        if (bg.type === 'image' && (bg.image_url || bg.url)) {
+            backgroundImage = bg.image_url || bg.url;
+        } else if (bg.type === 'gradient' || bg.type === 'solid') {
+            const fromColor = bg.from_color || bg.fromColor || bg.color || '#FFFFFF';
+            objects.push({
+                obj_id: 'spec_bg',
+                obj_type: 'shape',
+                x: 0, y: 0, width: 960, height: 540,
+                z_index: -1,
+                shape_style: {
+                    shape_type: 'rectangle',
+                    fill_color: fromColor,
+                    stroke_color: 'none',
+                    stroke_width: 0,
+                    fill_opacity: 1.0,
+                },
+            });
+        }
+    }
+
+    regions.forEach((r, idx) => {
+        if (!r || typeof r !== 'object') return;
+        const x = inchToPx(r.x);
+        const y = inchToPx(r.y);
+        const width = inchToPx(r.w);
+        const height = inchToPx(r.h);
+        const z_index = idx;
+        const rtype = (r.type || '').toLowerCase();
+
+        if (rtype === 'text') {
+            objects.push({
+                obj_id: 'spec_text_' + idx,
+                obj_type: 'text',
+                x: x, y: y, width: width, height: height,
+                z_index: z_index,
+                text_style: {
+                    font_family: r.font_family || '',
+                    font_size: r.font_size || 14,
+                    color: r.color || '#000000',
+                    bold: !!r.bold,
+                    italic: !!r.italic,
+                    align: r.align || 'left',
+                },
+                generated_text: r.text || '',
+            });
+        } else if (rtype === 'shape') {
+            objects.push({
+                obj_id: 'spec_shape_' + idx,
+                obj_type: 'shape',
+                x: x, y: y, width: width, height: height,
+                z_index: z_index,
+                shape_style: {
+                    shape_type: r.shape || 'rectangle',
+                    fill_color: r.fill || 'none',
+                    stroke_color: r.stroke || 'none',
+                    stroke_width: typeof r.stroke_width === 'number' ? r.stroke_width : 0,
+                    fill_opacity: typeof r.opacity === 'number' ? r.opacity : 1.0,
+                },
+            });
+        } else if (rtype === 'icon') {
+            // 아이콘은 image_area 로 표현 (실제 PPTX 빌드 후 PNG 임베드되지만 미리보기에서는 placeholder)
+            objects.push({
+                obj_id: 'spec_icon_' + idx,
+                obj_type: 'image_area',
+                x: x, y: y, width: width, height: height,
+                z_index: z_index,
+                role: 'icon',
+                placeholder: r.icon_key || '',
+                shape_style: {
+                    shape_type: 'ellipse',
+                    fill_color: r.color || '#1C60EF',
+                    stroke_color: 'none',
+                    stroke_width: 0,
+                    fill_opacity: 0.15,
+                },
+            });
+        } else if (rtype === 'image') {
+            objects.push({
+                obj_id: 'spec_image_' + idx,
+                obj_type: 'image',
+                x: x, y: y, width: width, height: height,
+                z_index: z_index,
+                image_url: r.image_url || r.url || '',
+                image_fit: r.fit || 'cover',
+            });
+        }
+    });
+
+    return {
+        order: spec.slide_index || (objects.length ? 1 : 1),
+        objects: objects,
+        slide_meta: {
+            content_type: 'body',
+            layout: spec.layout_hint || '',
+        },
+        background_image: backgroundImage,
+        items: [],
+        generated_text: '',
+    };
+}
+
 
 function _renderPptStyledSlideGrid() {
     if (!_pptStyleBuildState) return;

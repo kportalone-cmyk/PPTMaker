@@ -2794,6 +2794,12 @@ async def generate_pptx_styled_stream(jwt_token: str, data: PPTXStyledGenerateRe
                         if await _check_cancelled(db, data.project_id, generation_id):
                             design_cancelled = True
                             break
+                elif d_event == "chunk_start":
+                    # M15: 청크 시작 알림
+                    yield _sse("chunk_start", d_data or {})
+                elif d_event == "chunk_done":
+                    # M15: 청크 완료 — 5장 design_specs 즉시 프론트로 전달
+                    yield _sse("chunk_done", d_data or {})
                 elif d_event == "result":
                     design_result = d_data
 

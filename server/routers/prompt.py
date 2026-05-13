@@ -1791,6 +1791,73 @@ outline 의 각 슬라이드를 다음 규칙으로 패턴에 매칭:
   ]
 }
 ```
+
+[확장 region 타입 — 시각 품질 향상용]
+
+기존 text/shape/icon/image 외에 다음 5종을 적극 활용하세요:
+
+1. ghost_text — 거대 반투명 텍스트 (배경 장식)
+   schema: {type:"ghost_text", x, y, w, h, text, font_family, font_size, bold, color, opacity (0.05~0.15), align, valign}
+   용도: 챕터 디바이더의 거대 "01" 숫자 배경, 본문에 "24h" 같은 강조 그래픽
+   예: 챕터 슬라이드 좌측에 font_size=240, opacity=0.08 로 "01" 거대 표시
+
+2. page_indicator — 페이지 번호 (자동으로 숫자+가로선 배치)
+   schema: {type:"page_indicator", x, y, w, h, number ("01"), total (11, optional), color, font_family, font_size}
+   용도: 모든 슬라이드 우하단 또는 좌상단에 일관된 페이지 번호
+   권장 위치: 우하단 (x=8.5, y=5.2, w=1.2, h=0.3)
+
+3. chip — border-only 사각형 + 텍스트 (라벨 칩)
+   schema: {type:"chip", x, y, w, h, text, color, fill ("none" 또는 hex), font_size, char_spacing (1.5~3 pt 권장), align, valign}
+   용도: "PART 01/05", "CHAPTER", "SECTION 02" 같은 라벨
+   권장: 챕터 슬라이드 우측 상단/중앙에 작은 chip ("PART 01/05" 형식)
+
+4. accent_line — 짧은 강조 라인
+   schema: {type:"accent_line", x, y, w, h, color, opacity (0.7~1.0)}
+   용도: 카드 상단 강조선, 제목 위 데코 라인, 섹션 구분
+   예: 카드 상단에 x=0.5, y=1.7, w=2.5, h=0.05 로 primary 색 짧은 바
+
+5. decoration_set — 여러 도형 묶음 (배경 데코)
+   schema: {type:"decoration_set", shapes: [{shape:"ellipse|rectangle", x, y, w, h, fill, stroke, stroke_width, opacity}, ...]}
+   용도: 표지/챕터/마무리 슬라이드의 모서리에 반투명 큰 원 + 그 위에 작은 원 + outline 원 조합
+   예 (표지 우상단):
+     decoration_set: shapes=[
+       {shape:"ellipse", x:7.5, y:-1.0, w:4.0, h:4.0, fill:"#DBE8FE", stroke:"none", opacity:0.4},
+       {shape:"ellipse", x:8.2, y:0.5, w:2.5, h:2.5, fill:"none", stroke:"#1C60EF", stroke_width:0.5, opacity:0.5},
+       {shape:"ellipse", x:8.8, y:1.2, w:1.3, h:1.3, fill:"#1C60EF", stroke:"none", opacity:1.0}
+     ]
+
+[확장 속성 — 기존 text/shape 에 추가 가능]
+
+text 추가 속성:
+  - opacity (0.0~1.0): 텍스트 투명도. 일반 텍스트는 1.0 유지, 부가 정보는 0.6~0.8 권장.
+  - char_spacing (pt, 0~10): letter-spacing. 영문 대문자 라벨에 1.5~3 pt 권장 ("DEFENSE REPORT · 2026" 등)
+
+shape 추가 속성:
+  - opacity (0.0~1.0): 채우기 투명도. 반투명 데코는 0.2~0.4 권장.
+  - gradient_from + gradient_to (hex): 선형 그라데이션 채우기. 둘 다 지정해야 활성.
+  - gradient_angle (각도, 기본 0=수평): 그라데이션 방향. 45/90 자주 사용.
+
+[디자인 품질 가이드 — 반드시 따를 것]
+
+스타일 범용성:
+  - 슬라이드 색상은 skill_file.design_tokens.colors 의 7가지(primary/light/white/ink/grey/line/darker)를 다양하게 활용
+  - 특정 hex 를 하드코딩하지 말고 항상 토큰 변수 매핑 (예: 본문 텍스트=ink, 부가 정보=grey, 강조=primary)
+  - 첨부된 디자인 샘플 이미지에서 색 비율을 파악하고 그 비율에 맞춰 슬라이드별 색 분배
+
+권장 활용 패턴:
+  1. 모든 슬라이드에 page_indicator (예: "NN" + total) 우하단 또는 좌상단 추가
+  2. 챕터 디바이더에 ghost_text (거대 챕터 번호 opacity 0.08) + chip ("PART N/Total")
+  3. 본문 카드에 accent_line 상단 강조 (primary 색)
+  4. 표지/마무리/챕터에 decoration_set (큰 반투명 원 + 작은 outline 원 + 작은 filled 원 조합) — 항상 모서리 (좌상/우상/우하/좌하 중 1~2 곳)
+  5. 영문 라벨 ("THE PROJECT INDEX", "CONTENTS", "CHAPTER") 은 char_spacing 2~4 pt 적용
+  6. 카드 본문은 60~90자 압축, 줄글 X
+  7. 배경 그라데이션 origin 은 슬라이드마다 다르게 변형 (skill_file 의 light/white 색 사용)
+
+[중요 — 절대 규칙]
+- 등록된 PPT 스타일은 다양하게 변경됩니다. 디자인 샘플 이미지를 보고 톤(밝은/어두운, 차분한/대담한)을 파악해 그에 맞게 적용하세요.
+- 같은 outline 이라도 다른 스타일이면 색/레이아웃 변형 가능.
+- 모든 region 의 좌표는 캔버스 10×5.625" 안에 들어가도록.
+- region 누락 금지 — 매 슬라이드는 최소 page_indicator + 1개 콘텐츠 region 필수.
 """,
     },
     {

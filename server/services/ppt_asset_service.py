@@ -1,13 +1,15 @@
 """PPT 스타일 자산 서비스 (M3 빌더용)
 
-배경 그라데이션 JPG 생성 + 슬라이드별 그라데이션 원점 매핑 + 간이 아이콘 PNG 생성.
+배경 그라데이션 JPG 생성 + 슬라이드별 그라데이션 원점 매핑 + 정식 아이콘 PNG 생성.
 
 참고 문서: 데스크탑 "PPT생성스.md" 4.3절 (배경 그라데이션) / 5절 (12개 패턴) /
 6절 (헬퍼 함수). 좌표·색·원점값은 해당 문서 그대로 포팅.
 
-외부 라이브러리 제약: numpy, Pillow 만 사용 (이미 requirements.txt 에 존재).
-react-icons / cairosvg 등 추가 의존성 금지 → 아이콘은 PIL 로 원+문자 형태의
-placeholder 만 생성하고 M5 에서 정식 SVG 세트로 교체 가능하도록 시그니처 안정 유지.
+외부 라이브러리 제약: numpy, Pillow, lxml 만 사용 (모두 requirements.txt 에 존재).
+
+M16.A 변경: 아이콘은 server/assets/icons/svg/<key>.svg (Heroicons MIT) 를
+런타임 라스터라이즈 (services/svg_raster_service) 한 뒤 색상 tint 적용한다.
+SVG 파일이 없는 키는 원형 placeholder fallback 으로 처리한다.
 """
 
 from __future__ import annotations
@@ -19,6 +21,8 @@ from typing import Optional
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
+from services.svg_raster_service import render_svg_to_png
 
 
 # ============ 색상 헬퍼 ============
@@ -297,49 +301,52 @@ def _try_load_font(size: int) -> ImageFont.FreeTypeFont:
         return None  # type: ignore
 
 
-def icon_placeholder(icon_key: str, color_hex: str, size: int = 256) -> bytes:
-    """간이 아이콘 PNG bytes 반환.
+# 아이콘 SVG 자산 디렉토리
+_ICONS_SVG_DIR = Path(__file__).resolve().parent.parent / "assets" / "icons" / "svg"
 
-    외부 라이브러리 없이 PIL 만으로 '원 + 한 글자' 형태의 placeholder 를 생성한다.
-    M5 에서 정식 SVG 아이콘 세트로 교체할 때 함수 시그니처를 유지하면 호출부 무수정.
 
-    icon_key:
-      - _ICON_GLYPH 에 정의된 30개 키 → 매핑된 한 글자
-      - 빈 문자열 또는 미정의 → 빈 원만 그림
-    color_hex: 아이콘 색상 (원 + 글자 동일 색)
-    size: 출력 PNG 한 변 px
-    """
+def _fallback_circle_png(color_hex: str, size: int) -> bytes:
+    """SVG 가 없을 때의 fallback — 단색 원."""
     img = Image.new("RGBA", (size, size), (255, 255, 255, 0))
     draw = ImageDraw.Draw(img)
-
     rgb = _hex_to_rgb_tuple(color_hex)
     fill = rgb + (255,)
-
-    # 원 (배경 fill 으로 채운 솔리드 원)
     pad = int(size * 0.06)
     draw.ellipse((pad, pad, size - pad, size - pad), fill=fill)
-
-    # 글자
-    glyph = _ICON_GLYPH.get((icon_key or "").strip())
-    if glyph:
-        font = _try_load_font(int(size * 0.55))
-        if font is not None:
-            # 텍스트 박스 측정
-            try:
-                bbox = draw.textbbox((0, 0), glyph, font=font)
-                tw = bbox[2] - bbox[0]
-                th = bbox[3] - bbox[1]
-                tx = (size - tw) // 2 - bbox[0]
-                ty = (size - th) // 2 - bbox[1]
-            except Exception:
-                tw, th = draw.textsize(glyph, font=font)  # type: ignore
-                tx = (size - tw) // 2
-                ty = (size - th) // 2
-            draw.text((tx, ty), glyph, fill=(255, 255, 255, 255), font=font)
-
     buf = io.BytesIO()
     img.save(buf, "PNG", optimize=True)
     return buf.getvalue()
+
+
+def icon_placeholder(icon_key: str, color_hex: str, size: int = 256) -> bytes:
+    """아이콘 PNG bytes 반환 (M16.A — Heroicons 기반).
+
+    1. server/assets/icons/svg/<key>.svg 가 있으면 라스터라이즈 + color tint
+    2. 없으면 fallback (단색 원)
+
+    icon_key: 30개 키 ('users', 'rocket', 'check', ...)
+    color_hex: '#RRGGBB' (검정 SVG 영역을 이 색으로 치환)
+    size: 출력 PNG 한 변 px
+    """
+    key = (icon_key or "").strip().lower()
+    if not key:
+        return _fallback_circle_png(color_hex, size)
+
+    svg_path = _ICONS_SVG_DIR / f"{key}.svg"
+    if not svg_path.is_file():
+        return _fallback_circle_png(color_hex, size)
+
+    try:
+        with open(svg_path, "rb") as f:
+            svg_bytes = f.read()
+        rgb = _hex_to_rgb_tuple(color_hex)
+        img = render_svg_to_png(svg_bytes, output_size=size, color_rgb=rgb)
+        buf = io.BytesIO()
+        img.save(buf, "PNG", optimize=True)
+        return buf.getvalue()
+    except Exception as e:
+        print(f"[Asset] icon render 실패 key={key}: {e}")
+        return _fallback_circle_png(color_hex, size)
 
 
 __all__ = [

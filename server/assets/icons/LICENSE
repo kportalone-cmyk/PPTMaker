@@ -1,0 +1,64 @@
+Icon Source
+===========
+
+This directory contains a curated subset of Heroicons (https://heroicons.com),
+copied as SVG and rasterized to PNG at build time for use as PPTX icon assets.
+
+Heroicons License
+-----------------
+
+MIT License
+
+Copyright (c) 2020 Refactoring UI Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is furnished
+to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Key → Heroicon mapping (svg/<key>.svg)
+--------------------------------------
+
+users      → user-group
+atom       → cpu-chip          (semantic: scientific/technical)
+ship       → arrows-pointing-out (semantic: voyage/deploy)
+bomb       → no-symbol         (semantic: risk/blocker)
+shield     → shield-check
+fire       → fire
+chart      → chart-bar
+star       → star
+lightning  → bolt
+target     → flag              (semantic: target/objective)
+brain      → sparkles          (semantic: intelligence/ideas)
+gear       → cog-6-tooth
+lock       → lock-closed
+leaf       → sun               (semantic: growth/energy)
+globe      → globe-alt
+rocket     → rocket-launch
+eye        → eye
+check      → check
+warning    → exclamation-triangle
+idea       → light-bulb
+clock      → clock
+money      → currency-dollar
+building   → building-office
+network    → signal
+book       → book-open
+cloud      → cloud
+code       → code-bracket
+database   → circle-stack
+mobile     → device-phone-mobile
+palette    → swatch
