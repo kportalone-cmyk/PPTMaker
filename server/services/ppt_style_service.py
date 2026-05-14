@@ -43,29 +43,47 @@ _VISION_PPT_PROMPT = (
 # ============ 패턴 추출 전용 프롬프트 (M8) ============
 
 _VISION_PATTERN_EXTRACT_PROMPT = (
-    "이 이미지는 한 PPT 디자인 시리즈의 여러 슬라이드 레이아웃이 한 장에 담겨있는 레퍼런스입니다.\n"
-    "이미지 안에서 식별 가능한 각각의 개별 슬라이드 레이아웃을 구조화된 JSON 으로 추출하세요.\n\n"
-    "각 패턴은 다음 스키마를 따릅니다:\n"
+    "이 이미지는 한 PPT 디자인 시리즈의 여러 슬라이드 레이아웃이 한 장에 담겨 있는 레퍼런스입니다.\n"
+    "이미지 안에서 식별 가능한 각 슬라이드를 구조화된 JSON 패턴으로 추출하세요.\n"
+    "추출된 패턴은 이후 새 outline 텍스트(제목/카드/아이콘/이미지)를 채워 슬라이드를 자동 생성하는 데 사용됩니다.\n\n"
+    "## 각 패턴 스키마 (모든 필드 필수, 다만 해당없으면 빈 값/0/[] 허용)\n"
     "{\n"
-    '  "label": "왼쪽 인물 사진 + 오른쪽 제목/본문 (히어로 슬라이드)",\n'
+    '  "label": "왼쪽 인물 + 오른쪽 본문 (히어로)",\n'
     '  "regions": [\n'
-    '    {"role":"background", "approx_color":"#hex"},\n'
-    '    {"role":"image|title|subtitle|body|card_title|card_desc|stat|icon|decoration",\n'
-    '     "position_hint":"top-left|top-center|top-right|middle-left|center|middle-right|bottom-left|bottom-center|bottom-right|full-left|full-right",\n'
-    '     "size_hint":"small|medium|large|fullwidth|fullheight",\n'
-    '     "x_pct": 0, "y_pct": 0, "w_pct": 50, "h_pct": 100}\n'
+    "    {\n"
+    '      "role": "background|image|title|subtitle|body|card_title|card_desc|stat|unit|icon|decoration|bullet|number_badge|divider|page_indicator|chip|logo|quote",\n'
+    '      "x_pct": 0, "y_pct": 0, "w_pct": 50, "h_pct": 100,\n'
+    '      "text_align": "left|center|right",\n'
+    '      "font_scale": "xs|sm|md|lg|xl|hero",\n'
+    '      "font_weight": "regular|medium|bold",\n'
+    '      "text_color_role": "ink|grey|primary|white|darker",\n'
+    '      "group_index": 0,\n'
+    '      "icon_category": "stat|bullet|feature|decoration",\n'
+    '      "image_role": "hero|thumbnail|photo|icon-illustration|background|none",\n'
+    '      "shape": "rectangle|rounded_rect|ellipse|circle|line|none",\n'
+    '      "fill_color_role": "primary|light|white|ink|grey|line|darker|none",\n'
+    '      "opacity": 1.0,\n'
+    '      "approx_color": "#hex"\n'
+    "    }\n"
     "  ],\n"
     '  "suitable_for_outline_types": ["title|toc|section|content|closing"],\n'
     '  "card_count": 0,\n'
-    '  "visual_keywords": ["hero","split","grid","stat-block"]\n'
+    '  "visual_keywords": ["hero","split","grid"]\n'
     "}\n\n"
-    "규칙:\n"
-    "- 이미지에 보이는 슬라이드를 최대 12개까지 추출 (작은 썸네일이라도 식별 가능하면 포함)\n"
-    "- 좌표는 슬라이드 한 장 기준 (0-100 백분율)\n"
-    "- card_count = 본문 카드 슬라이드면 카드 수, 그 외 0\n"
-    "- visual_keywords = 디자인 특성 자유 (검색/매칭 용)\n"
-    "- 응답은 ```json 코드 블록 1개 안에:\n"
+    "## 핵심 규칙\n"
+    "- 한 이미지에서 보이는 슬라이드를 최대 12개까지 추출 (작은 썸네일도 식별되면 포함).\n"
+    "- 좌표는 슬라이드 한 장 기준 백분율 (0-100, x+w<=100, y+h<=100).\n"
+    "- 본문 카드가 N개 보이면 card_title region 을 N개 추출하고 group_index 로 묶으세요 (card_desc/icon 도 같은 group_index).\n"
+    "- card_count = card_title region 의 개수.\n"
+    "- 텍스트는 font_scale 로 상대 크기 (body=md 기준, 제목 lg~hero, 라벨 xs~sm).\n"
+    "- 텍스트 색은 design_tokens 의 토큰 이름(text_color_role)으로 매핑.\n"
+    "- 도형/장식은 shape + fill_color_role + opacity.\n"
+    "- background role 의 region 1개에는 approx_color 또는 fill_color_role 을 채우세요.\n"
+    "- 불명확하거나 해당없는 선택 필드는 생략 가능. 필수는 role/x_pct/y_pct/w_pct/h_pct.\n\n"
+    "## 응답 형식\n"
+    "반드시 ```json 코드 블록 1개 안에 다음 형태로 출력 (그 외 설명/주석 금지):\n"
     '{"patterns": [패턴1, 패턴2, ...]}\n'
+    "JSON 이외 텍스트는 절대 포함하지 마세요.\n"
 )
 
 
@@ -256,21 +274,40 @@ async def analyze_samples_with_vision(style_id: str) -> dict:
         "analyzed_at": datetime.utcnow(),
     }
 
-    # design_tokens.colors 빈 슬롯 자동 채움 (수동 설정값은 보존)
-    # 기본 팔레트 값과 동일하면 "사용자가 손대지 않은 슬롯"으로 간주하여 후보로 덮어쓴다.
-    from models.ppt_style import DEFAULT_COLORS
+    # design_tokens.colors / sizes 자동 채움.
+    #
+    # 정책 (디자인 토큰은 기본값이 없어야 한다는 사용자 요구):
+    #   - 비어 있는 슬롯은 추출된 색상으로 채운다.
+    #   - 사용자가 수동으로 입력한 값(어떤 값이든)은 보존한다 — 단, 분석 결과와
+    #     "기본 팔레트" 값이 우연히 일치할 때는 보존하지 않고 분석값으로 갱신한다.
+    #   - 기본 팔레트(DEFAULT_COLORS) 와 동일한 값도 "손대지 않음" 으로 간주해 덮어쓴다.
+    from models.ppt_style import DEFAULT_COLORS, DEFAULT_FONT_SIZES
 
     design_tokens = doc.get("design_tokens") or {}
     colors = (design_tokens.get("colors") or {}).copy()
-    # 슬롯 우선순위: primary 먼저, 그 다음 light, ink, grey, line, darker
-    slot_order = ["primary", "light", "ink", "grey", "line", "darker"]
+    slot_order = ["primary", "light", "ink", "grey", "line", "darker", "white"]
     pool = list(all_colors)
     for slot in slot_order:
         current = colors.get(slot)
-        if not current or current == DEFAULT_COLORS.get(slot):
+        # 비었거나, 기본 팔레트와 동일하면 분석값으로 채움.
+        if (not current) or (current == DEFAULT_COLORS.get(slot)):
             if pool:
                 colors[slot] = pool.pop(0)
+    # white 슬롯이 비어 있으면 기본값(#FFFFFF) 으로 보완 (사용자가 흰색을 의도하지 않을 일은 거의 없음)
+    if not colors.get("white"):
+        colors["white"] = DEFAULT_COLORS["white"]
     design_tokens["colors"] = colors
+
+    # fonts.sizes 자동 채움 — Vision 으로는 pt 추정이 어려우므로, 비어 있을 때만
+    # DEFAULT_FONT_SIZES 로 채운다 (전부 비어 있으면 한 번에 채워 들어가게 됨).
+    fonts = design_tokens.get("fonts") or {}
+    sizes = (fonts.get("sizes") or {}).copy()
+    for k, v in DEFAULT_FONT_SIZES.items():
+        if not sizes.get(k):
+            sizes[k] = v
+    fonts["sizes"] = sizes
+    # title_font_id / body_font_id 는 그대로 유지 (사용자 선택)
+    design_tokens["fonts"] = fonts
 
     now = datetime.utcnow()
     await db.ppt_styles.update_one(
@@ -327,6 +364,9 @@ async def extract_patterns_from_samples(style_id: str) -> dict:
 
     extracted_patterns: list[dict] = []
     by_sample: list[dict] = []
+    extraction_debug: list[dict] = []  # 원본 응답 + 파싱 상태 (운영 진단용)
+
+    print(f"[PatternExtract] style_id={style_id} samples={len(sample_refs)}")
 
     for sample_index, ref in enumerate(sample_refs):
         url = ref.get("url") or ""
@@ -338,33 +378,73 @@ async def extract_patterns_from_samples(style_id: str) -> dict:
             "url": url,
             "patterns": [],
         }
+        debug_entry: dict = {
+            "sample_index": sample_index,
+            "url": url,
+            "original_filename": original_filename,
+            "status": "ok",
+            "raw_text_len": 0,
+            "raw_text_preview": "",
+            "raw_text_tail": "",
+            "patterns_found": 0,
+        }
         if file_path is None:
+            debug_entry["status"] = "file_not_found"
+            print(f"[PatternExtract] sample[{sample_index}] file not found: url={url}")
             by_sample.append(sample_entry)
+            extraction_debug.append(debug_entry)
             continue
 
-        # 패턴 추출 LLM 호출 (max_tokens=8192)
+        # 패턴 추출 LLM 호출 (max_tokens 충분히)
         text = await llm_service.analyze_image_for_patterns(
             str(file_path),
             original_filename=original_filename,
             prompt=_VISION_PATTERN_EXTRACT_PROMPT,
-            max_tokens=8192,
+            max_tokens=12000,
         )
         if not text:
+            debug_entry["status"] = "llm_empty_response"
+            print(f"[PatternExtract] sample[{sample_index}] LLM returned empty text: {original_filename}")
             by_sample.append(sample_entry)
+            extraction_debug.append(debug_entry)
             continue
 
+        debug_entry["raw_text_len"] = len(text)
+        debug_entry["raw_text_preview"] = text[:500]
+        debug_entry["raw_text_tail"] = text[-300:] if len(text) > 300 else ""
+
         parsed = _extract_json_block(text)
-        if not parsed or not isinstance(parsed, dict):
-            by_sample.append(sample_entry)
-            continue
+
+        # 1차 파싱 실패 → 잘린 JSON 의 patterns 배열 부분 복구 시도
+        if not parsed or not isinstance(parsed, dict) or "patterns" not in parsed:
+            recovered = _recover_patterns_from_truncated(text)
+            if recovered is not None:
+                parsed = {"patterns": recovered}
+                debug_entry["status"] = "parsed_via_recovery"
+                print(f"[PatternExtract] sample[{sample_index}] recovered {len(recovered)} patterns from truncated JSON")
+            else:
+                debug_entry["status"] = "json_parse_failed"
+                print(f"[PatternExtract] sample[{sample_index}] JSON parse FAILED for {original_filename}, "
+                      f"raw_len={len(text)}, head: {text[:200]!r}")
+                by_sample.append(sample_entry)
+                extraction_debug.append(debug_entry)
+                continue
 
         raw_patterns = parsed.get("patterns") or []
         if not isinstance(raw_patterns, list):
+            debug_entry["status"] = "patterns_not_list"
+            print(f"[PatternExtract] sample[{sample_index}] 'patterns' is not a list (got {type(raw_patterns).__name__})")
             by_sample.append(sample_entry)
+            extraction_debug.append(debug_entry)
             continue
 
+        added = 0
         for n, pat in enumerate(raw_patterns):
             if not isinstance(pat, dict):
+                continue
+            # 좌표가 없으면 패턴으로 사용 불가 — 스킵
+            regions = pat.get("regions") or []
+            if not isinstance(regions, list) or len(regions) == 0:
                 continue
             pat_copy = dict(pat)
             pat_copy["id"] = f"ext_{sample_index}_{n}"
@@ -372,24 +452,113 @@ async def extract_patterns_from_samples(style_id: str) -> dict:
             pat_copy["source_sample_url"] = url
             extracted_patterns.append(pat_copy)
             sample_entry["patterns"].append(pat_copy)
+            added += 1
+
+        debug_entry["patterns_found"] = added
+        if added == 0 and len(raw_patterns) > 0:
+            debug_entry["status"] = "patterns_invalid_skipped_all"
+            print(f"[PatternExtract] sample[{sample_index}] all {len(raw_patterns)} patterns lacked regions; skipped")
+        else:
+            print(f"[PatternExtract] sample[{sample_index}] ok — extracted {added} patterns from {original_filename}")
 
         by_sample.append(sample_entry)
+        extraction_debug.append(debug_entry)
 
-    # 도큐먼트 업데이트 (덮어쓰기)
+    # 도큐먼트 업데이트 (덮어쓰기) — extraction_debug 도 함께 저장해 관리자/개발자가 확인 가능
     now = datetime.utcnow()
     await db.ppt_styles.update_one(
         {"_id": oid},
         {"$set": {
             "extracted_patterns": extracted_patterns,
+            "pattern_extraction_debug": extraction_debug,
+            "pattern_extracted_at": now,
             "updated_at": now,
         }},
     )
+
+    print(f"[PatternExtract] style_id={style_id} 완료 — 총 {len(extracted_patterns)} 패턴 추출")
 
     return {
         "extracted_patterns": extracted_patterns,
         "by_sample": by_sample,
         "total_patterns": len(extracted_patterns),
+        "extraction_debug": extraction_debug,
     }
+
+
+def _recover_patterns_from_truncated(text: str) -> Optional[list]:
+    """잘린/오염된 LLM 응답에서 `"patterns": [...]` 배열의 완성된 객체들만 복구.
+
+    LLM 이 12000 토큰을 다 채워 잘렸을 때, JSON 파서는 전체를 못 읽지만 앞쪽
+    완성된 패턴 객체는 살릴 수 있다.
+    """
+    if not text:
+        return None
+    # 코드펜스 안쪽만 추출 시도
+    fence = re.search(r"```(?:json)?\s*(\{[\s\S]*)", text)
+    body = fence.group(1) if fence else text
+
+    # "patterns": [ 시작 위치
+    m = re.search(r'"patterns"\s*:\s*\[', body)
+    if not m:
+        return None
+    start = m.end()
+
+    # 배열 안에서 완성된 { ... } 객체만 하나씩 읽어 들임 (중괄호 균형)
+    patterns: list = []
+    i = start
+    n = len(body)
+    while i < n:
+        # 공백/콤마 스킵
+        while i < n and body[i] in " \t\r\n,":
+            i += 1
+        if i >= n or body[i] == "]":
+            break
+        if body[i] != "{":
+            # 다음 { 까지 점프 — 손상 데이터 방어
+            nxt = body.find("{", i)
+            if nxt == -1:
+                break
+            i = nxt
+        # 한 객체 균형 잡기
+        depth = 0
+        in_str = False
+        esc = False
+        obj_start = i
+        end_idx = -1
+        while i < n:
+            ch = body[i]
+            if esc:
+                esc = False
+                i += 1
+                continue
+            if ch == "\\":
+                esc = True
+                i += 1
+                continue
+            if ch == '"':
+                in_str = not in_str
+            elif not in_str:
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end_idx = i
+                        i += 1
+                        break
+            i += 1
+        if end_idx < 0:
+            break  # 잘림 — 이 객체는 폐기
+        chunk = body[obj_start:end_idx + 1]
+        try:
+            obj = json.loads(chunk)
+            if isinstance(obj, dict):
+                patterns.append(obj)
+        except Exception:
+            # 손상된 객체 1개 → 건너뛰고 계속
+            pass
+    return patterns if patterns else None
 
 
 # ============ 빌더 친화 JSON 빌드 ============

@@ -819,12 +819,19 @@ function editPrompt(promptId) {
     $('#promptEditDesc').text(p.description || '');
     $('#promptEditContent').val(p.content);
 
-    // 모델 셀렉트 박스 구성
+    // 모델 셀렉트 박스 구성 (.env 기반 목록 + 현재 저장된 값 보존)
     const select = $('#promptEditModel');
     select.empty();
+    const savedModelId = (p.model || '').trim();
+    const inAvailable = !!savedModelId && _availableModels.some(function(m) { return m.id === savedModelId; });
+    // 저장된 값이 .env 기반 목록에 없으면 최상단에 "(현재 저장된 값)" 옵션으로 추가
+    if (savedModelId && !inAvailable) {
+        select.append(`<option value="${escapeHtml(savedModelId)}" selected>${escapeHtml(savedModelId)} (현재 저장된 값 · .env 미정의)</option>`);
+    }
     _availableModels.forEach(function(m) {
-        const selected = m.id === (p.model || '') ? ' selected' : '';
-        select.append(`<option value="${escapeHtml(m.id)}"${selected}>${escapeHtml(m.name)} - ${escapeHtml(m.description)}</option>`);
+        const selected = (m.id === savedModelId) ? ' selected' : '';
+        const desc = m.description ? ' - ' + m.description : '';
+        select.append(`<option value="${escapeHtml(m.id)}"${selected}>${escapeHtml(m.name)}${escapeHtml(desc)}</option>`);
     });
 
     $('#promptListView').hide();
@@ -6339,7 +6346,12 @@ async function showPPTStyleEditor(style) {
     // 샘플 이미지
     renderPPTStyleSampleGrid(style.sample_image_refs || []);
 
-    // 패턴 라이브러리 (기본)
+    // 재분석 버튼: 샘플이 1장 이상 있을 때만 노출
+    _refreshPPTStyleReanalyzeBar(Array.isArray(style.sample_image_refs) ? style.sample_image_refs.length : 0);
+
+    // 패턴 라이브러리 (12개 기본 패턴) — UI 는 숨겨졌지만 데이터 모델은 유지된다.
+    // 저장 시 덮어쓰기 방지를 위해 서버 값을 캐시에 보관.
+    _pattern_library_cache = Array.isArray(style.pattern_library) ? style.pattern_library.slice() : [];
     renderPatternLibrary(style.pattern_library || []);
 
     // 자동 추출 패턴 (M8.3)
@@ -6463,6 +6475,9 @@ async function uploadPPTStyleSamples(files) {
         await apiUpload('/api/admin/ppt-styles/' + currentPPTStyleId + '/samples', fd);
         showToast('샘플 이미지가 업로드되었습니다', 'success');
         await reloadCurrentPPTStyle();
+        // 업로드 완료 직후 자동으로 Vision 분석 트리거
+        // (색상/폰트 디자인 토큰 + 추출 패턴을 자동 채워서 다음 섹션에 반영)
+        await autoAnalyzePPTStyle();
     } catch (e) {
         showToast('업로드 실패: ' + (e.message || ''), 'error');
     }
@@ -6536,6 +6551,10 @@ function renderPatternLibrary(patterns) {
     });
 }
 
+// 기본 패턴 12개 UI 는 제거되었지만, 데이터 모델(pattern_library)은 호환을 위해 유지한다.
+// UI 카드가 0개면 _pattern_library_cache (reloadCurrentPPTStyle 시점에 보관된 서버 값)
+// 를 그대로 돌려준다. 즉, 저장 시 기존 값이 덮어써지지 않는다.
+let _pattern_library_cache = [];
 function collectPatternLibrary() {
     const out = [];
     $('#pptStylePatternGrid .ppt-style-pattern-card').each(function() {
@@ -6543,6 +6562,9 @@ function collectPatternLibrary() {
         const enabled = $(this).find('.pattern-enabled').is(':checked');
         out.push({ id: id, enabled: enabled, options: {} });
     });
+    if (out.length === 0 && Array.isArray(_pattern_library_cache) && _pattern_library_cache.length > 0) {
+        return _pattern_library_cache.slice();
+    }
     return out;
 }
 
@@ -6647,7 +6669,14 @@ function collectExtractedPatterns() {
 }
 
 // ---------- Vision 결과 ----------
+// 섹션 재배치 이후 별도의 "자동 분석 (Vision)" 섹션이 제거되었기 때문에 화면에는 노출하지 않는다.
+// vision_analysis 자체는 DB 와 admin.js 의 다른 곳에서 참조되므로 함수는 유지하되,
+// DOM 컨테이너(#pptStyleVisionResult)는 항상 숨김 처리한다. 향후 디버깅이 필요하면
+// 함수 본문의 분기를 풀면 된다.
 function renderPPTStyleVisionResult(vision) {
+    $('#pptStyleVisionResult').hide();
+    return;
+    /* eslint-disable no-unreachable */
     if (!vision || (!vision.extracted_colors && !vision.detected_fonts && !vision.layout_hints)) {
         $('#pptStyleVisionResult').hide();
         return;
@@ -6764,32 +6793,56 @@ async function togglePPTStylePublish() {
     }
 }
 
+// 재분석 바 가시성 + 버튼 상태 갱신. 샘플이 1장 이상 있을 때만 노출.
+function _refreshPPTStyleReanalyzeBar(sampleCount) {
+    const n = (typeof sampleCount === 'number')
+        ? sampleCount
+        : $('#pptStyleSampleGrid .ppt-style-sample-card').length;
+    if (n > 0) {
+        $('#pptStyleReanalyzeBar').show();
+    } else {
+        $('#pptStyleReanalyzeBar').hide();
+    }
+}
+
 // ---------- 자동 분석 ----------
-async function autoAnalyzePPTStyle() {
-    if (!currentPPTStyleId) {
-        await showAlert('알림', '먼저 스타일을 저장하거나 선택해주세요');
-        return;
-    }
-    // 현재 편집기에 표시된 샘플이 0장이면 안내 후 중단
+// 두 경로에서 호출됨:
+//  1) 샘플 이미지 업로드 성공 직후 (uploadPPTStyleSamples) — force=false (빈 슬롯만 채움)
+//  2) "🔄 샘플 이미지 다시 분석" 버튼 클릭 — force=true (기존 토큰 초기화 후 새로 채움)
+//
+// 두 경우 모두 같은 함수를 재사용. 분석 결과(추출 색/폰트/패턴)는 서버에서
+// design_tokens 와 extracted_patterns 필드에 반영되고, reloadCurrentPPTStyle() 로
+// 섹션 3 UI 가 갱신된다.
+//
+// 인자 force:
+//   - true  (기본 false): 분석 전에 서버가 design_tokens.colors/sizes 를 비우고 시작.
+//                          → 사용자가 손댄 색상도 사라지므로 "재분석" 버튼에서만 true 로 호출.
+async function autoAnalyzePPTStyle(force) {
+    if (!currentPPTStyleId) return;
+    // jQuery 이벤트로 들어온 클릭 객체를 force 값으로 오해하지 않도록 boolean 강제 변환
+    const isForce = (force === true);
+
+    // 현재 편집기에 표시된 샘플이 0장이면 조용히 종료 (사이드 이펙트로 발동되는 경우 알림 X)
     const sampleCount = $('#pptStyleSampleGrid .ppt-style-sample-card').length;
-    if (sampleCount === 0) {
-        await showAlert('샘플 이미지 없음', '먼저 샘플 이미지를 1장 이상 업로드해주세요');
-        return;
-    }
-    const $btn = $('#btnPPTStyleAnalyze');
-    $btn.prop('disabled', true);
-    $('#pptStyleAnalyzeIcon').html('<span class="ppt-style-spinner"></span>');
-    $('#pptStyleAnalyzeLabel').text('분석 중...');
+    if (sampleCount === 0) return;
+
+    const $status = $('#pptStyleAnalyzeStatus');
+    const $icon = $('#pptStyleAnalyzeIcon');
+    const $label = $('#pptStyleAnalyzeLabel');
+    const $reBtn = $('#btnPPTStyleReanalyze');
+    $status.removeClass('error success').show();
+    $icon.html('<span class="ppt-style-spinner"></span>');
+    $label.text(isForce ? '샘플 이미지 다시 분석 중...' : '샘플 이미지 자동 분석 중...');
+    $reBtn.prop('disabled', true).text('분석 중...');
+
     try {
-        const res = await apiPost('/api/admin/ppt-styles/' + currentPPTStyleId + '/analyze', {});
-        // 응답 형식 (M8.3): { style, vision_analysis, extracted_patterns, total_patterns_extracted }
-        // 하위 호환: style 만 / vision_analysis 만 오는 경우도 지원
+        const res = await apiPost('/api/admin/ppt-styles/' + currentPPTStyleId + '/analyze', { force: isForce });
+        // 응답: { style, vision_analysis, extracted_patterns, total_patterns_extracted }
         let vision = null;
-        let style = null;
         let extracted = null;
         let totalExtracted = null;
         if (res && res.style) {
-            style = res.style;
+            const style = res.style;
             vision = res.vision_analysis || style.vision_analysis || null;
             extracted = (typeof res.extracted_patterns !== 'undefined')
                 ? res.extracted_patterns
@@ -6803,8 +6856,6 @@ async function autoAnalyzePPTStyle() {
             totalExtracted = (typeof res.total_patterns_extracted === 'number')
                 ? res.total_patterns_extracted
                 : (Array.isArray(extracted) ? extracted.length : null);
-        } else {
-            vision = res || null;
         }
 
         renderPPTStyleVisionResult(vision);
@@ -6816,13 +6867,19 @@ async function autoAnalyzePPTStyle() {
         await reloadCurrentPPTStyle();
 
         const n = (typeof totalExtracted === 'number') ? totalExtracted : (_extractedPatternsCache.length || 0);
-        showToast(`색상/폰트 분석 완료, 패턴 ${n}개 추출됨`, 'success');
+        $status.addClass('success');
+        $icon.text('✅');
+        $label.text(`자동 분석 완료 — 추출 패턴 ${n}개`);
+        showToast(`분석 완료: 추출 패턴 ${n}개`, 'success');
     } catch (e) {
+        $status.addClass('error');
+        $icon.text('⚠️');
+        $label.text('자동 분석 실패: ' + (e.message || ''));
         showToast('분석 실패: ' + (e.message || ''), 'error');
     } finally {
-        $btn.prop('disabled', false);
-        $('#pptStyleAnalyzeIcon').text('🔮');
-        $('#pptStyleAnalyzeLabel').text('샘플 이미지 자동 분석');
+        // 재분석 버튼 다시 활성화 (성공/실패 무관)
+        $reBtn.prop('disabled', false).html('🔄 샘플 이미지 다시 분석');
+        // reloadCurrentPPTStyle() 이후 _refreshPPTStyleReanalyzeBar 가 다시 호출되므로 별도 갱신 불필요
     }
 }
 

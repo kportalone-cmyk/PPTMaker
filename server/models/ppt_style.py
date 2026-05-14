@@ -50,13 +50,21 @@ DEFAULT_PATTERN_IDS: list[str] = [
 
 
 def default_design_tokens() -> dict:
-    """design_tokens 기본 구조"""
+    """design_tokens 기본 구조 — 색상/폰트 사이즈는 빈 값.
+
+    새 PPT 스타일을 만들 때는 어떤 토큰도 미리 채우지 않는다. 사용자가 샘플 이미지를
+    업로드하면 Vision 분석이 색상/폰트 사이즈를 자동으로 채우고, 이후 사용자가 수동으로
+    덮어쓸 수 있다. 미리 채워 두면 "이미 값이 있는 슬롯" 으로 분류되어 자동 채움이 무의미해진다.
+
+    DEFAULT_COLORS / DEFAULT_FONT_SIZES 는 빌더/렌더러가 누락 시 사용하는 최후 폴백으로만
+    남겨두고, DB 의 design_tokens 에는 저장하지 않는다.
+    """
     return {
-        "colors": dict(DEFAULT_COLORS),
+        "colors": {},
         "fonts": {
             "title_font_id": None,
             "body_font_id":  None,
-            "sizes": dict(DEFAULT_FONT_SIZES),
+            "sizes": {},
         },
     }
 

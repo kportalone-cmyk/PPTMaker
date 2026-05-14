@@ -4257,6 +4257,42 @@ async def generate_pptx_styled_design_stream(
         yield ("result", {"design_specs": [], "total_slides": 0})
         return
 
+    # ──────── 패턴 사전 매칭 (결정론적) ────────
+    # 청크 분할로 LLM 호출하기 전에 outline 전체를 1회 순회하며
+    # 각 슬라이드에 적합한 패턴을 결정론적으로 매칭한다.
+    # - extracted_patterns (샘플에서 자동 추출) 우선
+    # - outline.type 호환 + content 의 경우 items 개수와 card_count 매칭 (±1)
+    # - 같은 type 슬라이드 다수일 때 라운드로빈으로 다양성 확보
+    # LLM 은 이 사전 매칭된 패턴의 regions 배치를 그대로 디자인 뼈대로 사용해야 한다.
+    # 순환 import 회피를 위해 함수 내부에서 lazy import.
+    from services.ppt_style_service import match_pattern_for_outline_slide
+    used_patterns: dict[str, list[str]] = {}
+    matched_count = 0
+    for sl in slides:
+        if not isinstance(sl, dict):
+            continue
+        try:
+            picked = match_pattern_for_outline_slide(sl, skill_file or {}, used_patterns)
+        except Exception as e:
+            print(f"[LLM-PPTXStyled-Design] 패턴 매칭 실패(slide_index={sl.get('index')}): {e}")
+            picked = None
+        if picked:
+            # outline 슬라이드에 부착 → LLM 프롬프트의 outline_json 에 함께 직렬화됨
+            sl["matched_pattern"] = {
+                "id": picked.get("id") or picked.get("label") or "",
+                "label": picked.get("label") or "",
+                "card_count": picked.get("card_count") or 0,
+                "suitable_for_outline_types": picked.get("suitable_for_outline_types") or [],
+                "regions": picked.get("regions") or [],
+            }
+            pid = sl["matched_pattern"]["id"] or f"_anon_{sl.get('index') or 0}"
+            out_type = sl.get("type") or "content"
+            used_patterns.setdefault(out_type, []).append(pid)
+            matched_count += 1
+        else:
+            sl["matched_pattern"] = None
+    print(f"[LLM-PPTXStyled-Design] 패턴 사전 매칭 완료: {matched_count}/{total_slides} 슬라이드")
+
     prompt_model = await get_prompt_model("pptx_styled_designer_system")
     effective_model = prompt_model or settings.ANTHROPIC_OUTLINE_MODEL
 

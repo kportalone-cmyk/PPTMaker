@@ -4,17 +4,83 @@ from pydantic import BaseModel
 from typing import Optional
 from services.mongo_service import get_db
 from services import redis_service
+from config import settings
 from bson import ObjectId
 from datetime import datetime
 
 router = APIRouter(tags=["prompts"])
 
-# 솔루션에서 제공하는 LLM 모델 목록
-AVAILABLE_MODELS = [
-    {"id": "claude-opus-4-6", "name": "Claude Opus 4.6", "description": "최고 성능 모델 (정밀도 높은 작업)"},
-    {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "description": "균형 잡힌 모델 (속도 + 성능)"},
-    {"id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5", "description": "빠른 응답 모델 (간단한 작업)"},
+
+# ─────────────────────────────────────────────
+# 사용 가능한 LLM 모델 목록 — .env 값을 우선 노출
+# 운영자가 .env 의 모델만 바꾸면 관리자 화면 드롭다운에 자동 반영됩니다.
+# ─────────────────────────────────────────────
+
+# Claude 계열 호환 모델 fallback (운영자가 명시적으로 다른 변종을 선택하고 싶을 때를 위해 유지)
+_CLAUDE_FALLBACK_MODELS = [
+    {"id": "claude-opus-4-7",            "name": "Claude Opus 4.7",   "description": "최고 성능 (옵션)"},
+    {"id": "claude-sonnet-4-7",          "name": "Claude Sonnet 4.7", "description": "균형 잡힌 모델 (옵션)"},
+    {"id": "claude-haiku-4-5-20251001",  "name": "Claude Haiku 4.5",  "description": "빠른 응답 (옵션)"},
+    {"id": "claude-opus-4-6",            "name": "Claude Opus 4.6",   "description": "구버전 호환"},
+    {"id": "claude-sonnet-4-6",          "name": "Claude Sonnet 4.6", "description": "구버전 호환"},
 ]
+
+
+def get_available_models() -> list[dict]:
+    """관리자 화면에 노출할 LLM 모델 목록.
+
+    구성 순서:
+      1. .env 의 활성 LLM 설정 (ANTHROPIC_MODEL / ANTHROPIC_OUTLINE_MODEL)
+      2. LLM_PROVIDER=sllm 인 경우 SLLM_MODEL
+      3. Claude 계열 호환 fallback 모델 (옵션 선택용)
+    """
+    seen: set[str] = set()
+    items: list[dict] = []
+
+    def add(model_id: str, name: str | None = None, description: str = "",
+            env_source: str = "", priority: bool = False):
+        mid = (model_id or "").strip()
+        if not mid or mid in seen:
+            return
+        seen.add(mid)
+        label = (name or mid).strip() or mid
+        if env_source:
+            label = f"{label} (.env: {env_source})"
+        items.append({
+            "id": mid,
+            "name": label,
+            "description": description or ("환경 변수 기반" if env_source else ""),
+        })
+
+    # 1) .env 의 메인 Anthropic 설정 (PPT 본문/디자이너 등에서 사용)
+    add(settings.ANTHROPIC_MODEL,
+        name=settings.ANTHROPIC_MODEL,
+        description="기본 Claude 모델 (긴 본문/콘텐츠 생성 등)",
+        env_source="ANTHROPIC_MODEL")
+
+    # 2) .env 의 outline / long-output Anthropic 설정
+    add(settings.ANTHROPIC_OUTLINE_MODEL,
+        name=settings.ANTHROPIC_OUTLINE_MODEL,
+        description="긴 출력 / outline 전용 Claude 모델",
+        env_source="ANTHROPIC_OUTLINE_MODEL")
+
+    # 3) SLLM 사설 모델 (LLM_PROVIDER=sllm 일 때만 노출)
+    provider = (getattr(settings, "LLM_PROVIDER", "") or "").strip().lower()
+    if provider == "sllm" and getattr(settings, "SLLM_MODEL", ""):
+        add(settings.SLLM_MODEL,
+            name=settings.SLLM_MODEL,
+            description="사설 SLLM(OpenAI 호환) 모델",
+            env_source="SLLM_MODEL")
+
+    # 4) Claude 계열 fallback (옵션 선택지)
+    for fb in _CLAUDE_FALLBACK_MODELS:
+        add(fb["id"], name=fb["name"], description=fb["description"])
+
+    return items
+
+
+# 하위 호환을 위한 별칭 — 기존 코드가 AVAILABLE_MODELS 를 import 하던 경우 보호
+AVAILABLE_MODELS = get_available_models()
 
 
 class PromptUpdate(BaseModel):
@@ -1465,7 +1531,7 @@ FORBIDDEN:
         "key": "pptx_styled_structurer_system",
         "name": "PPTX 스타일 구조화 시스템 프롬프트",
         "description": "리치 디자인 스타일이 적용된 16:9 PPT의 슬라이드 콘텐츠 구조화기. 변수 없음 (스킬 파일은 user 프롬프트에 포함).",
-        "model": "claude-sonnet-4-6",
+        "model": "claude-opus-4-7",
         "content": """당신은 리치 디자인 스타일이 적용된 16:9 PPT의 슬라이드 콘텐츠 구조화기입니다.
 
 ## 입력
@@ -1572,7 +1638,7 @@ JSON 스키마:
         "key": "pptx_styled_structurer_user",
         "name": "PPTX 스타일 구조화 사용자 프롬프트",
         "description": "스킬 파일·리소스·지시를 결합한 사용자 프롬프트. 변수: {resources_text}, {instructions}, {skill_file_json}, {slide_count}, {lang}",
-        "model": "claude-sonnet-4-6",
+        "model": "claude-opus-4-7",
         "content": """[리소스]
 {resources_text}
 
@@ -1594,7 +1660,7 @@ JSON 스키마:
         "key": "pptx_styled_outline_system",
         "name": "PPTX 스타일 outline 시스템 프롬프트 (Phase A)",
         "description": "사용자 리소스/지시를 분석해 슬라이드 outline(rich schema) 만 생성. 변수 없음.",
-        "model": "claude-sonnet-4-6",
+        "model": "claude-opus-4-7",
         "content": """당신은 사용자 리소스 자료와 지시를 분석해 프레젠테이션 outline(rich schema) 만 생성하는 어시스턴트입니다.
 
 ## 역할
@@ -1672,7 +1738,7 @@ JSON 스키마:
         "key": "pptx_styled_designer_system",
         "name": "PPTX 스타일 디자이너 시스템 프롬프트 (Phase B)",
         "description": "outline 과 스타일 스킬 파일을 받아 N개 슬라이드의 자유 디자인 스펙을 한 번에 출력. 변수 없음.",
-        "model": "claude-sonnet-4-6",
+        "model": "claude-opus-4-7",
         "content": """당신은 outline(슬라이드 텍스트 구조) 과 PPT 스타일 스킬 파일을 받아, 16:9 슬라이드 N개의 디자인 스펙(좌표·색·폰트·도형·아이콘·이미지)을 한 번에 출력하는 시니어 프레젠테이션 디자이너입니다.
 
 ## [중요 - 멀티모달 컨텍스트]
@@ -1705,8 +1771,116 @@ JSON 스키마:
 
 `layout_hint` 는 디자이너에게 영감을 주는 기본 형태일 뿐, 카드 개수/배치는 outline 의 `items` 길이에 맞춰 자유롭게 조정합니다.
 
-## [패턴 라이브러리 활용 규칙]
-스킬 파일에는 두 가지 패턴 카탈로그가 있습니다:
+## [사전 매칭된 패턴 — 최우선 적용 규칙]
+
+서버에서 outline 의 각 슬라이드에 적합한 패턴을 결정론적 알고리즘으로 미리 매칭해
+`outline.slides[i].matched_pattern` 필드에 부착해 두었습니다. 이 패턴이 **최우선 기준**입니다.
+
+### matched_pattern 스키마
+```
+{
+  "id": "ext_0_2 | cover | content_3col | ...",
+  "label": "왼쪽 인물 + 오른쪽 본문 (히어로)",
+  "card_count": 3,
+  "icon_count": 0,
+  "image_count": 0,
+  "text_density": "low | medium | high",
+  "suitable_for_outline_types": ["content", ...],
+  "regions": [
+    {
+      // 필수
+      "role": "title | subtitle | body | card_title | card_desc | stat | unit |
+               bullet | number_badge | chip | quote | icon | image | logo |
+               divider | decoration | page_indicator | background",
+      "x_pct": 0~100,  // 캔버스 좌측 기준 백분율
+      "y_pct": 0~100,  // 캔버스 상단 기준 백분율
+      "w_pct": 0~100,  // 폭 백분율
+      "h_pct": 0~100,  // 높이 백분율
+      // 텍스트 톤 (있으면 그대로 사용)
+      "text_align": "left | center | right",
+      "text_valign": "top | middle | bottom",
+      "font_weight": "regular | medium | bold",
+      "font_scale": "xs | sm | md | lg | xl | hero",   // body=md 기준 상대 크기
+      "text_color_role": "ink | grey | primary | white | darker",
+      // 카드 묶음
+      "group_index": 0,     // card_title/card_desc 가 같은 카드면 동일 값
+      "is_card_slot": true,
+      // 이미지/아이콘/도형
+      "image_role": "hero | thumbnail | icon-illustration | background | photo | none",
+      "image_shape": "rectangle | rounded | circle | none",
+      "icon_category": "stat | bullet | feature | decoration",
+      "shape": "rectangle | rounded_rect | ellipse | circle | line | triangle | none",
+      "fill_color_role": "primary | light | white | ink | grey | line | darker | none",
+      "stroke_color_role": "primary | light | white | ink | grey | line | darker | none",
+      "opacity": 0~1.0,
+      "approx_color": "#hex"     // background/decoration 같은 색 핵심 region 에서만
+    },
+    ...
+  ]
+}
+```
+
+### 적용 규칙 (반드시 따를 것)
+
+1. `matched_pattern` 이 존재하면 그 `regions` 배열이 슬라이드 레이아웃의 **뼈대**입니다.
+   각 region 의 `role` 에 outline 의 텍스트를 다음과 같이 채워 넣으세요:
+   - `title`         ← `outline_slide.title`
+   - `subtitle`      ← `outline_slide.subtitle` (없으면 outline_slide.section_title)
+   - `body`          ← `outline_slide.summary` 또는 첫 item.description
+   - `card_title`    ← `outline_slide.items[group_index].heading`
+   - `card_desc`     ← `outline_slide.items[group_index].detail` 또는 `items[group_index].description`
+                       (같은 `group_index` 의 card_title 과 같은 카드에 속함)
+   - `stat`          ← `outline_slide.items[k].stat` 또는 outline_slide.stat
+   - `unit`          ← stat 의 단위 (% / 명 / 건 등) — outline_slide.items[k].unit 또는 ""
+   - `bullet`        ← `outline_slide.items[k].heading` (toc/list 패턴)
+   - `number_badge`  ← "01", "02", ... 자동 채움 (group_index + 1, 두 자리)
+   - `chip`          ← `outline_slide.label` 또는 "PART {group_index+1}" 등
+   - `quote`         ← outline_slide.summary 또는 outline_slide.body (큰따옴표 포함)
+   - `icon`          ← `outline_slide.items[group_index].icon` (이름, 30개 icon_key 중 매핑)
+   - `image`         ← `skill_file.samples[].url` 중 적절한 것 (image_role 참고)
+   - `logo`          ← skill_file 의 로고 URL (없으면 region 생략)
+   - `divider`       ← 도형 region (`type:"shape", shape:"line"`)
+   - `decoration`    ← 도형/장식 region (shape + fill_color_role + opacity 그대로 사용)
+   - `page_indicator`← 자동 채움 (`"01"` + total) — 항상 출력
+   - `background`    ← 슬라이드의 `background` 객체로 변환 (approx_color 활용)
+
+2. **백분율 → 인치 변환**: 캔버스는 10" × 5.625" 이므로
+   - `x = x_pct / 100 * 10.0`
+   - `y = y_pct / 100 * 5.625`
+   - `w = w_pct / 100 * 10.0`
+   - `h = h_pct / 100 * 5.625`
+   변환된 값은 캔버스 안에 들어가도록 clamp 하세요.
+
+3. **카드 슬롯과 items 개수 매칭**: 패턴의 `card_title` role region 개수(=K)와
+   `outline_slide.items` 길이(=N)를 비교:
+   - K == N : 그대로 1:1 매핑
+   - K > N  : 남는 카드 슬롯은 region 자체를 생략 (빈 카드 출력 금지)
+   - K < N  : 패턴 카드 슬롯만 사용, 나머지 items 는 생략 (요약은 가능)
+
+4. `design_spec.layout_hint` 에는 반드시 `matched_pattern.id` 값을 그대로 출력.
+
+5. **풍부 속성 활용 (있을 때 그대로)**
+   - `text_align` / `text_valign` → text region 의 align / valign 으로 1:1 매핑.
+   - `font_weight` → bold (regular=false, medium/bold=true). italic 은 별도 단서 없으면 false.
+   - `font_scale` → 다음 표로 font_size(pt) 결정 (design_tokens.fonts.sizes 가 있으면 우선):
+     - xs=10, sm=14, md=18, lg=28, xl=42, hero=64
+   - `text_color_role` → design_tokens.colors[role] 의 hex 값 사용.
+   - `fill_color_role` / `stroke_color_role` → 동일 토큰 색을 shape.fill / shape.stroke 에 적용.
+   - `opacity` → shape.opacity 또는 text.opacity 에 그대로 적용.
+   - `shape` → shape region 의 shape 속성에 매핑. rounded_rect 는 rectangle 로 처리.
+   - `image_role=hero` → 큰 사진 region, `thumbnail` → 작은 카드 안 이미지, `icon-illustration` →
+     icon region 으로 변환 가능.
+   - `icon_category` → icon_key 선택 시 힌트 (stat 카테고리는 chart/target, feature 는 star/check 등).
+
+6. `matched_pattern` 이 `null` 인 경우(매칭 실패)에 한해서만 아래
+   "[패턴 라이브러리 활용 규칙 — fallback]" 을 적용해 자유 디자인합니다.
+
+7. 위 뼈대에 더해 **장식 region**(ghost_text / chip / accent_line / page_indicator /
+   decoration_set) 을 자유롭게 추가해 시각 품질을 끌어올리세요. 단, 뼈대 region 의
+   좌표/크기는 패턴이 정한 값을 우선합니다.
+
+## [패턴 라이브러리 활용 규칙 — fallback]
+`matched_pattern == null` 인 슬라이드에만 적용됩니다. 스킬 파일에는 두 가지 패턴 카탈로그가 있습니다:
 1) `pattern_library` (12개 기본 패턴) — cover/toc/chapter/content_3col/content_2col_hero/content_2x2/big_stat/content_3col_icon_block/content_2_numbered/content_3col_sidebar/content_2x2_top_line/closing
 2) `extracted_patterns` (샘플 이미지에서 자동 추출된 패턴) — 각 항목에 `label`/`regions`/`suitable_for_outline_types`/`card_count` 가 포함됨
 
@@ -1864,7 +2038,7 @@ shape 추가 속성:
         "key": "pptx_styled_designer_user",
         "name": "PPTX 스타일 디자이너 사용자 프롬프트 (Phase B)",
         "description": "outline + skill_file + 지시 + 언어를 합친 디자이너 user 프롬프트. 변수: {outline_json}, {skill_file_json}, {instructions}, {lang}",
-        "model": "claude-sonnet-4-6",
+        "model": "claude-opus-4-7",
         "content": """[Outline (Phase A 결과)]
 {outline_json}
 
@@ -1882,6 +2056,15 @@ shape 추가 속성:
 
 design_specs 의 길이는 outline.slides 의 길이와 정확히 같아야 하며,
 slide_index 는 outline.slides[i].index 와 동일해야 합니다.
+
+**중요**: 각 `outline.slides[i].matched_pattern` 에는 샘플에서 추출된 패턴이 이미
+결정론적 알고리즘으로 사전 매칭되어 있습니다. `matched_pattern.regions` 의 각 항목
+(role / x_pct / y_pct / w_pct / h_pct) 을 슬라이드 레이아웃의 **뼈대**로 그대로 사용하고,
+outline 의 텍스트(title / subtitle / items[].heading / items[].detail / ...) 를
+해당 role 에 맞춰 채워 넣으세요. 백분율은 캔버스 10×5.625" 기준으로 인치로 환산합니다.
+`matched_pattern == null` 인 슬라이드에만 자유 패턴 매칭을 적용합니다.
+
+`design_spec.layout_hint` 는 사용된 `matched_pattern.id` 값을 그대로 출력하세요.
 
 스킬 파일의 색상 토큰/폰트/샘플 이미지/패턴 라이브러리를 적극 활용해
 시각적으로 일관된 디자인을 만드세요.
@@ -1987,8 +2170,13 @@ async def list_prompts(jwt_token: str):
 
 @router.get("/{jwt_token}/api/admin/prompts/models")
 async def list_available_models(jwt_token: str):
-    """사용 가능한 LLM 모델 목록 조회"""
-    return {"models": AVAILABLE_MODELS}
+    """사용 가능한 LLM 모델 목록 조회.
+
+    .env 의 ANTHROPIC_MODEL / ANTHROPIC_OUTLINE_MODEL / (LLM_PROVIDER=sllm 인 경우) SLLM_MODEL
+    을 우선 노출하고, 그 뒤에 Claude 계열 호환 fallback 모델을 덧붙입니다.
+    .env 의 모델만 변경해도 관리자 화면 드롭다운에 자동 반영됩니다.
+    """
+    return {"models": get_available_models()}
 
 
 @router.get("/{jwt_token}/api/admin/prompts/{prompt_id}")

@@ -2180,10 +2180,50 @@ async def build_pptx_styled_from_designs_stream(
             print(f"[Builder-Spec] parse_error DB 기록 실패: {e2}")
         yield ("parse_failed", {"message": parse_error_msg})
 
+    # 8) LibreOffice 로 슬라이드별 PNG 변환 (선택적, 실패해도 다운로드는 정상)
+    #    실제 슬라이드 스타일과 100% 동일한 미리보기를 사용자에게 표시하기 위해
+    #    .pptx → PDF → PNG 파이프라인으로 슬라이드 이미지를 생성한다.
+    #    LibreOffice 미설치 또는 변환 실패 시 빈 리스트 → slide_images 이벤트 미발행 →
+    #    프론트는 다운로드 CTA 만 표시.
+    slide_image_urls: list[str] = []
+    try:
+        from services.slide_image_service import convert_pptx_to_images, to_relative_urls
+
+        yield ("converting_images", {
+            "message": "슬라이드를 이미지로 변환 중입니다...",
+            "total": total,
+        })
+
+        image_dir = base_dir / "thumbnails"
+        image_paths = await convert_pptx_to_images(
+            str(pptx_path),
+            str(image_dir),
+            dpi=int(getattr(settings, "SLIDE_IMAGE_DPI", 220)),
+        )
+        if image_paths:
+            slide_image_urls = to_relative_urls(image_paths)
+            await db.generated_pptx_styled.update_one(
+                {"project_id": project_id},
+                {"$set": {
+                    "slide_image_urls": slide_image_urls,
+                    "slide_images_at": datetime.utcnow(),
+                    "updated_at": datetime.utcnow(),
+                }},
+            )
+            yield ("slide_images", {
+                "urls": slide_image_urls,
+                "total": len(slide_image_urls),
+            })
+        else:
+            print("[Builder-Spec] LibreOffice 슬라이드 이미지 변환 결과 없음 — 다운로드 모드로 폴백")
+    except Exception as e:
+        print(f"[Builder-Spec] 슬라이드 이미지 변환 단계 실패 (무시): {e}")
+
     yield ("result", {
         "pptx_path": str(pptx_path),
         "pptx_url": pptx_url,
         "total_slides": total,
         "parsed_slide_count": parsed_slide_count,
         "parsed_object_count": parsed_object_count,
+        "slide_image_urls": slide_image_urls,
     })

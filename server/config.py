@@ -85,6 +85,16 @@ class Settings:
     )
     MAX_UPLOAD_SIZE: int = int(os.getenv("MAX_UPLOAD_SIZE", "52428800"))
 
+    # LibreOffice (PPTX → PDF → PNG 변환에 사용). 비워두면 시스템 PATH 와
+    # 기본 설치 경로에서 자동 탐색. 변환 실패해도 .pptx 다운로드는 정상 동작.
+    LIBREOFFICE_PATH: str = os.getenv("LIBREOFFICE_PATH", "")
+
+    # 슬라이드 미리보기 PNG 해상도 (DPI). 10" × 5.625" 슬라이드 기준:
+    #   144 → 1440×810 (작은 화면용)
+    #   220 → 2200×1238 (HD/Retina 권장, 기본값)
+    #   300 → 3000×1688 (프린트 품질, 변환 시간 ↑)
+    SLIDE_IMAGE_DPI: int = int(os.getenv("SLIDE_IMAGE_DPI", "220"))
+
     # CORS
     CORS_ORIGINS: list = [
         o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()

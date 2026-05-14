@@ -303,11 +303,20 @@ async def link_ppt_style_fonts(
 # ============ Vision 분석 ============
 
 @router.post("/{jwt_token}/api/admin/ppt-styles/{style_id}/analyze")
-async def analyze_ppt_style_samples(jwt_token: str, style_id: str):
+async def analyze_ppt_style_samples(
+    jwt_token: str,
+    style_id: str,
+    body: dict | None = None,
+):
     """샘플 이미지 자동 Vision 분석 + 패턴 추출 (M8 통합).
 
+    Body (선택):
+      { "force": true }  — 분석 전에 design_tokens.colors/sizes 를 초기화해 항상 새 값으로 덮어쓴다.
+                            "재분석" 버튼이 보낸다. 사용자가 수동 편집한 값도 사라지니 주의.
+      { "force": false } 또는 빈 바디 — 빈 슬롯만 자동 채움 (기본). 업로드 직후 자동 트리거가 사용.
+
     1) 색상/폰트 자동 분석 → `vision_analysis` 필드 갱신.
-       (빈 design_tokens.colors 슬롯은 추출된 컬러로 자동 채워진다 — 수동 입력값 보존.)
+       (빈 design_tokens.colors 슬롯은 추출된 컬러로 자동 채워진다.)
     2) 슬라이드 레이아웃 패턴 자동 추출 → `extracted_patterns` 필드 덮어쓰기.
 
     응답:
@@ -327,6 +336,20 @@ async def analyze_ppt_style_samples(jwt_token: str, style_id: str):
 
     if not (existing.get("sample_image_refs") or []):
         raise HTTPException(status_code=400, detail="분석할 샘플 이미지가 없습니다. 먼저 업로드하세요.")
+
+    # force=true 면 분석 전에 design_tokens.colors/sizes 를 초기화한다.
+    # → analyze_samples_with_vision 의 "빈 슬롯만 채움" 정책 아래에서 모든 슬롯이 새 값으로 채워진다.
+    force = bool(body and body.get("force"))
+    if force:
+        await db.ppt_styles.update_one(
+            {"_id": oid},
+            {"$set": {
+                "design_tokens.colors": {},
+                "design_tokens.fonts.sizes": {},
+                "updated_at": datetime.utcnow(),
+            }},
+        )
+        print(f"[PPTStyle] force reanalyze — design_tokens.colors/sizes 초기화 (style_id={style_id})")
 
     # 1) 색상/폰트 Vision 분석 (기존 동작)
     updated = await ppt_style_service.analyze_samples_with_vision(style_id)

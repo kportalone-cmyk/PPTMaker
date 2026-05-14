@@ -4434,6 +4434,8 @@ async function generatePptStyled() {
                     _pptStyleBuildState.designDone = true;
                     $('#pptStyledDesignStatus').text(`디자인 스펙 완료 · 슬라이드 ${_pptStyleBuildState.designSpecs.length}개`);
                     $('#streamingStatus').text(`디자인 스펙 완료 · 슬라이드 ${_pptStyleBuildState.designSpecs.length}개`);
+                    // M18: DOM 기반 즉시 미리보기는 제거. Phase B 빌드 + LibreOffice 변환 후
+                    //      slide_images 이벤트에서 실제 슬라이드 PNG 로 표시한다.
                 },
                 // ---- Phase A 종합 결과 ----
                 result: (p) => {
@@ -4585,6 +4587,44 @@ async function generatePptStyled() {
                     console.warn('[pptx-styled] 객체 변환 실패:', _pptStyleBuildState.parseError);
                     showToast('미리보기 객체 변환에 실패했습니다. PPTX는 정상 빌드되었습니다.');
                 },
+                // ---- converting_images (M18: LibreOffice 로 슬라이드 PNG 변환 시작) ----
+                converting_images: (p) => {
+                    console.log('[pptx-styled] converting_images', p);
+                    const msg = (p && p.message) || '슬라이드를 이미지로 변환 중입니다...';
+                    $('#pptStyledPhaseLabel').text(msg);
+                    $('#pptStyledDeltaHint').text(msg);
+                    $('#streamingStatus').text(msg);
+                    _updatePptStyledProgress(0.97);
+                },
+                // ---- slide_images (M18: 변환 완료, 실제 슬라이드 PNG URL 도착) ----
+                slide_images: (p) => {
+                    console.log('[pptx-styled] slide_images', p);
+                    const urls = (p && Array.isArray(p.urls)) ? p.urls : [];
+                    if (urls.length === 0) return;
+                    _pptStyleBuildState.slideImageUrls = urls;
+                    try {
+                        const slides = urls.map((url, i) => ({
+                            order: i + 1,
+                            objects: [{
+                                obj_id: 'img_slide_' + (i + 1),
+                                obj_type: 'image',
+                                x: 0, y: 0, width: 960, height: 540,
+                                z_index: 0,
+                                image_url: url,
+                                image_fit: 'cover',
+                            }],
+                            slide_meta: { content_type: 'image' },
+                            background_image: null,
+                            items: [],
+                            generated_text: '',
+                        }));
+                        state.generatedSlides = slides;
+                        state.currentSlideIndex = 0;
+                        if (typeof renderSlideArea === 'function') renderSlideArea();
+                    } catch (err) {
+                        console.warn('[pptx-styled] slide_images 렌더 실패:', err);
+                    }
+                },
                 complete: (p) => {
                     console.log('[pptx-styled] build complete', p);
                     _pptStyleBuildState.buildDone = true;
@@ -4605,8 +4645,11 @@ async function generatePptStyled() {
 
         if (_pptStyleBuildState.pptx_url || _pptStyleBuildState.buildDone) {
             showToast('PPT 스타일 슬라이드 빌드가 완료되었습니다', 'success');
-            // M16: 미리보기 단계 제거 — 진행 카드 모두 "완료" 상태로 마킹 + 다운로드 CTA 만 강조
-            // (_loadPptStyledPreview / openPptStyledViewer 함수 정의는 보존, 호출만 차단)
+            // M17 (옵션 A 복원): 슬라이드 미리보기/썸네일은 design_complete 시점에 이미
+            // 클라이언트에서 design_specs → state.generatedSlides 로 변환되어 표시된다.
+            // 빌드 완료는 슬롯 상태를 "완료" 로 마킹하고 다운로드 CTA 만 강조한다.
+            // (서버의 /api/generate/{project_id}/slides 는 generated_slides 컬렉션을 읽으므로
+            //  PPT 스타일 모드에서는 비어 있어 _loadPptStyledPreview() 호출은 의도적으로 생략.)
             try {
                 if (_pptStyleBuildState.slides && _pptStyleBuildState.slides.length) {
                     _pptStyleBuildState.slides.forEach((slot) => {
@@ -4763,6 +4806,108 @@ function _designSpecToSlide(spec) {
                 z_index: z_index,
                 image_url: r.image_url || r.url || '',
                 image_fit: r.fit || 'cover',
+            });
+        } else if (rtype === 'ghost_text') {
+            // 거대 반투명 텍스트 — text 로 변환하되 opacity 적용
+            objects.push({
+                obj_id: 'spec_ghost_' + idx,
+                obj_type: 'text',
+                x: x, y: y, width: width, height: height,
+                z_index: z_index,
+                text_style: {
+                    font_family: r.font_family || '',
+                    font_size: r.font_size || 180,
+                    color: r.color || '#E5EAF2',
+                    bold: r.bold !== false,
+                    italic: false,
+                    align: r.align || 'left',
+                    opacity: typeof r.opacity === 'number' ? r.opacity : 0.1,
+                },
+                generated_text: r.text || '',
+            });
+        } else if (rtype === 'page_indicator') {
+            // 페이지 번호 — text 로 단순 변환
+            const numStr = r.number ? String(r.number) : '01';
+            const totalStr = r.total ? ` / ${r.total}` : '';
+            objects.push({
+                obj_id: 'spec_page_' + idx,
+                obj_type: 'text',
+                x: x, y: y, width: width, height: height,
+                z_index: z_index,
+                text_style: {
+                    font_family: r.font_family || '',
+                    font_size: r.font_size || 10,
+                    color: r.color || '#9AA3B0',
+                    bold: false, italic: false,
+                    align: 'right',
+                },
+                generated_text: numStr + totalStr,
+            });
+        } else if (rtype === 'chip') {
+            // border-only 사각형 + 텍스트 — shape + text 두 객체로 분리 (가독성 위해 그룹화는 생략)
+            objects.push({
+                obj_id: 'spec_chip_box_' + idx,
+                obj_type: 'shape',
+                x: x, y: y, width: width, height: height,
+                z_index: z_index,
+                shape_style: {
+                    shape_type: 'rectangle',
+                    fill_color: r.fill && r.fill !== 'none' ? r.fill : 'none',
+                    stroke_color: r.color || '#1C60EF',
+                    stroke_width: 1,
+                    fill_opacity: 1.0,
+                },
+            });
+            objects.push({
+                obj_id: 'spec_chip_text_' + idx,
+                obj_type: 'text',
+                x: x, y: y, width: width, height: height,
+                z_index: z_index + 0.1,
+                text_style: {
+                    font_family: r.font_family || '',
+                    font_size: r.font_size || 10,
+                    color: r.color || '#1C60EF',
+                    bold: true, italic: false,
+                    align: r.align || 'center',
+                },
+                generated_text: r.text || '',
+            });
+        } else if (rtype === 'accent_line') {
+            // 짧은 강조 라인 — 채워진 얇은 사각형
+            objects.push({
+                obj_id: 'spec_accent_' + idx,
+                obj_type: 'shape',
+                x: x, y: y, width: width, height: height,
+                z_index: z_index,
+                shape_style: {
+                    shape_type: 'rectangle',
+                    fill_color: r.color || '#1C60EF',
+                    stroke_color: 'none',
+                    stroke_width: 0,
+                    fill_opacity: typeof r.opacity === 'number' ? r.opacity : 1.0,
+                },
+            });
+        } else if (rtype === 'decoration_set') {
+            // 여러 도형 묶음 — 각각 shape 로 펼침
+            const shapes = Array.isArray(r.shapes) ? r.shapes : [];
+            shapes.forEach((sh, sidx) => {
+                if (!sh || typeof sh !== 'object') return;
+                objects.push({
+                    obj_id: 'spec_deco_' + idx + '_' + sidx,
+                    obj_type: 'shape',
+                    x: inchToPx(sh.x),
+                    y: inchToPx(sh.y),
+                    width: inchToPx(sh.w),
+                    height: inchToPx(sh.h),
+                    z_index: z_index + sidx * 0.01,
+                    shape_style: {
+                        shape_type: sh.shape || 'rectangle',
+                        fill_color: sh.fill || 'none',
+                        stroke_color: sh.stroke || 'none',
+                        stroke_width: typeof sh.stroke_width === 'number' ? sh.stroke_width : 0,
+                        fill_opacity: typeof sh.opacity === 'number' ? sh.opacity : 1.0,
+                    },
+                });
             });
         }
     });
@@ -10012,7 +10157,24 @@ async function _downloadFile(url, defaultFilename) {
 }
 
 function downloadPPTX() {
-    if (!state.currentProject || state.generatedSlides.length === 0) {
+    if (!state.currentProject) {
+        showToast(t('noSlides'), 'error');
+        return;
+    }
+    // PPT 스타일 프로젝트면 빌드된 .pptx (Phase B 결과 파일) 을 그대로 반환하는
+    // /download/pptx-styled 엔드포인트로 라우팅한다.
+    // 일반(템플릿/AI) 프로젝트는 매번 새로 생성하는 /download/pptx 사용.
+    const isPptStyleProject = !!(
+        (state.currentProject && state.currentProject.ppt_style_id) ||
+        state.pptStyleMode ||
+        state.selectedPptStyleId
+    );
+    if (isPptStyleProject) {
+        const url = apiUrl('/api/generate/' + state.currentProject._id + '/download/pptx-styled');
+        _downloadFile(url, (state.currentProject.name || 'presentation') + '.pptx');
+        return;
+    }
+    if (state.generatedSlides.length === 0) {
         showToast(t('noSlides'), 'error');
         return;
     }

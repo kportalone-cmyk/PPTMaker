@@ -2815,6 +2815,26 @@ button.mixed {
 @keyframes ppt-style-spin {
     to { transform: rotate(360deg); }
 }
+.ppt-style-analyze-status {
+    background: #f7faff;
+    border: 1px solid #d6e4ff;
+    border-radius: 8px;
+    padding: 8px 12px;
+}
+.ppt-style-analyze-status .ppt-style-spinner {
+    border-color: #1c60ef;
+    border-top-color: transparent;
+}
+.ppt-style-analyze-status.error {
+    background: #fff5f5;
+    border-color: #ffd6d6;
+    color: #c0392b;
+}
+.ppt-style-analyze-status.success {
+    background: #f4fff7;
+    border-color: #d2efdb;
+    color: #1f7a3a;
+}
 
 /* ============ 범용 다이얼로그 (showAlert/showConfirm/showPrompt) ============ */
 .dialog-card {
