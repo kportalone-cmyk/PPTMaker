@@ -32,6 +32,45 @@ DEFAULT_FONT_SIZES: dict = {
     "stat":  88,
 }
 
+# 기본 간격 토큰 (pt 단위, 16:9 슬라이드 960x540 pt 기준)
+# density: tight|comfortable|spacious 의 의미값(시각적 밀도) — UI 표시용 + 빌더 힌트
+DEFAULT_SPACING: dict = {
+    "density":        "comfortable",
+    "base_unit":      8,
+    "slide_margin_x": 40,
+    "slide_margin_y": 32,
+    "section_gap":    24,
+    "element_gap":    12,
+    "card_padding":   16,
+}
+
+# 기본 타이포 디테일 (사이즈는 DEFAULT_FONT_SIZES, 여기는 weight/line-height/letter-spacing)
+# letter_spacing 은 1em 대비 퍼센트 (-5 ~ +10 정수)
+DEFAULT_TYPOGRAPHY: dict = {
+    "font_style":          "sans-serif",   # sans-serif|serif|display|geometric|humanist
+    "h1_weight":           "bold",         # regular|medium|bold|black
+    "h2_weight":           "medium",
+    "body_weight":         "regular",
+    "stat_weight":         "black",
+    "h1_line_height":      1.15,
+    "body_line_height":    1.45,
+    "h1_letter_spacing":   -2,
+    "body_letter_spacing": 0,
+}
+
+# 기본 슬라이드 아키타입 (그리드/모서리/이미지 비율 + 자주 쓰이는 합성 태그)
+# compositions 후보 (다중 선택, 빌더는 우선순위로 사용):
+#   split_60_40 · centered_hero · grid_2col_cards · grid_3col_cards · grid_2x2 ·
+#   full_bleed_photo · sidebar_left · sidebar_right · big_stat · timeline ·
+#   quote · comparison
+DEFAULT_ARCHETYPES: dict = {
+    "grid_columns":  12,        # 6|12|24
+    "column_gutter": 16,        # pt
+    "corner_radius": "md",      # sharp|sm|md|lg|pill
+    "image_aspect":  "16:9",    # 16:9|4:3|1:1|free
+    "compositions":  [],
+}
+
 # 기본 패턴 라이브러리 (12종, 빌더 매핑 순서 준수)
 DEFAULT_PATTERN_IDS: list[str] = [
     "cover",
@@ -66,6 +105,9 @@ def default_design_tokens() -> dict:
             "body_font_id":  None,
             "sizes": {},
         },
+        "spacing":    {},
+        "typography": {},
+        "archetypes": {},
     }
 
 

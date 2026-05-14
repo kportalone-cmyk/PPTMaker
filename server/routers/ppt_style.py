@@ -118,6 +118,19 @@ async def update_ppt_style(jwt_token: str, style_id: str, data: PPTStyleUpdate):
     update_data = data.dict(exclude_unset=True)
     if not update_data:
         raise HTTPException(status_code=400, detail="수정할 필드가 없습니다")
+
+    # typography.font_style 은 섹션 5 (등록된 제목/본문 폰트) 가 진실의 소스.
+    # 클라이언트가 design_tokens 를 보내올 때 fonts.title_font_id / body_font_id 가
+    # 같이 있으면 그 폰트의 family/name 으로 font_style 을 도출해 덮어쓴다.
+    dt = update_data.get("design_tokens")
+    if isinstance(dt, dict):
+        derived_fs = await ppt_style_service._derive_font_style_from_design_tokens(dt)
+        if derived_fs:
+            typo = dt.get("typography") or {}
+            typo["font_style"] = derived_fs
+            dt["typography"] = typo
+            update_data["design_tokens"] = dt
+
     update_data["updated_at"] = datetime.utcnow()
 
     result = await db.ppt_styles.update_one(
@@ -346,10 +359,13 @@ async def analyze_ppt_style_samples(
             {"$set": {
                 "design_tokens.colors": {},
                 "design_tokens.fonts.sizes": {},
+                "design_tokens.spacing": {},
+                "design_tokens.typography": {},
+                "design_tokens.archetypes": {},
                 "updated_at": datetime.utcnow(),
             }},
         )
-        print(f"[PPTStyle] force reanalyze — design_tokens.colors/sizes 초기화 (style_id={style_id})")
+        print(f"[PPTStyle] force reanalyze — design_tokens.colors/sizes/spacing/typography/archetypes 초기화 (style_id={style_id})")
 
     # 1) 색상/폰트 Vision 분석 (기존 동작)
     updated = await ppt_style_service.analyze_samples_with_vision(style_id)

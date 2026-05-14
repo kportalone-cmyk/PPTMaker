@@ -6,7 +6,7 @@ class ProjectCreate(BaseModel):
     name: str
     description: str = ""
     template_id: Optional[str] = None
-    project_type: str = "slide"  # "slide", "excel", "onlyoffice_pptx", "onlyoffice_xlsx", "onlyoffice_docx"
+    project_type: str = "slide"  # "slide", "excel", "onlyoffice_pptx", "onlyoffice_xlsx", "onlyoffice_docx", "image_gen"
 
 
 class ProjectUpdate(BaseModel):

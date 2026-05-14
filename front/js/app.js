@@ -81,6 +81,18 @@ const state = {
     pptStyleMode: false,
     selectedPptStyleId: null,
     selectedPptStyleInfo: null, // {_id, title, description, primary_color, active_patterns}
+    // 이미지 생성 (image_gen 프로젝트)
+    imageGenerations: [],            // [{_id, prompt, model, aspect_ratio, count, images:[{file_id,url}], created_at}, ...] desc
+    imageGenModel: 'nano-banana-pro',
+    imageGenAspect: '16:9',
+    imageGenCount: 1,
+    _imageGenSubmitting: false,
+    imageGenMentions: [],            // @멘션으로 선택된 참조 이미지: [{file_id, url, label}]
+    _imageGenMentionActive: false,   // 피커 열려있는지
+    _imageGenMentionQuery: '',       // 현재 @뒤 검색어
+    _imageGenMentionAtPos: -1,       // textarea 안 '@' 위치 (replace 용)
+    _imageGenMentionIndex: 0,        // 키보드로 하이라이트된 피커 항목 인덱스
+    _imageGenDetailUrl: null,        // 현재 상세보기 중인 이미지 URL
 };
 
 let _animationCancelled = false;
@@ -145,7 +157,7 @@ const I18N = {
         noSearchResult: '검색 결과가 없습니다',
         myProjects: '내 프로젝트',
         sharedLabel: '공유됨',
-        newProject: '새 프로젝트 생성',
+        newProject: '파일 생성',
         newProjectTitle: '새 프로젝트',
         projectName: '프로젝트 이름',
         projectNamePlaceholder: '프로젝트 이름을 입력하세요',
@@ -336,7 +348,7 @@ const I18N = {
         noSearchResult: 'No results found',
         myProjects: 'My Projects',
         sharedLabel: 'Shared',
-        newProject: 'New Project',
+        newProject: 'New File',
         newProjectTitle: 'New Project',
         projectName: 'Project Name',
         projectNamePlaceholder: 'Enter project name',
@@ -527,7 +539,7 @@ const I18N = {
         noSearchResult: '結果なし',
         myProjects: 'プロジェクト',
         sharedLabel: '共有',
-        newProject: '新規作成',
+        newProject: '新規ファイル',
         newProjectTitle: '新規プロジェクト',
         projectName: 'プロジェクト名',
         projectNamePlaceholder: 'プロジェクト名を入力',
@@ -709,7 +721,7 @@ const I18N = {
         noSearchResult: '未找到结果',
         myProjects: '我的项目',
         sharedLabel: '共享',
-        newProject: '新建项目',
+        newProject: '新建文件',
         newProjectTitle: '新项目',
         projectName: '项目名称',
         projectNamePlaceholder: '输入项目名称',
@@ -1797,6 +1809,7 @@ async function openProject(projectId) {
         state.generatedExcel = res.generated_excel || null;
         state.onlyofficeDoc = res.onlyoffice_doc || null;
         state.generatedDocx = res.generated_docx || null;
+        state.imageGenerations = res.image_generations || [];
         state.generatedHtml = null;
         state.selectedSkillId = null;
         state.selectedSkillInfo = null;
@@ -1911,17 +1924,36 @@ function renderProjectWorkspace() {
     const isWord = (projectType === 'word');
 
     const isHtmlReport = (projectType === 'html_report');
+    const isImageGen = (projectType === 'image_gen');
 
     // 모든 워크스페이스 숨기기
     $('#excelWorkspace').hide();
     $('#onlyofficeWorkspace').hide();
     $('#wordWorkspace').hide();
     $('#htmlReportWorkspace').hide();
+    $('#imageGenWorkspace').hide();
     $('#wsSlideTools').hide();
     $('#wsExcelTools').hide();
     $('#wsWordTools').hide();
     $('#btnModifyExcel').hide();
     $('#btnDocxTemplate').hide();
+
+    // 이미지젠 전용 분기 — 슬라이드 영역 + 입력바 + 리소스스트립 전부 숨기고 early return
+    if (isImageGen) {
+        $('#workspace').removeClass('word-mode excel-mode slide-mode html-mode').addClass('imagegen-mode');
+        $('#slideEmpty').hide();
+        $('#slidePreview').hide();
+        $('#inputBar').hide();
+        $('#resourceStrip').hide();
+        $('#btnCanvasFullscreen').hide();
+        $('#imageGenWorkspace').css('display', 'flex');
+        initImageGenWorkspace();
+        updateCollabUI();
+        return;
+    }
+    // 이미지젠이 아닐 때는 리소스 스트립/입력바 다시 표시 (이전에 image_gen 이었을 수 있음)
+    $('#resourceStrip').css('display', '');
+    $('#inputBar').css('display', '');
 
     // 이미지 리소스 버튼: 슬라이드 타입에서만 표시
     const isSlide = (!isExcel && !isOnlyOffice && !isWord && !isHtmlReport);
@@ -2086,6 +2118,9 @@ function renderProjectWorkspace() {
             state.autoTemplateMode = false;
             state.aiSlideMode = false;
             state.summaryInfographicMode = false;
+            // 프로젝트를 나갔다 다시 들어와도 PPT 스타일 모드면 슬라이드 추가 버튼은 보이지 않는다.
+            // (슬라이드 모드 진입 시점에 .show() 가 먼저 실행되었으므로 여기서 다시 hide.)
+            $('#btnAddSlide').hide();
         } else {
             state.pptStyleMode = false;
             state.selectedPptStyleId = null;
@@ -3990,6 +4025,11 @@ function _clearPptStyleState() {
     state.pptStyleMode = false;
     state.selectedPptStyleId = null;
     state.selectedPptStyleInfo = null;
+    // PPT 스타일 모드를 벗어났고 현재 워크스페이스가 슬라이드 모드라면
+    // 다시 수동 슬라이드 추가가 가능하므로 버튼을 복원한다.
+    if ($('#workspace').hasClass('slide-mode')) {
+        $('#btnAddSlide').show();
+    }
 }
 
 function _getPptStyleLang() {
@@ -4091,6 +4131,11 @@ function selectPptStyle(styleId) {
         total_patterns: patternLib.length || 12,
     };
     state._templateSlideSize = '16:9';
+
+    // PPT 스타일 모드에서는 수동 슬라이드 추가가 의미 없으므로 추가 버튼을 숨긴다
+    // (상단 헤더 버튼 + 좌측 썸네일 리스트 끝의 + 타일). renderSlideThumbList 가 재호출되면
+    // pptStyleMode 체크로 인-리스트 버튼도 자동으로 제거된다.
+    $('#btnAddSlide').hide();
 
     updateSlideCanvasAspect();
     updateTemplateButtonLabel();
@@ -6639,9 +6684,11 @@ function renderSlideThumbList() {
         list.append(thumbWrap);
     });
 
-    // 슬라이드 추가 버튼 (owner/editor + 슬라이드 1개 이상)
+    // 슬라이드 추가 버튼 (owner/editor + 슬라이드 1개 이상).
+    // PPT 스타일 모드에서는 수동 슬라이드 추가가 의미 없으므로 인-리스트 버튼도 숨긴다.
     const canAddSlide = (state.collabRole === 'owner' || state.collabRole === 'editor')
-        && state.currentProject && state.generatedSlides.length > 0;
+        && state.currentProject && state.generatedSlides.length > 0
+        && !state.pptStyleMode;
     if (canAddSlide) {
         const addBtn = $(`
             <div class="slide-add-btn" onclick="showTemplateSlidePickerModal()">
@@ -11408,10 +11455,17 @@ function updateCollabUI() {
         $('#btnResetProject').hide();
         $('#btnDeleteProject').hide();
     } else {
-        // owner: 모두 표시
+        // owner: 모두 표시. 단, image_gen 프로젝트는 자체 prompt 카드가 있어
+        // 기존 input-bar / 리소스 추가 버튼은 숨겨둔다.
         $('#btnEditToggle').show();
-        $('.resource-add-btns').show();
-        $('#inputBar').show();
+        const _isImageGenProj = state.currentProject && state.currentProject.project_type === 'image_gen';
+        if (_isImageGenProj) {
+            $('.resource-add-btns').hide();
+            $('#inputBar').hide();
+        } else {
+            $('.resource-add-btns').show();
+            $('#inputBar').show();
+        }
     }
 }
 
@@ -14512,6 +14566,1270 @@ async function _saveAndDownloadDocx(parsed) {
     }
 }
 
+// ============ 이미지 생성 (image_gen) ============
+
+const _IG_ASPECT_RATIOS = {
+    '16:9': '16 / 9',
+    '4:3':  '4 / 3',
+    '1:1':  '1 / 1',
+    '3:4':  '3 / 4',
+    '9:16': '9 / 16',
+};
+
+const _IG_MODEL_LABEL = {
+    'nano-banana-pro': '나노 바나나 프로',
+    'nano-banana-2': '나노 바나나2',
+    'imagen-4': 'Imagen 4',
+    'upload': '업로드',
+};
+
+// 업로드용 허용 확장자 (서버와 동일 — _ALLOWED_UPLOAD_EXTS)
+const _IG_UPLOAD_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'];
+
+async function createImageGenProject() {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const name = `이미지 생성 - ${now.getFullYear()}.${pad(now.getMonth() + 1)}.${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    try {
+        const res = await apiPost('/api/projects', {
+            name: name,
+            description: '',
+            project_type: 'image_gen',
+        });
+        showToast(t('msgProjectCreated'), 'success');
+        await loadProjects();
+        const pid = res.project_id || (res.project && res.project._id);
+        if (pid) {
+            openProject(pid);
+        } else {
+            renderRecentProjects();
+        }
+    } catch (e) {
+        showToast(e.message || '프로젝트 생성 실패', 'error');
+    }
+}
+
+function initImageGenWorkspace() {
+    // 현재 state 의 chip/select 값을 UI 에 반영
+    $('#imageGenModel').val(state.imageGenModel || 'nano-banana-pro');
+    $('#imageGenAspectChips .ig-chip').removeClass('active');
+    $(`#imageGenAspectChips .ig-chip[data-aspect="${state.imageGenAspect || '16:9'}"]`).addClass('active');
+    $('#imageGenCountChips .ig-chip').removeClass('active');
+    $(`#imageGenCountChips .ig-chip[data-count="${state.imageGenCount || 1}"]`).addClass('active');
+
+    // 핸들러 1회 바인딩 (.off().on() 으로 idempotent)
+    $('#imageGenModel').off('change.ig').on('change.ig', function () {
+        state.imageGenModel = $(this).val();
+    });
+    $('#imageGenAspectChips').off('click.ig').on('click.ig', '.ig-chip', function () {
+        const v = $(this).data('aspect');
+        state.imageGenAspect = String(v);
+        $('#imageGenAspectChips .ig-chip').removeClass('active');
+        $(this).addClass('active');
+    });
+    $('#imageGenCountChips').off('click.ig').on('click.ig', '.ig-chip', function () {
+        const v = parseInt($(this).data('count'), 10);
+        state.imageGenCount = (v >= 1 && v <= 4) ? v : 1;
+        $('#imageGenCountChips .ig-chip').removeClass('active');
+        $(this).addClass('active');
+    });
+    $('#imageGenPrompt').off('keydown.ig').on('keydown.ig', function (e) {
+        // 멘션 피커가 열려있으면 화살표/Enter/Esc 는 피커 우선
+        if (state._imageGenMentionActive) {
+            if (e.key === 'ArrowDown') { e.preventDefault(); _navImageGenMentionPicker(1); return; }
+            if (e.key === 'ArrowUp')   { e.preventDefault(); _navImageGenMentionPicker(-1); return; }
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                _confirmImageGenMentionAtCurrent();
+                return;
+            }
+            if (e.key === 'Escape')    { e.preventDefault(); _hideImageGenMentionPicker(); return; }
+        }
+        // Ctrl/Cmd+Enter 또는 일반 Enter (Shift 없이) 로 제출
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            submitImageGen();
+            return;
+        }
+        // Backspace: 캐럿 바로 앞에 인라인 멘션 pill 이 있으면 그 pill 만 제거 (텍스트 한 글자가 아닌 통째 단위)
+        if (e.key === 'Backspace') {
+            const removed = _maybeRemovePrecedingInlineMention();
+            if (removed) {
+                e.preventDefault();
+                _syncImageGenMentionsFromEditor();
+            }
+        }
+    });
+    // contenteditable input 시 @멘션 감지 + 멘션 strip 동기화
+    $('#imageGenPrompt').off('input.igmention').on('input.igmention', function () {
+        _handleImageGenMentionInput(this);
+        _syncImageGenMentionsFromEditor();
+    });
+    // 외부 클릭 시 피커 닫기 (한 번만 바인딩)
+    if (!window.__igMentionOutsideBound) {
+        window.__igMentionOutsideBound = true;
+        $(document).on('click.igmention-outside', function (e) {
+            if (!state._imageGenMentionActive) return;
+            const $t = $(e.target);
+            if ($t.closest('#imageGenMentionPicker').length || $t.closest('#imageGenPrompt').length) return;
+            _hideImageGenMentionPicker();
+        });
+    }
+
+    // 드래그&드롭 업로드 — 콘텐츠 영역 전체를 드롭존으로 사용. dragover 시 오버레이 표시.
+    _bindImageGenDropzone();
+    // 그리드 위 hover 액션 위임 (한 번만)
+    _bindImageGenTileActions();
+
+    // 칩 strip 복원 (다른 프로젝트에서 돌아온 경우 등)
+    renderImageGenMentionStrip();
+
+    renderImageGenWorkspace();
+    // 첫 페인트 후에도 한 번 더 계산 (콘텐츠 영역 너비가 그 시점에 잡혀 있어야 함)
+    requestAnimationFrame(_updateImageGenRowHeight);
+}
+
+// ── @ 멘션 피커 ────────────────────────────────────────────
+function _collectMentionableItems() {
+    // 현재 프로젝트의 모든 이미지를 멘션 후보로 평탄화 (생성 + 업로드 모두 포함)
+    const out = [];
+    (state.imageGenerations || []).forEach((g) => {
+        const label = (g.prompt || '').trim() || g.model || 'image';
+        (g.images || []).forEach((img) => {
+            if (!img || !img.url || !img.file_id) return;
+            out.push({
+                file_id: img.file_id,
+                url: img.url,
+                label: label,
+                gen_id: g._id,
+            });
+        });
+    });
+    return out;
+}
+
+// contenteditable 안에서 caret 직전 텍스트를 검사해 @query 패턴이면 피커 트리거.
+// 캐럿이 텍스트 노드 안에 있어야 동작. (멘션 pill 안에 있을 일은 없음 — pill 은 contentEditable=false)
+function _handleImageGenMentionInput() {
+    const editor = document.getElementById('imageGenPrompt');
+    if (!editor) return;
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) { if (state._imageGenMentionActive) _hideImageGenMentionPicker(); return; }
+    const range = sel.getRangeAt(0);
+    const node = range.startContainer;
+    if (!node || node.nodeType !== Node.TEXT_NODE) {
+        if (state._imageGenMentionActive) _hideImageGenMentionPicker();
+        return;
+    }
+    if (!editor.contains(node)) {
+        if (state._imageGenMentionActive) _hideImageGenMentionPicker();
+        return;
+    }
+    const text = node.textContent || '';
+    const offset = range.startOffset;
+    const before = text.substring(0, offset);
+    const m = before.match(/(^|\s)@([^\s@]{0,40})$/);
+    if (!m) {
+        if (state._imageGenMentionActive) _hideImageGenMentionPicker();
+        return;
+    }
+    // 매칭 위치 보존 (텍스트 노드 + 노드 내 offset 으로)
+    state._imageGenMentionAnchorNode = node;
+    state._imageGenMentionAtOffset = m.index + (m[1] ? 1 : 0);  // 노드 내 '@' 위치
+    state._imageGenMentionEndOffset = offset;                    // 노드 내 캐럿 위치 (검색어 끝)
+    state._imageGenMentionQuery = m[2] || '';
+    _showImageGenMentionPicker();
+}
+
+// 캐럿 직전이 인라인 멘션 pill 이면 통째로 삭제. true 반환 시 호출자가 기본 Backspace 차단.
+function _maybeRemovePrecedingInlineMention() {
+    const editor = document.getElementById('imageGenPrompt');
+    if (!editor) return false;
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return false;
+    const range = sel.getRangeAt(0);
+    if (!range.collapsed) return false;  // 선택 영역 있으면 일반 동작
+    let prev = null;
+    if (range.startContainer === editor) {
+        // 캐럿이 컨테이너 레벨 — 직전 자식 확인
+        const idx = range.startOffset;
+        if (idx === 0) return false;
+        prev = editor.childNodes[idx - 1];
+    } else if (range.startContainer.nodeType === Node.TEXT_NODE && range.startOffset === 0) {
+        // 텍스트 노드의 맨 앞에 있으면 그 텍스트 노드의 previousSibling 이 pill 인지 확인
+        prev = range.startContainer.previousSibling;
+    } else {
+        return false;
+    }
+    if (prev && prev.nodeType === Node.ELEMENT_NODE && prev.classList && prev.classList.contains('ig-inline-mention')) {
+        prev.parentNode.removeChild(prev);
+        return true;
+    }
+    return false;
+}
+
+// 에디터 DOM 의 .ig-inline-mention 들을 읽어 state.imageGenMentions 동기화 + strip 재렌더
+function _syncImageGenMentionsFromEditor() {
+    const editor = document.getElementById('imageGenPrompt');
+    if (!editor) return;
+    const out = [];
+    const seen = new Set();
+    editor.querySelectorAll('.ig-inline-mention').forEach((el) => {
+        const fid = el.getAttribute('data-file-id') || '';
+        if (!fid || seen.has(fid)) return;
+        seen.add(fid);
+        out.push({
+            file_id: fid,
+            url: el.getAttribute('data-url') || '',
+            label: el.getAttribute('data-label') || '',
+        });
+    });
+    state.imageGenMentions = out;
+    renderImageGenMentionStrip();
+}
+
+function _showImageGenMentionPicker() {
+    const items = _collectMentionableItems();
+    const q = (state._imageGenMentionQuery || '').toLowerCase();
+    // 이미 선택된 file_id 는 제외
+    const selectedIds = new Set((state.imageGenMentions || []).map((m) => m.file_id));
+    const filtered = items.filter((it) => {
+        if (selectedIds.has(it.file_id)) return false;
+        if (!q) return true;
+        return (it.label || '').toLowerCase().indexOf(q) !== -1;
+    });
+    state._imageGenMentionIndex = 0;
+    state._imageGenMentionFiltered = filtered;
+    state._imageGenMentionActive = true;
+    _renderImageGenMentionPicker(filtered);
+}
+
+function _renderImageGenMentionPicker(filtered) {
+    const $p = $('#imageGenMentionPicker');
+    $p.empty();
+    if (!filtered.length) {
+        $p.append('<div class="ig-mention-empty">참조할 이미지가 없습니다 (또는 이미 모두 추가됨)</div>');
+        $p.show();
+        return;
+    }
+    filtered.forEach((it, i) => {
+        const sel = (i === state._imageGenMentionIndex) ? ' selected' : '';
+        const labelHtml = escapeHtml((it.label || '').slice(0, 80));
+        const item = $(
+            `<div class="ig-mention-item${sel}" data-idx="${i}" data-file-id="${escapeHtml(it.file_id)}" role="option">
+                <img class="ig-mention-thumb" src="${escapeHtml(it.url)}" alt="" loading="lazy" />
+                <span class="ig-mention-name">${labelHtml || '(이름 없음)'}</span>
+            </div>`
+        );
+        item.on('mouseenter', function () {
+            state._imageGenMentionIndex = i;
+            _refreshImageGenMentionHighlight();
+        });
+        item.on('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            state._imageGenMentionIndex = i;
+            _confirmImageGenMentionAtCurrent();
+        });
+        $p.append(item);
+    });
+    $p.show();
+}
+
+function _refreshImageGenMentionHighlight() {
+    $('#imageGenMentionPicker .ig-mention-item').each(function (i) {
+        $(this).toggleClass('selected', i === state._imageGenMentionIndex);
+    });
+}
+
+function _navImageGenMentionPicker(dir) {
+    const list = state._imageGenMentionFiltered || [];
+    if (!list.length) return;
+    const n = list.length;
+    state._imageGenMentionIndex = ((state._imageGenMentionIndex || 0) + dir + n) % n;
+    _refreshImageGenMentionHighlight();
+    // 보이게 스크롤
+    const $items = $('#imageGenMentionPicker .ig-mention-item');
+    const el = $items.get(state._imageGenMentionIndex);
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+}
+
+function _confirmImageGenMentionAtCurrent() {
+    const list = state._imageGenMentionFiltered || [];
+    if (!list.length) { _hideImageGenMentionPicker(); return; }
+    const item = list[state._imageGenMentionIndex || 0];
+    if (!item) { _hideImageGenMentionPicker(); return; }
+    _selectImageGenMention(item);
+}
+
+function _buildInlineMentionNode(item) {
+    const span = document.createElement('span');
+    span.className = 'ig-inline-mention';
+    span.setAttribute('contenteditable', 'false');
+    span.setAttribute('data-file-id', item.file_id);
+    span.setAttribute('data-url', item.url || '');
+    span.setAttribute('data-label', item.label || '');
+    const label = (item.label || 'image').slice(0, 40);
+    span.textContent = '@' + label;
+    return span;
+}
+
+function _selectImageGenMention(item) {
+    const editor = document.getElementById('imageGenPrompt');
+    if (!editor) return;
+    editor.focus();
+
+    // 이미 추가된 동일 file_id 는 또 넣지 않음 (현재 DOM 기준)
+    const already = editor.querySelector(
+        '.ig-inline-mention[data-file-id="' + (window.CSS && CSS.escape ? CSS.escape(item.file_id) : item.file_id) + '"]'
+    );
+    if (already) {
+        _hideImageGenMentionPicker();
+        return;
+    }
+
+    const pill = _buildInlineMentionNode(item);
+    const space = document.createTextNode(' ');
+
+    // @query 가 어디서 매칭됐는지 저장된 앵커가 있으면 그 위치를 교체. 없으면 캐럿에 삽입.
+    const anchorNode = state._imageGenMentionAnchorNode;
+    const atOffset = state._imageGenMentionAtOffset;
+    const endOffset = state._imageGenMentionEndOffset;
+    let inserted = false;
+
+    try {
+        if (anchorNode && editor.contains(anchorNode) && anchorNode.nodeType === Node.TEXT_NODE &&
+            typeof atOffset === 'number' && typeof endOffset === 'number' && endOffset >= atOffset) {
+            const delRange = document.createRange();
+            delRange.setStart(anchorNode, atOffset);
+            delRange.setEnd(anchorNode, Math.min(endOffset, (anchorNode.textContent || '').length));
+            delRange.deleteContents();
+            delRange.insertNode(space);
+            delRange.insertNode(pill);
+            // 캐럿을 space 뒤로
+            const newRange = document.createRange();
+            newRange.setStartAfter(space);
+            newRange.collapse(true);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(newRange);
+            inserted = true;
+        }
+    } catch (e) {
+        inserted = false;
+    }
+
+    if (!inserted) {
+        // fallback: 현재 캐럿 위치에 삽입, 캐럿 정보 없으면 맨 끝
+        const sel = window.getSelection();
+        let range = (sel && sel.rangeCount && editor.contains(sel.anchorNode)) ? sel.getRangeAt(0) : null;
+        if (!range) {
+            range = document.createRange();
+            range.selectNodeContents(editor);
+            range.collapse(false);
+        }
+        range.deleteContents();
+        range.insertNode(space);
+        range.insertNode(pill);
+        const newRange = document.createRange();
+        newRange.setStartAfter(space);
+        newRange.collapse(true);
+        if (sel) { sel.removeAllRanges(); sel.addRange(newRange); }
+    }
+
+    _syncImageGenMentionsFromEditor();
+    _hideImageGenMentionPicker();
+    editor.focus();
+}
+
+function _hideImageGenMentionPicker() {
+    state._imageGenMentionActive = false;
+    state._imageGenMentionQuery = '';
+    state._imageGenMentionAtPos = -1;
+    state._imageGenMentionIndex = 0;
+    state._imageGenMentionFiltered = null;
+    $('#imageGenMentionPicker').hide().empty();
+}
+
+function renderImageGenMentionStrip() {
+    const $strip = $('#imageGenMentionStrip');
+    const list = state.imageGenMentions || [];
+    $strip.empty();
+    if (!list.length) { $strip.hide(); return; }
+    $strip.show();
+    list.forEach((m) => {
+        const chip = $(
+            `<div class="ig-mention-chip" data-file-id="${escapeHtml(m.file_id)}" title="${escapeHtml(m.label || '')}">
+                <img src="${escapeHtml(m.url)}" alt="" />
+                <span class="ig-mention-chip-label">${escapeHtml((m.label || '').slice(0, 30))}</span>
+                <button class="ig-mention-chip-x" type="button" title="제거" aria-label="제거">
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 2l6 6M8 2l-6 6"/></svg>
+                </button>
+            </div>`
+        );
+        chip.find('.ig-mention-chip-x').on('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            removeImageGenMention(m.file_id);
+        });
+        $strip.append(chip);
+    });
+}
+
+function removeImageGenMention(fileId) {
+    // 에디터(contenteditable) 안의 인라인 pill 도 제거 — 그 후 state 동기화
+    const editor = document.getElementById('imageGenPrompt');
+    if (editor) {
+        const pills = editor.querySelectorAll('.ig-inline-mention');
+        pills.forEach((p) => {
+            if (p.getAttribute('data-file-id') === fileId) {
+                // pill 다음의 단일 공백(우리가 끼워 넣은 separator)도 함께 정리
+                const next = p.nextSibling;
+                if (next && next.nodeType === Node.TEXT_NODE && /^[\s ]/.test(next.textContent || '')) {
+                    next.textContent = (next.textContent || '').replace(/^[\s ]/, '');
+                    if (!next.textContent) next.parentNode.removeChild(next);
+                }
+                p.parentNode.removeChild(p);
+            }
+        });
+    }
+    state.imageGenMentions = (state.imageGenMentions || []).filter((m) => m.file_id !== fileId);
+    renderImageGenMentionStrip();
+}
+
+// 그리드 타일의 hover 액션 버튼/더보기 메뉴 위임 바인딩 (전체 워크스페이스에 1회)
+function _bindImageGenTileActions() {
+    if (window.__igTileActionsBound) return;
+    window.__igTileActionsBound = true;
+
+    // 즐겨찾기 상태는 클라이언트만 (브라우저 메모리). 추후 DB 연동 가능.
+    state._imageGenFavorites = state._imageGenFavorites || {};
+
+    $(document).on('click.igtile', '.ig-tile-act', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const $btn = $(this);
+        const act = $btn.attr('data-act');
+        const genId = $btn.attr('data-gen-id') || '';
+        const fileId = $btn.attr('data-file-id') || '';
+        _handleImageGenTileAction(act, genId, fileId, $btn, e);
+    });
+
+    // 메뉴 항목 클릭
+    $(document).on('click.igtile', '.ig-tile-menu-item', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const $btn = $(this);
+        const act = $btn.attr('data-act');
+        const $menu = $btn.closest('.ig-tile-menu');
+        const genId = $menu.attr('data-gen-id') || '';
+        const fileId = $menu.attr('data-file-id') || '';
+        _closeImageGenTileMenu();
+        _handleImageGenTileAction(act, genId, fileId, $btn, e);
+    });
+
+    // 외부 클릭으로 메뉴 닫기
+    $(document).on('click.igtile-outside', function (e) {
+        if (!window.__igTileMenuOpenEl) return;
+        const $t = $(e.target);
+        if ($t.closest('.ig-tile-menu').length || $t.closest('.ig-tile-more').length) return;
+        _closeImageGenTileMenu();
+    });
+
+    // ESC 로도 닫기
+    $(document).on('keydown.igtile', function (e) {
+        if (e.key === 'Escape' && window.__igTileMenuOpenEl) _closeImageGenTileMenu();
+    });
+}
+
+function _findImageGenItem(genId, fileId) {
+    const gen = (state.imageGenerations || []).find((g) => g._id === genId);
+    if (!gen) return null;
+    const img = (gen.images || []).find((im) => im && im.file_id === fileId && im.url);
+    if (!img) return { gen: gen, img: null };
+    return { gen: gen, img: img };
+}
+
+function _handleImageGenTileAction(act, genId, fileId, $btn, ev) {
+    const found = _findImageGenItem(genId, fileId);
+    const gen = found ? found.gen : null;
+    const img = found ? found.img : null;
+    const prompt = (gen && gen.prompt) || '';
+
+    if (act === 'favorite') {
+        const key = fileId || genId;
+        state._imageGenFavorites[key] = !state._imageGenFavorites[key];
+        $btn.toggleClass('is-fav', !!state._imageGenFavorites[key]);
+        showToast(state._imageGenFavorites[key] ? '즐겨찾기에 추가됨' : '즐겨찾기에서 제거됨', 'success');
+        return;
+    }
+    if (act === 'reuse-prompt') {
+        _setImageGenPromptText(prompt);
+        showToast('프롬프트를 입력창에 채웠습니다', 'success');
+        return;
+    }
+    if (act === 'append-prompt') {
+        _appendImageGenPromptText(prompt);
+        showToast('프롬프트를 추가했습니다', 'success');
+        return;
+    }
+    if (act === 'add-mention') {
+        if (!img) { showToast('이미지를 찾을 수 없습니다', 'error'); return; }
+        _selectImageGenMention({
+            file_id: img.file_id,
+            url: img.url,
+            label: (prompt || gen.model || 'image').slice(0, 40),
+        });
+        showToast('이미지를 @ 멘션으로 추가했습니다', 'success');
+        return;
+    }
+    if (act === 'download') {
+        if (!img || !img.url) return;
+        const a = document.createElement('a');
+        a.href = img.url;
+        const guess = (img.url.split('/').pop() || 'image').split('?')[0];
+        a.download = guess;
+        a.target = '_blank';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        return;
+    }
+    if (act === 'copy-url') {
+        if (!img || !img.url) return;
+        const abs = img.url.startsWith('http') ? img.url : (window.location.origin + img.url);
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(abs).then(
+                () => showToast('URL 이 복사되었습니다', 'success'),
+                () => showToast('복사 실패', 'error')
+            );
+        } else {
+            const ta = document.createElement('textarea');
+            ta.value = abs; document.body.appendChild(ta); ta.select();
+            try { document.execCommand('copy'); showToast('URL 이 복사되었습니다', 'success'); } catch (e) {}
+            document.body.removeChild(ta);
+        }
+        return;
+    }
+    if (act === 'delete') {
+        deleteImageGenImage(genId, fileId, ev);
+        return;
+    }
+    if (act === 'more') {
+        _openImageGenTileMenu($btn, genId, fileId);
+        return;
+    }
+}
+
+function _setImageGenPromptText(text) {
+    const editor = document.getElementById('imageGenPrompt');
+    if (!editor) return;
+    editor.innerHTML = '';
+    editor.appendChild(document.createTextNode(text || ''));
+    editor.focus();
+    // 캐럿을 끝으로
+    const r = document.createRange();
+    r.selectNodeContents(editor);
+    r.collapse(false);
+    const s = window.getSelection();
+    s.removeAllRanges(); s.addRange(r);
+    _syncImageGenMentionsFromEditor();
+}
+
+function _appendImageGenPromptText(text) {
+    const editor = document.getElementById('imageGenPrompt');
+    if (!editor || !text) return;
+    const existing = (editor.innerText || editor.textContent || '');
+    const sep = existing && !/\s$/.test(existing) ? ' ' : '';
+    editor.appendChild(document.createTextNode(sep + text));
+    editor.focus();
+    const r = document.createRange();
+    r.selectNodeContents(editor);
+    r.collapse(false);
+    const s = window.getSelection();
+    s.removeAllRanges(); s.addRange(r);
+}
+
+function _openImageGenTileMenu($triggerBtn, genId, fileId) {
+    _closeImageGenTileMenu();
+    const $tile = $triggerBtn.closest('.ig-tile');
+    if (!$tile.length) return;
+    const found = _findImageGenItem(genId, fileId);
+    const hasImage = !!(found && found.img);
+    const menuHtml = `
+        <div class="ig-tile-menu" data-gen-id="${escapeHtml(genId)}" data-file-id="${escapeHtml(fileId)}">
+            <button class="ig-tile-menu-item" data-act="append-prompt">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                프롬프트에 추가
+            </button>
+            <button class="ig-tile-menu-item" data-act="reuse-prompt">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>
+                프롬프트 재사용
+            </button>
+            <button class="ig-tile-menu-item" data-act="add-mention" ${hasImage ? '' : 'disabled'}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg>
+                @ 멘션으로 추가
+            </button>
+            <div class="ig-tile-menu-sep"></div>
+            <button class="ig-tile-menu-item" data-act="download" ${hasImage ? '' : 'disabled'}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                다운로드
+            </button>
+            <button class="ig-tile-menu-item" data-act="copy-url" ${hasImage ? '' : 'disabled'}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                URL 복사
+            </button>
+            <div class="ig-tile-menu-sep"></div>
+            <button class="ig-tile-menu-item danger" data-act="delete">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/></svg>
+                삭제
+            </button>
+        </div>
+    `;
+    const $menu = $(menuHtml);
+    $tile.append($menu);
+    window.__igTileMenuOpenEl = $menu.get(0);
+}
+
+function _closeImageGenTileMenu() {
+    if (window.__igTileMenuOpenEl) {
+        $(window.__igTileMenuOpenEl).remove();
+        window.__igTileMenuOpenEl = null;
+    }
+}
+
+// 콘텐츠 영역 너비에 맞춰 row 높이 계산 — 16:9 기준 최소 3장이 한 줄에 들어가도록.
+// 다른 비율(1:1, 9:16 등) 은 같은 높이 + 비율대로 자동 폭 결정되어 더 많이 들어간다.
+function _updateImageGenRowHeight() {
+    const content = document.getElementById('imageGenContent');
+    const grid = document.getElementById('imageGenGrid');
+    if (!content || !grid) return;
+    const w = content.clientWidth;
+    if (!w) return;
+    // .imagegen-content padding: 24px 좌우, .imagegen-grid gap: 12px
+    const padding = 48;
+    const gap = 12;
+    const innerW = w - padding;
+    const tileW = Math.floor((innerW - 2 * gap) / 3);
+    if (tileW <= 0) return;
+    // 16:9 일 때 너비를 그대로 다 쓰면 row 높이가 정해짐. 다른 비율은 자동 축소.
+    let rowH = Math.floor(tileW * 9 / 16);
+    // 화면이 작아도 너무 작아지지 않도록 / 너무 커지지 않도록 clamp
+    rowH = Math.max(140, Math.min(360, rowH));
+    grid.style.setProperty('--ig-row-h', rowH + 'px');
+}
+
+function _bindImageGenDropzone() {
+    const content = document.getElementById('imageGenContent');
+    if (!content || content.dataset.igDropBound === '1') return;
+    content.dataset.igDropBound = '1';
+
+    // 콘텐츠 영역 리사이즈 (사이드바 토글, 윈도우 리사이즈) 시 row 높이 재계산
+    if (typeof ResizeObserver === 'function') {
+        try {
+            const ro = new ResizeObserver(() => _updateImageGenRowHeight());
+            ro.observe(content);
+        } catch (e) { /* noop */ }
+    }
+    // ResizeObserver 미지원 환경 폴백
+    $(window).off('resize.imagegen').on('resize.imagegen', _updateImageGenRowHeight);
+
+    let dragDepth = 0;
+    const showOverlay = () => content.classList.add('is-dragover');
+    const hideOverlay = () => { dragDepth = 0; content.classList.remove('is-dragover'); };
+
+    const hasFiles = (e) => {
+        const dt = e.dataTransfer;
+        if (!dt) return false;
+        if (dt.types && Array.from(dt.types).indexOf('Files') >= 0) return true;
+        return false;
+    };
+
+    content.addEventListener('dragenter', (e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        dragDepth++;
+        showOverlay();
+    });
+    content.addEventListener('dragover', (e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+    });
+    content.addEventListener('dragleave', (e) => {
+        if (!hasFiles(e)) return;
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (dragDepth === 0) hideOverlay();
+    });
+    content.addEventListener('drop', async (e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        hideOverlay();
+        const files = Array.from(e.dataTransfer.files || []);
+        if (!files.length) return;
+        await uploadImageGenFiles(files);
+    });
+}
+
+async function uploadImageGenFiles(files) {
+    if (!state.currentProject || state.currentProject.project_type !== 'image_gen') return;
+
+    // 확장자 필터링 + 사용자 안내
+    const accepted = [];
+    const rejected = [];
+    files.forEach((f) => {
+        const name = (f.name || '').toLowerCase();
+        const dot = name.lastIndexOf('.');
+        const ext = dot >= 0 ? name.slice(dot + 1) : '';
+        if (_IG_UPLOAD_EXTS.indexOf(ext) >= 0) accepted.push(f);
+        else rejected.push(f.name || '(unnamed)');
+    });
+    if (rejected.length) {
+        showToast(`이미지 파일이 아닌 항목은 제외됨: ${rejected.join(', ')}`, 'warn');
+    }
+    if (!accepted.length) return;
+
+    const fd = new FormData();
+    accepted.forEach((f) => fd.append('files', f));
+
+    try {
+        const res = await apiUpload(
+            `/api/image-gen/${state.currentProject._id}/upload`,
+            fd
+        );
+        if (res && res.generation) {
+            state.imageGenerations = state.imageGenerations || [];
+            state.imageGenerations.unshift(res.generation);
+            renderImageGenWorkspace();
+            showToast(`${accepted.length}장 업로드 완료`, 'success');
+            const $content = $('#imageGenContent');
+            if ($content.length) $content.scrollTop(0);
+        }
+    } catch (e) {
+        showToast(e.message || '업로드 실패', 'error');
+    }
+}
+
+function renderImageGenWorkspace() {
+    const gens = state.imageGenerations || [];
+    const $grid = $('#imageGenGrid');
+    const $empty = $('#imageGenEmpty');
+    $grid.empty();
+
+    // generations → 개별 이미지 타일로 평탄화. 한 generation 안의 N장이
+    // 동일 가로열에 나란히 흘러가도록 (저장된 순서) 한 다음, generation 단위로 다음 줄.
+    // ─ 타일 자체에 generation_id 와 model/aspect/prompt 정보를 데이터 속성으로 부여 ─
+    const tiles = [];
+    gens.forEach((g) => {
+        const genRatioVal = _IG_ASPECT_RATIOS[g.aspect_ratio] || _IG_ASPECT_RATIOS['16:9'];
+        (g.images || []).forEach((img) => {
+            if (!img || !img.url) return;
+            // 업로드(또는 width/height 보존된 항목) 는 실제 픽셀 비율로 표시, 아니면 generation 의 비율 사용
+            let ratio = genRatioVal;
+            let aspectLabel = g.aspect_ratio || '16:9';
+            if (img.width && img.height) {
+                ratio = `${img.width} / ${img.height}`;
+                aspectLabel = `${img.width}×${img.height}`;
+            }
+            tiles.push({
+                url: img.url,
+                ratio: ratio,
+                aspect: aspectLabel,
+                model: g.model || '',
+                prompt: g.prompt || '',
+                genId: g._id || '',
+                fileId: img.file_id || '',
+            });
+        });
+    });
+
+    if (tiles.length === 0) {
+        $empty.show();
+        $grid.hide();
+        return;
+    }
+
+    $empty.hide();
+    $grid.show();
+
+    tiles.forEach((t) => $grid.append(_buildImageGenTileHtml(t)));
+
+    // 콘텐츠 영역 너비에 맞춰 row 높이 재계산 (3장 보장)
+    _updateImageGenRowHeight();
+}
+
+function _buildImageGenTileHtml(t) {
+    const modelLabel = _IG_MODEL_LABEL[t.model] || t.model || '';
+    const url = escapeHtml(t.url);
+    const promptAttr = escapeHtml(t.prompt || '');
+    const labelText = escapeHtml((t.prompt || '').slice(0, 80));
+    const genId = escapeHtml(t.genId || '');
+    const fileId = escapeHtml(t.fileId || '');
+    return `
+        <div class="ig-tile" style="--ig-tile-ratio:${t.ratio};" data-gen-id="${genId}" data-file-id="${fileId}" title="${promptAttr}">
+            <img src="${url}" loading="lazy" alt="" onclick="openImageGenDetail('${encodeURIComponent(t.url)}')" />
+            <!-- Hover overlay (top-right actions + bottom-left label) -->
+            <div class="ig-tile-hover">
+                <div class="ig-tile-actions">
+                    <button class="ig-tile-act" data-act="favorite" data-gen-id="${genId}" data-file-id="${fileId}" title="즐겨찾기">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                    </button>
+                    <button class="ig-tile-act" data-act="reuse-prompt" data-gen-id="${genId}" title="프롬프트 재사용">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>
+                    </button>
+                    <button class="ig-tile-act ig-tile-more" data-act="more" data-gen-id="${genId}" data-file-id="${fileId}" title="더보기">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+                    </button>
+                </div>
+                <div class="ig-tile-label-wrap">
+                    <span class="ig-tile-label-icon">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                    </span>
+                    <span class="ig-tile-label-text">${labelText || '(이름 없음)'}</span>
+                </div>
+                <span class="ig-tile-aspect-badge">${escapeHtml(t.aspect)}</span>
+                <span class="ig-tile-model-badge">${escapeHtml(modelLabel)}</span>
+            </div>
+        </div>
+    `;
+}
+
+// ── 생성 중 스켈레톤 + 진행률 (서버 스트리밍 없으므로 클라이언트 추정) ────────
+function _showImageGenSkeletons(groupId, count, aspectRatio, model) {
+    // 빈 상태가 보이고 있으면 숨기고 그리드 노출
+    $('#imageGenEmpty').hide();
+    $('#imageGenGrid').show();
+    const $grid = $('#imageGenGrid');
+    const ratio = _IG_ASPECT_RATIOS[aspectRatio] || _IG_ASPECT_RATIOS['16:9'];
+    const modelLabel = _IG_MODEL_LABEL[model] || model || '';
+    let html = '';
+    for (let i = 0; i < count; i++) {
+        html += `
+            <div class="ig-tile ig-skel" data-skel-group="${escapeHtml(groupId)}" style="--ig-tile-ratio:${ratio};">
+                <div class="ig-skel-shimmer"></div>
+                <div class="ig-skel-overlay">
+                    <div class="ig-tile-chips">
+                        <span class="ig-tile-chip">${escapeHtml(modelLabel)}</span>
+                        <span class="ig-tile-chip">${escapeHtml(aspectRatio)}</span>
+                    </div>
+                    <div class="ig-skel-progress">
+                        <span class="ig-skel-spinner"></span>
+                        <span class="ig-skel-percent" data-skel-percent>0%</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    // prepend (그리드 맨 앞에)
+    $grid.prepend(html);
+}
+
+// 진행률 가짜 추정 — ease-out 으로 점점 느려져 95% 까지 도달, 응답 오면 100% 점프.
+// model 에 따라 평균 소요 시간 추정치 다르게 (Imagen 배치가 약간 빠른 편).
+function _startImageGenProgress(groupId, model) {
+    const expectedMs = (model === 'imagen-4') ? 9000 : 12000;  // 추정 평균
+    const cap = 95;
+    const startedAt = Date.now();
+    let lastPct = 0;
+    const $tiles = () => $(`.ig-tile.ig-skel[data-skel-group="${$.escapeSelector(groupId)}"] [data-skel-percent]`);
+    const timer = setInterval(() => {
+        const elapsed = Date.now() - startedAt;
+        // ease-out: 1 - exp(-t/T)
+        const target = cap * (1 - Math.exp(-elapsed / (expectedMs * 0.55)));
+        const pct = Math.max(lastPct, Math.min(cap, target));
+        lastPct = pct;
+        $tiles().text(Math.floor(pct) + '%');
+    }, 250);
+    return timer;
+}
+
+function _finishImageGenProgress(groupId, timer) {
+    if (timer) clearInterval(timer);
+    $(`.ig-tile.ig-skel[data-skel-group="${$.escapeSelector(groupId)}"] [data-skel-percent]`).text('100%');
+}
+
+function _removeImageGenSkeletons(groupId, timer) {
+    if (timer) clearInterval(timer);
+    $(`.ig-tile.ig-skel[data-skel-group="${$.escapeSelector(groupId)}"]`).remove();
+    // 결과가 없고 스켈레톤도 제거되었다면 빈 상태 복원
+    if (($('#imageGenGrid .ig-tile').length === 0) && ((state.imageGenerations || []).length === 0)) {
+        $('#imageGenEmpty').show();
+        $('#imageGenGrid').hide();
+    }
+}
+
+async function submitImageGen() {
+    if (state._imageGenSubmitting) return;
+    if (!state.currentProject || state.currentProject.project_type !== 'image_gen') return;
+
+    // contenteditable 의 innerText 로 읽으면 @멘션 pill 도 "@label" 텍스트로 같이 들어감 (LLM 에 그대로 자연스러움)
+    const editor = document.getElementById('imageGenPrompt');
+    const prompt = (editor ? (editor.innerText || editor.textContent || '') : '').trim();
+    if (!prompt) {
+        showToast('프롬프트를 입력해 주세요', 'error');
+        if (editor) editor.focus();
+        return;
+    }
+
+    let model = state.imageGenModel || $('#imageGenModel').val() || 'nano-banana-pro';
+    const aspectRatio = state.imageGenAspect || '16:9';
+    const count = Math.max(1, Math.min(4, parseInt(state.imageGenCount, 10) || 1));
+
+    // 참조 이미지 (@ 멘션). Imagen 4 는 미지원이라 자동으로 Nano Banana Pro 로 폴백.
+    const referenceFileIds = (state.imageGenMentions || []).map((m) => m.file_id).filter(Boolean);
+    if (referenceFileIds.length && model === 'imagen-4') {
+        showToast('Imagen 4 는 참조 이미지를 지원하지 않아 Nano Banana Pro 로 전환합니다.', 'warn');
+        model = 'nano-banana-pro';
+        state.imageGenModel = 'nano-banana-pro';
+        $('#imageGenModel').val('nano-banana-pro');
+    }
+
+    state._imageGenSubmitting = true;
+    const $btn = $('#btnImageGenSubmit');
+    const originalHtml = $btn.html();
+    $btn.prop('disabled', true).html('<span class="ig-spinner"></span><span>생성 중...</span>');
+
+    // 생성 중 표시 — 선택한 비율의 스켈레톤 타일 count 장을 그리드 상단에 prepend.
+    // 진행률은 서버 스트리밍이 없으므로 클라이언트에서 ease-out 으로 0 → 95% 자동 증가,
+    // 응답 도착 시 100% 후 실제 타일로 교체.
+    const skeletonGroupId = 'ig-skel-' + Date.now();
+    _showImageGenSkeletons(skeletonGroupId, count, aspectRatio, model);
+    const progressTimer = _startImageGenProgress(skeletonGroupId, model);
+
+    try {
+        const reqBody = {
+            prompt: prompt,
+            model: model,
+            aspect_ratio: aspectRatio,
+            count: count,
+        };
+        if (referenceFileIds.length) reqBody.reference_file_ids = referenceFileIds;
+        const res = await apiPost(`/api/image-gen/${state.currentProject._id}/generate`, reqBody);
+        if (res && res.generation) {
+            state.imageGenerations = state.imageGenerations || [];
+            state.imageGenerations.unshift(res.generation);
+            // 프롬프트 비움 + 멘션 칩 strip 초기화
+            const _ed = document.getElementById('imageGenPrompt');
+            if (_ed) _ed.innerHTML = '';
+            state.imageGenMentions = [];
+            renderImageGenMentionStrip();
+            // 100% 잠깐 노출 후 실제 결과로 교체
+            _finishImageGenProgress(skeletonGroupId, progressTimer);
+            setTimeout(() => {
+                renderImageGenWorkspace();
+                const $content = $('.imagegen-content');
+                if ($content.length) $content.scrollTop(0);
+            }, 250);
+        } else {
+            _removeImageGenSkeletons(skeletonGroupId, progressTimer);
+            showToast('생성 결과가 비어 있습니다', 'error');
+        }
+    } catch (e) {
+        _removeImageGenSkeletons(skeletonGroupId, progressTimer);
+        showToast(e.message || '이미지 생성 실패', 'error');
+    } finally {
+        state._imageGenSubmitting = false;
+        $btn.prop('disabled', false).html(originalHtml);
+    }
+}
+
+async function deleteImageGeneration(genId, ev) {
+    if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+    if (!genId || !state.currentProject) return;
+
+    const ok = await confirmAsync({
+        title: '이미지 생성 기록 삭제',
+        message: '<span class="confirm-warning">' + t('msgIrreversible') + '</span>',
+        okText: t('btnDelete'),
+    });
+    if (!ok) return;
+
+    try {
+        await apiDelete(`/api/image-gen/${state.currentProject._id}/${genId}`);
+        state.imageGenerations = (state.imageGenerations || []).filter((g) => g._id !== genId);
+        renderImageGenWorkspace();
+        showToast('삭제되었습니다', 'success');
+    } catch (e) {
+        showToast(e.message || '삭제 실패', 'error');
+    }
+}
+
+// 개별 이미지 한 장만 삭제 (generation 의 마지막 이미지면 generation 자체도 사라짐)
+async function deleteImageGenImage(genId, fileId, ev) {
+    if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+    if (!state.currentProject || !genId || !fileId) return;
+    const ok = await confirmAsync({
+        title: '이미지 삭제',
+        message: '이 이미지를 삭제하시겠습니까?',
+        okText: '삭제',
+    });
+    if (!ok) return;
+    try {
+        const res = await apiDelete(
+            `/api/image-gen/${state.currentProject._id}/${genId}/images/${fileId}`
+        );
+        const gens = state.imageGenerations || [];
+        if (res && res.deleted_generation) {
+            // generation 자체가 삭제됨
+            state.imageGenerations = gens.filter((g) => g._id !== genId);
+        } else if (res && res.generation) {
+            // 해당 generation 만 갱신
+            state.imageGenerations = gens.map((g) =>
+                (g._id === genId) ? res.generation : g
+            );
+        } else {
+            // 응답이 비정상이지만 일단 클라이언트에서 해당 이미지 제거 시도
+            state.imageGenerations = gens.map((g) => {
+                if (g._id !== genId) return g;
+                const filtered = (g.images || []).filter((im) => im.file_id !== fileId);
+                return Object.assign({}, g, { images: filtered, count: filtered.length });
+            }).filter((g) => (g.images || []).length > 0);
+        }
+        renderImageGenWorkspace();
+        showToast('이미지가 삭제되었습니다', 'success');
+    } catch (e) {
+        showToast(e.message || '삭제 실패', 'error');
+    }
+}
+
+// 현재 프로젝트의 모든 이미지를 그리드 표시 순서대로 평탄화 (이전/다음 + 편집 용)
+function _collectImageGenItems() {
+    const out = [];
+    (state.imageGenerations || []).forEach((g) => {
+        (g.images || []).forEach((img) => {
+            if (!img || !img.url) return;
+            out.push({
+                url: img.url,
+                file_id: img.file_id || '',
+                gen_id: g._id || '',
+                model: g.model || '',
+                aspect_ratio: g.aspect_ratio || '16:9',
+                prompt: g.prompt || '',
+            });
+        });
+    });
+    return out;
+}
+
+function openImageGenDetail(encodedUrl) {
+    const url = decodeURIComponent(encodedUrl || '');
+    if (!url) return;
+    const items = _collectImageGenItems();
+    const idx = Math.max(0, items.findIndex((it) => it.url === url));
+    state._imageGenDetailItems = items;
+    state._imageGenDetailIndex = idx;
+    _showImageGenDetailAtIndex(idx);
+    // 편집 textarea 초기화
+    const $edit = $('#igDetailEditPrompt');
+    if ($edit.length) {
+        $edit.val('');
+        if ($edit[0] && typeof autoResizeTextarea === 'function') autoResizeTextarea($edit[0]);
+    }
+    $('#imageGenDetailModal').css('display', 'flex');
+    _bindImageGenDetailKeys();
+}
+
+function _showImageGenDetailAtIndex(i) {
+    const items = state._imageGenDetailItems || [];
+    if (!items.length) return;
+    const idx = Math.max(0, Math.min(items.length - 1, i));
+    const item = items[idx];
+    state._imageGenDetailIndex = idx;
+    state._imageGenDetailUrl = item.url;
+    state._imageGenDetailFileId = item.file_id || '';
+    state._imageGenDetailAspect = item.aspect_ratio || '16:9';
+    $('#igDetailImg').attr('src', item.url);
+    $('#igDetailCounter').text(`${idx + 1} / ${items.length}`);
+    $('#igDetailTitle').text((item.prompt || '').slice(0, 80) || '이미지');
+    // 양 끝에서는 prev/next 버튼 비활성화
+    $('#igDetailPrev').prop('disabled', idx === 0);
+    $('#igDetailNext').prop('disabled', idx === items.length - 1);
+}
+
+// 풀스크린 모달 안에서 현재 이미지를 ref 로 두고 편집 프롬프트 → 새 이미지 생성
+async function submitImageGenEdit() {
+    if (state._imageGenDetailEditing) return;
+    if (!state.currentProject || state.currentProject.project_type !== 'image_gen') return;
+    const items = state._imageGenDetailItems || [];
+    const idx = state._imageGenDetailIndex || 0;
+    const current = items[idx];
+    if (!current || !current.file_id) {
+        showToast('이 이미지는 편집할 수 없습니다 (file_id 없음)', 'error');
+        return;
+    }
+    const prompt = ($('#igDetailEditPrompt').val() || '').trim();
+    if (!prompt) {
+        showToast('변경할 내용을 입력해 주세요', 'error');
+        $('#igDetailEditPrompt').focus();
+        return;
+    }
+    let model = $('#igDetailEditModel').val() || 'nano-banana-pro';
+    if (model === 'imagen-4') model = 'nano-banana-pro'; // safety: Imagen 은 ref 미지원
+
+    state._imageGenDetailEditing = true;
+    const $btn = $('#btnIgDetailEditSubmit');
+    const originalHtml = $btn.html();
+    $btn.prop('disabled', true).html('<span class="ig-spinner"></span><span>생성 중...</span>');
+
+    // 이미지 위 로딩 오버레이 + 진행률 가짜 (ease-out)
+    $('#igDetailEditingOverlay').show();
+    let lastPct = 0;
+    const startedAt = Date.now();
+    const expectedMs = 12000;
+    const editTimer = setInterval(() => {
+        const elapsed = Date.now() - startedAt;
+        const target = 95 * (1 - Math.exp(-elapsed / (expectedMs * 0.55)));
+        const pct = Math.max(lastPct, Math.min(95, target));
+        lastPct = pct;
+        $('#igDetailEditingPct').text(Math.floor(pct) + '%');
+    }, 250);
+
+    try {
+        const res = await apiPost(`/api/image-gen/${state.currentProject._id}/generate`, {
+            prompt: prompt,
+            model: model,
+            aspect_ratio: current.aspect_ratio || '16:9',
+            count: 1,
+            reference_file_ids: [current.file_id],
+        });
+        clearInterval(editTimer);
+        $('#igDetailEditingPct').text('100%');
+        if (res && res.generation) {
+            state.imageGenerations = state.imageGenerations || [];
+            state.imageGenerations.unshift(res.generation);
+            // 그리드 갱신 (다음 모달 close 시 보이도록)
+            renderImageGenWorkspace();
+            // 모달 안에서 새 이미지로 즉시 전환 — items 재계산 후 첫 번째(=새 이미지) 로
+            const newItems = _collectImageGenItems();
+            state._imageGenDetailItems = newItems;
+            // 새로 생성된 이미지의 url 을 찾아 인덱스 설정
+            const newImg = (res.generation.images || []).find((im) => im && im.url);
+            const newIdx = newImg ? Math.max(0, newItems.findIndex((it) => it.url === newImg.url)) : 0;
+            // 잠깐 100% 보여주고 전환
+            setTimeout(() => {
+                $('#igDetailEditingOverlay').hide();
+                _showImageGenDetailAtIndex(newIdx);
+                // 편집 프롬프트 비움 (연속 편집 가능)
+                $('#igDetailEditPrompt').val('');
+                if ($('#igDetailEditPrompt')[0] && typeof autoResizeTextarea === 'function') {
+                    autoResizeTextarea($('#igDetailEditPrompt')[0]);
+                }
+            }, 300);
+            showToast('새 이미지가 생성되었습니다', 'success');
+        } else {
+            $('#igDetailEditingOverlay').hide();
+            showToast('생성 결과가 비어 있습니다', 'error');
+        }
+    } catch (e) {
+        clearInterval(editTimer);
+        $('#igDetailEditingOverlay').hide();
+        showToast(e.message || '이미지 편집 실패', 'error');
+    } finally {
+        state._imageGenDetailEditing = false;
+        $btn.prop('disabled', false).html(originalHtml);
+    }
+}
+
+function showImageGenDetailPrev(ev) {
+    if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+    const urls = state._imageGenDetailUrls || [];
+    if (!urls.length) return;
+    const i = (state._imageGenDetailIndex || 0) - 1;
+    if (i < 0) return;
+    _showImageGenDetailAtIndex(i);
+}
+
+function showImageGenDetailNext(ev) {
+    if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+    const urls = state._imageGenDetailUrls || [];
+    if (!urls.length) return;
+    const i = (state._imageGenDetailIndex || 0) + 1;
+    if (i >= urls.length) return;
+    _showImageGenDetailAtIndex(i);
+}
+
+function _bindImageGenDetailKeys() {
+    // 이미 바인딩되어 있어도 안전하게 갈아끼움
+    $(document).off('keydown.imagegen-detail');
+    $(document).on('keydown.imagegen-detail', function (e) {
+        if ($('#imageGenDetailModal').is(':visible') !== true) return;
+        // 편집 textarea 에 포커스가 있으면: Enter=제출, Shift+Enter=줄바꿈, Esc=닫기. 화살표는 캐럿 이동.
+        const tag = (document.activeElement && document.activeElement.tagName) || '';
+        const inEdit = document.activeElement && document.activeElement.id === 'igDetailEditPrompt';
+        if (inEdit) {
+            if (e.key === 'Escape') { e.preventDefault(); closeImageGenDetail(); }
+            else if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                submitImageGenEdit();
+            }
+            return;
+        }
+        // 일반 모드: ESC 닫기, 좌우 화살표로 이전/다음
+        if (e.key === 'Escape') { closeImageGenDetail(); }
+        else if (e.key === 'ArrowLeft') { showImageGenDetailPrev(); }
+        else if (e.key === 'ArrowRight') { showImageGenDetailNext(); }
+    });
+}
+
+function closeImageGenDetail(ev) {
+    // 풀스크린 모달: 상단바/하단 편집바/이미지 클릭은 닫지 않는다. 빈 영역(stage 배경) 클릭만 닫기.
+    if (ev && ev.target) {
+        const $t = $(ev.target);
+        if ($t.closest('.ig-detail-topbar, .ig-detail-edit-bar, #igDetailImg, .ig-detail-nav').length) {
+            return;
+        }
+    }
+    $('#imageGenDetailModal').hide();
+    $('#igDetailImg').attr('src', '');
+    $('#igDetailEditingOverlay').hide();
+    state._imageGenDetailUrl = null;
+    state._imageGenDetailItems = null;
+    state._imageGenDetailUrls = null;
+    state._imageGenDetailIndex = -1;
+    state._imageGenDetailFileId = '';
+    state._imageGenDetailEditing = false;
+    $(document).off('keydown.imagegen-detail');
+}
+
+async function downloadImageGenImage() {
+    const url = state._imageGenDetailUrl;
+    if (!url) return;
+    try {
+        const a = document.createElement('a');
+        a.href = url;
+        const guessName = (url.split('/').pop() || 'image').split('?')[0] || 'image.png';
+        a.download = guessName;
+        a.target = '_blank';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    } catch (e) {
+        showToast('다운로드 실패', 'error');
+    }
+}
+
+async function copyImageGenUrl() {
+    const url = state._imageGenDetailUrl;
+    if (!url) return;
+    try {
+        // 절대 URL 로 변환
+        const absUrl = (url.startsWith('http') ? url : (window.location.origin + url));
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(absUrl);
+        } else {
+            const ta = document.createElement('textarea');
+            ta.value = absUrl;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+        }
+        showToast('URL 이 복사되었습니다', 'success');
+    } catch (e) {
+        showToast('URL 복사 실패', 'error');
+    }
+}
+
 // ============ OnlyOffice 통합 ============
 
 function _getProjectTypeBadge(projectType) {
@@ -14523,6 +15841,7 @@ function _getProjectTypeBadge(projectType) {
         'onlyoffice_docx': '<span class="rc-type-badge oo-docx">OO Word</span>',
         'word': '<span class="rc-type-badge word">Word</span>',
         'html_report': '<span class="rc-type-badge html">HTML</span>',
+        'image_gen': '<span class="rc-type-badge imagegen">IMG</span>',
     };
     return badges[projectType] || '<span class="rc-type-badge ppt">PPT</span>';
 }
@@ -14536,6 +15855,7 @@ function _getProjectTypeClass(projectType) {
         'word': 'ptype-word',
         'onlyoffice_docx': 'ptype-word',
         'html_report': 'ptype-html',
+        'image_gen': 'ptype-imagegen',
     };
     return map[projectType] || 'ptype-ppt';
 }
@@ -14549,6 +15869,7 @@ function _getProjectTypeIcon(projectType) {
         'word': '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="2" width="10" height="12" rx="2"/><path d="M6 5h4M6 8h4M6 11h2"/></svg>',
         'onlyoffice_docx': '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="2" width="10" height="12" rx="2"/><path d="M6 5h4M6 8h4M6 11h2"/></svg>',
         'html_report': '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 1H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V5z"/><path d="M10 1v4h4"/><path d="M5 8h6M5 10.5h4"/></svg>',
+        'image_gen': '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21,15 16,10 5,21"/></svg>',
     };
     return icons[projectType] || '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M7 7l3 2-3 2V7z"/></svg>';
 }

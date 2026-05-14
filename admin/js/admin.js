@@ -6142,6 +6142,91 @@ let currentPPTStyleId = null;
 let pptStylesList = [];
 let fontsCache = [];
 
+// 폰트 family/name 문자열을 sans-serif|serif|display|geometric|humanist 로 분류.
+// 서버 ppt_style_service._classify_font_style 과 동일한 키워드 규칙 (한글/영문 혼용).
+// 분류 불가 시 null. 등록된 폰트의 family/name 만 보고 판단한다.
+function _classifyFontStyle() {
+    for (let i = 0; i < arguments.length; i++) {
+        const raw = arguments[i];
+        if (!raw || typeof raw !== 'string') continue;
+        const s = raw.toLowerCase();
+        // 1) sans-serif 계열을 먼저 매칭 (serif 보다 우선)
+        const sans = [
+            'sans', 'gothic', '고딕', '돋움', '굴림', '맑은',
+            'noto sans', '노토산스', 'noto-sans',
+            'pretendard', '프리텐다드', 'suite', 'spoqa',
+            'nanum gothic', '나눔고딕', 'ibm plex sans', 'inter', 'roboto',
+            'helvetica', 'arial'
+        ];
+        if (sans.some(k => s.indexOf(k) !== -1)) return 'sans-serif';
+        // 2) serif 계열
+        const serif = [
+            'serif', 'myungjo', '명조', '본명조', 'batang', '바탕',
+            'noto serif', '노토세리프', 'nanum myeongjo', '나눔명조',
+            'times', 'georgia', 'garamond'
+        ];
+        if (serif.some(k => s.indexOf(k) !== -1)) return 'serif';
+        // 3) 카테고리 단어가 폰트 이름에 들어간 경우
+        if (s.indexOf('display') !== -1) return 'display';
+        if (s.indexOf('geometric') !== -1 || s.indexOf('futura') !== -1 || s.indexOf('avenir') !== -1) return 'geometric';
+        if (s.indexOf('humanist') !== -1 || s.indexOf('calibri') !== -1 || s.indexOf('verdana') !== -1) return 'humanist';
+    }
+    return null;
+}
+
+// 현재 섹션 5 (제목/본문 폰트 선택) 에서 typography.font_style 을 도출.
+// 제목 폰트 우선, 폴백으로 본문 폰트. 둘 다 미선택이면 null.
+function _derivePPTStyleFontStyleFromSelectedFonts() {
+    const titleId = $('#pptStyleTitleFont').val() || '';
+    const bodyId  = $('#pptStyleBodyFont').val()  || '';
+    const cache = (typeof fontsCache !== 'undefined' && Array.isArray(fontsCache)) ? fontsCache : [];
+    function _classifyById(id) {
+        if (!id) return null;
+        const f = cache.find(x => (x._id || '') === id);
+        if (!f) return null;
+        return _classifyFontStyle(f.family || '', f.name || '');
+    }
+    return _classifyById(titleId) || _classifyById(bodyId);
+}
+
+// font_style 셀렉트의 상태(값/잠금/주석)를 섹션 5 폰트 선택에 맞춰 동기화.
+// - 도출 성공: 값 설정 + disabled + 안내 표시
+// - 도출 실패(폰트 미선택): 활성화 (Vision 추정값/수동 입력 허용)
+function updatePPTStyleTypographyFontStyleFromFonts() {
+    const $sel = $('#pptStyleTypoFontStyle');
+    if (!$sel.length) return;
+    const derived = _derivePPTStyleFontStyleFromSelectedFonts();
+    let $hint = $('#pptStyleTypoFontStyleHint');
+    if (derived) {
+        $sel.val(derived).prop('disabled', true).attr('title', '섹션 5 폰트에서 자동 도출됨');
+        if (!$hint.length) {
+            $hint = $('<small id="pptStyleTypoFontStyleHint" style="color:#888;font-weight:400;display:block;margin-top:2px;font-size:11px;">↳ 5. 폰트에서 자동 도출</small>');
+            $sel.after($hint);
+        } else {
+            $hint.show();
+        }
+    } else {
+        $sel.prop('disabled', false).removeAttr('title');
+        if ($hint.length) $hint.hide();
+    }
+}
+
+// 합성 패턴 태그 카탈로그 (archetypes.compositions 다중 선택용)
+const PPT_STYLE_COMPOSITIONS = [
+    { id: 'split_60_40',      label: '6:4 분할' },
+    { id: 'centered_hero',    label: '중앙 히어로' },
+    { id: 'grid_2col_cards',  label: '2열 카드' },
+    { id: 'grid_3col_cards',  label: '3열 카드' },
+    { id: 'grid_2x2',         label: '2x2 그리드' },
+    { id: 'full_bleed_photo', label: '풀블리드 사진' },
+    { id: 'sidebar_left',     label: '좌측 사이드바' },
+    { id: 'sidebar_right',    label: '우측 사이드바' },
+    { id: 'big_stat',         label: '큰 숫자(스탯)' },
+    { id: 'timeline',         label: '타임라인' },
+    { id: 'quote',            label: '인용' },
+    { id: 'comparison',       label: '비교' },
+];
+
 // 색상 슬롯 메타 (한글 별칭)
 const PPT_STYLE_COLOR_SLOTS = [
     { key: 'primary', label: '메인',    desc: 'Primary' },
@@ -6276,15 +6361,20 @@ function updatePPTStyleFontPreview(which) {
     if (!fontId) {
         $box.hide();
         $img.attr('src', '');
-        return;
-    }
-    const f = (fontsCache || []).find(function(x) { return (x._id || '') === fontId; });
-    if (f && f.preview_url) {
-        $img.attr('src', f.preview_url);
-        $box.show();
     } else {
-        $box.hide();
-        $img.attr('src', '');
+        const f = (fontsCache || []).find(function(x) { return (x._id || '') === fontId; });
+        if (f && f.preview_url) {
+            $img.attr('src', f.preview_url);
+            $box.show();
+        } else {
+            $box.hide();
+            $img.attr('src', '');
+        }
+    }
+    // 섹션 5 의 폰트가 바뀌면 typography.font_style 도 즉시 다시 도출 (사용자가
+    // 별도로 셀렉트를 만지지 않아도 일관성 유지).
+    if (typeof updatePPTStyleTypographyFontStyleFromFonts === 'function') {
+        updatePPTStyleTypographyFontStyleFromFonts();
     }
 }
 
@@ -6336,12 +6426,44 @@ async function showPPTStyleEditor(style) {
     $('#pptStyleSizeLabel').val(sizes.label ?? '');
     $('#pptStyleSizeStat').val(sizes.stat ?? '');
 
+    // 간격 (Spacing)
+    const spacing = dt.spacing || {};
+    $('#pptStyleSpacingDensity').val(spacing.density || '');
+    $('#pptStyleSpacingBaseUnit').val(spacing.base_unit ?? '');
+    $('#pptStyleSpacingMarginX').val(spacing.slide_margin_x ?? '');
+    $('#pptStyleSpacingMarginY').val(spacing.slide_margin_y ?? '');
+    $('#pptStyleSpacingSectionGap').val(spacing.section_gap ?? '');
+    $('#pptStyleSpacingElementGap').val(spacing.element_gap ?? '');
+    $('#pptStyleSpacingCardPadding').val(spacing.card_padding ?? '');
+
+    // 타이포 디테일 (Typography)
+    const typo = dt.typography || {};
+    $('#pptStyleTypoFontStyle').val(typo.font_style || '');
+    $('#pptStyleTypoH1Weight').val(typo.h1_weight || '');
+    $('#pptStyleTypoH2Weight').val(typo.h2_weight || '');
+    $('#pptStyleTypoBodyWeight').val(typo.body_weight || '');
+    $('#pptStyleTypoStatWeight').val(typo.stat_weight || '');
+    $('#pptStyleTypoH1LineHeight').val(typo.h1_line_height ?? '');
+    $('#pptStyleTypoBodyLineHeight').val(typo.body_line_height ?? '');
+    $('#pptStyleTypoH1LetterSpacing').val(typo.h1_letter_spacing ?? '');
+    $('#pptStyleTypoBodyLetterSpacing').val(typo.body_letter_spacing ?? '');
+
+    // 슬라이드 아키타입 (Archetypes)
+    const arch = dt.archetypes || {};
+    $('#pptStyleArchGridColumns').val(arch.grid_columns != null ? String(arch.grid_columns) : '');
+    $('#pptStyleArchColumnGutter').val(arch.column_gutter ?? '');
+    $('#pptStyleArchCornerRadius').val(arch.corner_radius || '');
+    $('#pptStyleArchImageAspect').val(arch.image_aspect || '');
+    renderArchetypeCompositions(Array.isArray(arch.compositions) ? arch.compositions : []);
+
     refreshPPTStyleFontSelects();
     const fonts = dt.fonts || {};
     if (fonts.title_font_id) $('#pptStyleTitleFont').val(fonts.title_font_id);
     if (fonts.body_font_id) $('#pptStyleBodyFont').val(fonts.body_font_id);
     updatePPTStyleFontPreview('title');
     updatePPTStyleFontPreview('body');
+    // 5. 폰트 선택값을 기반으로 typography.font_style 동기화 (선택돼 있으면 셀렉트 잠금)
+    updatePPTStyleTypographyFontStyleFromFonts();
 
     // 샘플 이미지
     renderPPTStyleSampleGrid(style.sample_image_refs || []);
@@ -6427,6 +6549,78 @@ function collectPPTStyleColors() {
             out[key] = v.toUpperCase();
         }
     });
+    return out;
+}
+
+// ---------- Spacing / Typography / Archetypes 수집 ----------
+function _numOrUndef(sel) {
+    const raw = $(sel).val();
+    if (raw === '' || raw === null || raw === undefined) return undefined;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : undefined;
+}
+function _strOrUndef(sel) {
+    const v = ($(sel).val() || '').trim();
+    return v ? v : undefined;
+}
+function _assignIfDefined(obj, key, value) {
+    if (value !== undefined) obj[key] = value;
+}
+
+function collectPPTStyleSpacing() {
+    const out = {};
+    _assignIfDefined(out, 'density',        _strOrUndef('#pptStyleSpacingDensity'));
+    _assignIfDefined(out, 'base_unit',      _numOrUndef('#pptStyleSpacingBaseUnit'));
+    _assignIfDefined(out, 'slide_margin_x', _numOrUndef('#pptStyleSpacingMarginX'));
+    _assignIfDefined(out, 'slide_margin_y', _numOrUndef('#pptStyleSpacingMarginY'));
+    _assignIfDefined(out, 'section_gap',    _numOrUndef('#pptStyleSpacingSectionGap'));
+    _assignIfDefined(out, 'element_gap',    _numOrUndef('#pptStyleSpacingElementGap'));
+    _assignIfDefined(out, 'card_padding',   _numOrUndef('#pptStyleSpacingCardPadding'));
+    return out;
+}
+
+function collectPPTStyleTypography() {
+    const out = {};
+    _assignIfDefined(out, 'font_style',          _strOrUndef('#pptStyleTypoFontStyle'));
+    _assignIfDefined(out, 'h1_weight',           _strOrUndef('#pptStyleTypoH1Weight'));
+    _assignIfDefined(out, 'h2_weight',           _strOrUndef('#pptStyleTypoH2Weight'));
+    _assignIfDefined(out, 'body_weight',         _strOrUndef('#pptStyleTypoBodyWeight'));
+    _assignIfDefined(out, 'stat_weight',         _strOrUndef('#pptStyleTypoStatWeight'));
+    _assignIfDefined(out, 'h1_line_height',      _numOrUndef('#pptStyleTypoH1LineHeight'));
+    _assignIfDefined(out, 'body_line_height',    _numOrUndef('#pptStyleTypoBodyLineHeight'));
+    _assignIfDefined(out, 'h1_letter_spacing',   _numOrUndef('#pptStyleTypoH1LetterSpacing'));
+    _assignIfDefined(out, 'body_letter_spacing', _numOrUndef('#pptStyleTypoBodyLetterSpacing'));
+    return out;
+}
+
+function renderArchetypeCompositions(selected) {
+    const sel = new Set((selected || []).map(String));
+    const $grid = $('#pptStyleArchCompositionsGrid');
+    $grid.empty();
+    PPT_STYLE_COMPOSITIONS.forEach(item => {
+        const isOn = sel.has(item.id);
+        const chip = $(
+            `<span class="ppt-style-comp-chip ${isOn ? 'selected' : ''}" data-comp-id="${escapeHtml(item.id)}" title="${escapeHtml(item.id)}">${escapeHtml(item.label)}</span>`
+        );
+        chip.on('click', function() {
+            $(this).toggleClass('selected');
+        });
+        $grid.append(chip);
+    });
+}
+
+function collectPPTStyleArchetypes() {
+    const out = {};
+    _assignIfDefined(out, 'grid_columns',  _numOrUndef('#pptStyleArchGridColumns'));
+    _assignIfDefined(out, 'column_gutter', _numOrUndef('#pptStyleArchColumnGutter'));
+    _assignIfDefined(out, 'corner_radius', _strOrUndef('#pptStyleArchCornerRadius'));
+    _assignIfDefined(out, 'image_aspect',  _strOrUndef('#pptStyleArchImageAspect'));
+    const comps = [];
+    $('#pptStyleArchCompositionsGrid .ppt-style-comp-chip.selected').each(function() {
+        const id = $(this).data('comp-id');
+        if (id) comps.push(String(id));
+    });
+    out.compositions = comps;
     return out;
 }
 
@@ -6734,6 +6928,9 @@ function collectFormData() {
                 body_font_id: bodyFontId,
                 sizes: sizes,
             },
+            spacing:    collectPPTStyleSpacing(),
+            typography: collectPPTStyleTypography(),
+            archetypes: collectPPTStyleArchetypes(),
         },
         font_refs: fontRefs,
         pattern_library: collectPatternLibrary(),

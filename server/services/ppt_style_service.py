@@ -31,12 +31,27 @@ _VISION_PPT_PROMPT = (
     '  "primary_color": "#RRGGBB",            // 주조색 (가장 비중 큰 브랜드 컬러)\n'
     '  "secondary_colors": ["#RRGGBB", ...],  // 보조색 2~5개 (light/ink/grey/line/darker 후보)\n'
     '  "font_style": "sans-serif|serif|display|geometric|humanist",\n'
-    '  "layout": "한 줄 요약 - 그리드/여백/시각적 특징"\n'
+    '  "layout": "한 줄 요약 - 그리드/여백/시각적 특징",\n'
+    '  "spacing_density": "tight|comfortable|spacious",   // 여백/요소 간격 인상\n'
+    '  "h1_weight": "regular|medium|bold|black",          // 제목 굵기\n'
+    '  "body_weight": "regular|medium|bold",              // 본문 굵기\n'
+    '  "stat_weight": "regular|medium|bold|black",        // 큰 숫자(스탯) 굵기\n'
+    '  "title_letter_spacing": "tight|normal|wide",       // 제목 자간\n'
+    '  "title_line_height": "tight|normal|loose",         // 제목 행간\n'
+    '  "body_line_height": "tight|normal|loose",          // 본문 행간\n'
+    '  "corner_style": "sharp|rounded|pill",              // 카드/도형 모서리\n'
+    '  "image_aspect": "16:9|4:3|1:1|free",               // 주된 이미지 비율\n'
+    '  "grid_columns": 6,                                 // 6 | 12 | 24 중 가장 가까운 값\n'
+    '  "compositions": ["..."]                            // 슬라이드 합성 패턴 태그\n'
     "}\n\n"
+    "compositions 후보 (해당되는 것만 선택, 최대 4개):\n"
+    "  split_60_40 · centered_hero · grid_2col_cards · grid_3col_cards · grid_2x2 ·\n"
+    "  full_bleed_photo · sidebar_left · sidebar_right · big_stat · timeline · quote · comparison\n\n"
     "주의:\n"
     "- 색상은 반드시 #RRGGBB 6자리 hex (대문자) 형식으로 출력\n"
     "- 차트/이미지 영역의 색은 제외하고, 텍스트·배경·강조 막대·키 컬러만 추출\n"
-    "- 한국어 텍스트가 있어도 font_style은 영문 키워드로\n"
+    "- 한국어 텍스트가 있어도 모든 키워드는 영문 enum 그대로 사용\n"
+    "- 확신이 없는 필드는 가장 가까운 보수적 기본값으로 답해도 됨 (null 금지)\n"
 )
 
 
@@ -88,6 +103,247 @@ _VISION_PATTERN_EXTRACT_PROMPT = (
 
 
 _HEX_RE = re.compile(r"#?([0-9A-Fa-f]{6})\b")
+
+
+# ============ 의미값 → 수치 매핑 (spacing / typography / archetypes) ============
+
+# spacing_density → 구체 pt 값 (16:9 슬라이드 960x540pt 기준).
+# 빌더가 직접 참고할 수 있도록 density 의미값도 함께 보존한다.
+_DENSITY_TO_SPACING: dict = {
+    "tight": {
+        "base_unit":      4,
+        "slide_margin_x": 28,
+        "slide_margin_y": 20,
+        "section_gap":    16,
+        "element_gap":    8,
+        "card_padding":   10,
+    },
+    "comfortable": {
+        "base_unit":      8,
+        "slide_margin_x": 40,
+        "slide_margin_y": 32,
+        "section_gap":    24,
+        "element_gap":    12,
+        "card_padding":   16,
+    },
+    "spacious": {
+        "base_unit":      8,
+        "slide_margin_x": 56,
+        "slide_margin_y": 44,
+        "section_gap":    36,
+        "element_gap":    18,
+        "card_padding":   22,
+    },
+}
+
+# letter-spacing 의미값 → 퍼센트(em 대비) 정수
+_LETTER_SPACING_PCT: dict = {"tight": -2, "normal": 0, "wide": 5}
+
+# line-height 의미값 → 실제 배율 (제목/본문 별로 차이를 둠)
+_LINE_HEIGHT_H1: dict = {"tight": 1.05, "normal": 1.15, "loose": 1.3}
+_LINE_HEIGHT_BODY: dict = {"tight": 1.25, "normal": 1.45, "loose": 1.65}
+
+# corner_style → corner_radius 토큰
+_CORNER_TO_RADIUS: dict = {"sharp": "sharp", "rounded": "md", "pill": "pill"}
+
+
+# 폰트 분류 휴리스틱 — family/name 문자열로 typography.font_style 추정.
+# 등록된 폰트(섹션 5)의 family/name 만 보고 키워드 매칭. 명확하지 않으면 None.
+# 순서가 중요: serif 판별 전에 "sans serif" 가 먼저 매칭되도록 sans-serif 그룹을 위에 둔다.
+def _classify_font_style(*labels: str) -> Optional[str]:
+    """폰트 family/name 후보 문자열들 중 첫 번째로 분류 가능한 결과를 반환."""
+    for raw in labels:
+        if not raw or not isinstance(raw, str):
+            continue
+        s = raw.lower()
+
+        # 1) sans-serif 계열 — sans 키워드 먼저 (serif 보다 우선)
+        sans_keywords = (
+            "sans", "gothic", "고딕", "돋움", "굴림", "맑은", "맑은고딕",
+            "noto sans", "노토산스", "noto-sans",
+            "pretendard", "프리텐다드", "suite", "spoqa",
+            "nanum gothic", "나눔고딕", "ibm plex sans", "inter", "roboto",
+            "helvetica", "arial",
+        )
+        if any(k in s for k in sans_keywords):
+            return "sans-serif"
+
+        # 2) serif 계열
+        serif_keywords = (
+            "serif", "myungjo", "명조", "본명조", "batang", "바탕",
+            "noto serif", "노토세리프", "nanum myeongjo", "나눔명조",
+            "times", "georgia", "garamond",
+        )
+        if any(k in s for k in serif_keywords):
+            return "serif"
+
+        # 3) display / geometric / humanist — 폰트 카테고리 단어가 이름에 명시된 경우
+        if "display" in s:
+            return "display"
+        if "geometric" in s or "futura" in s or "avenir" in s:
+            return "geometric"
+        if "humanist" in s or "calibri" in s or "verdana" in s:
+            return "humanist"
+
+    return None
+
+
+async def _derive_font_style_from_design_tokens(design_tokens: dict) -> Optional[str]:
+    """design_tokens.fonts.title_font_id / body_font_id 로부터 typography.font_style 도출.
+
+    제목 폰트를 우선 참조, 실패 시 본문 폰트로 폴백. 둘 다 없거나 분류 실패면 None.
+    """
+    fonts_meta = (design_tokens or {}).get("fonts") or {}
+    candidate_ids = [
+        fonts_meta.get("title_font_id"),
+        fonts_meta.get("body_font_id"),
+    ]
+    if not any(candidate_ids):
+        return None
+
+    db = get_db()
+    for fid in candidate_ids:
+        if not fid:
+            continue
+        try:
+            oid = ObjectId(fid)
+        except Exception:
+            continue
+        doc = await db.fonts.find_one({"_id": oid})
+        if not doc:
+            continue
+        result = _classify_font_style(doc.get("family") or "", doc.get("name") or "")
+        if result:
+            return result
+    return None
+
+
+def _mode(values: list, allowed: list | None = None):
+    """리스트에서 최빈값 반환. 동률 시 첫 등장 우선. 빈 리스트면 None."""
+    counts: dict = {}
+    order: list = []
+    for v in values:
+        if v is None or v == "":
+            continue
+        if allowed is not None and v not in allowed:
+            continue
+        if v not in counts:
+            order.append(v)
+            counts[v] = 0
+        counts[v] += 1
+    if not counts:
+        return None
+    best = max(order, key=lambda k: (counts[k], -order.index(k)))
+    return best
+
+
+def _aggregate_design_hints(parsed_responses: list[dict]) -> dict:
+    """샘플별 Vision 응답에서 spacing / typography / archetypes 의미값을 집계.
+
+    Returns:
+        {
+          "spacing":    { density, base_unit, slide_margin_x, ... },
+          "typography": { font_style, h1_weight, ..., h1_line_height: float, ... },
+          "archetypes": { grid_columns, column_gutter, corner_radius, image_aspect, compositions: [...] },
+        }
+    각 필드는 집계가 불가능하면 생략된다 (자동 채움 시 빈 슬롯만 덮어쓰는 정책).
+    """
+    if not parsed_responses:
+        return {"spacing": {}, "typography": {}, "archetypes": {}}
+
+    density_list   = [p.get("spacing_density") for p in parsed_responses]
+    h1_weight      = [p.get("h1_weight")       for p in parsed_responses]
+    body_weight    = [p.get("body_weight")     for p in parsed_responses]
+    stat_weight    = [p.get("stat_weight")     for p in parsed_responses]
+    font_style     = [p.get("font_style")      for p in parsed_responses]
+    title_letter   = [p.get("title_letter_spacing") for p in parsed_responses]
+    title_line     = [p.get("title_line_height")    for p in parsed_responses]
+    body_line      = [p.get("body_line_height")     for p in parsed_responses]
+    corner_style   = [p.get("corner_style")    for p in parsed_responses]
+    image_aspect   = [p.get("image_aspect")    for p in parsed_responses]
+    grid_cols      = [p.get("grid_columns")    for p in parsed_responses]
+
+    spacing: dict = {}
+    density = _mode(density_list, ["tight", "comfortable", "spacious"])
+    if density:
+        spacing["density"] = density
+        spacing.update(_DENSITY_TO_SPACING[density])
+
+    typography: dict = {}
+    fs = _mode(font_style, ["sans-serif", "serif", "display", "geometric", "humanist"])
+    if fs:
+        typography["font_style"] = fs
+    h1w = _mode(h1_weight, ["regular", "medium", "bold", "black"])
+    if h1w:
+        typography["h1_weight"] = h1w
+    bw = _mode(body_weight, ["regular", "medium", "bold"])
+    if bw:
+        typography["body_weight"] = bw
+    sw = _mode(stat_weight, ["regular", "medium", "bold", "black"])
+    if sw:
+        typography["stat_weight"] = sw
+    # h2_weight 는 별도 추출하지 않고 h1/body 의 중간값으로 추정
+    if h1w and bw:
+        order = ["regular", "medium", "bold", "black"]
+        try:
+            mid_idx = (order.index(h1w) + order.index(bw)) // 2
+            typography["h2_weight"] = order[mid_idx]
+        except Exception:
+            pass
+    tl = _mode(title_letter, ["tight", "normal", "wide"])
+    if tl:
+        typography["h1_letter_spacing"] = _LETTER_SPACING_PCT[tl]
+    # body letter-spacing 은 별도 추출 안 함 — 0 으로 둠
+    tlh = _mode(title_line, ["tight", "normal", "loose"])
+    if tlh:
+        typography["h1_line_height"] = _LINE_HEIGHT_H1[tlh]
+    blh = _mode(body_line, ["tight", "normal", "loose"])
+    if blh:
+        typography["body_line_height"] = _LINE_HEIGHT_BODY[blh]
+
+    archetypes: dict = {}
+    # grid_columns: 6/12/24 후보 중 가장 가까운 값
+    nums: list[int] = []
+    for v in grid_cols:
+        try:
+            n = int(v)
+            if n > 0:
+                nums.append(min([6, 12, 24], key=lambda c: abs(c - n)))
+        except Exception:
+            continue
+    gc = _mode(nums, [6, 12, 24])
+    if gc:
+        archetypes["grid_columns"] = gc
+        # gutter 는 컬럼 수에 따라 보수적 기본값
+        archetypes["column_gutter"] = 24 if gc == 6 else (16 if gc == 12 else 12)
+    cs = _mode(corner_style, ["sharp", "rounded", "pill"])
+    if cs:
+        archetypes["corner_radius"] = _CORNER_TO_RADIUS[cs]
+    ia = _mode(image_aspect, ["16:9", "4:3", "1:1", "free"])
+    if ia:
+        archetypes["image_aspect"] = ia
+
+    # compositions: 모든 응답의 합집합 (등장 횟수 내림차순)
+    allowed_comp = {
+        "split_60_40", "centered_hero",
+        "grid_2col_cards", "grid_3col_cards", "grid_2x2",
+        "full_bleed_photo", "sidebar_left", "sidebar_right",
+        "big_stat", "timeline", "quote", "comparison",
+    }
+    comp_counts: dict = {}
+    for p in parsed_responses:
+        items = p.get("compositions") or []
+        if isinstance(items, str):
+            items = [items]
+        for it in items:
+            if isinstance(it, str) and it in allowed_comp:
+                comp_counts[it] = comp_counts.get(it, 0) + 1
+    if comp_counts:
+        archetypes["compositions"] = sorted(
+            comp_counts.keys(), key=lambda k: -comp_counts[k]
+        )
+
+    return {"spacing": spacing, "typography": typography, "archetypes": archetypes}
 
 
 def _normalize_hex(value: str) -> Optional[str]:
@@ -212,6 +468,7 @@ async def analyze_samples_with_vision(style_id: str) -> dict:
     detected_fonts: list[str] = []
     layout_hints: list[str] = []
     raw_responses: list[dict] = []
+    parsed_for_hints: list[dict] = []   # spacing/typography/archetypes 집계용 원시 응답 모음
 
     uploads_root = Path(settings.UPLOAD_DIR)
 
@@ -243,6 +500,7 @@ async def analyze_samples_with_vision(style_id: str) -> dict:
         })
         if not parsed:
             continue
+        parsed_for_hints.append(parsed)
 
         p = _normalize_hex(parsed.get("primary_color", ""))
         if p and p not in extracted_colors:
@@ -308,6 +566,41 @@ async def analyze_samples_with_vision(style_id: str) -> dict:
     fonts["sizes"] = sizes
     # title_font_id / body_font_id 는 그대로 유지 (사용자 선택)
     design_tokens["fonts"] = fonts
+
+    # spacing / typography / archetypes — 빈 슬롯만 자동 채움 (사용자 수동값 보존).
+    # 분석 결과가 비어 있으면 기본값(DEFAULT_*) 도 함께 보완해 슬롯이 완성된 상태로 둔다.
+    from models.ppt_style import (
+        DEFAULT_SPACING,
+        DEFAULT_TYPOGRAPHY,
+        DEFAULT_ARCHETYPES,
+    )
+    hints = _aggregate_design_hints(parsed_for_hints)
+
+    def _merge_slot(existing: dict | None, hint: dict, defaults: dict) -> dict:
+        out = dict(existing or {})
+        for k, v in defaults.items():
+            cur = out.get(k)
+            if cur is None or cur == "" or cur == []:
+                # hint 값이 있으면 우선, 없으면 default 로 보완
+                out[k] = hint[k] if k in hint else v
+        # compositions 같은 list 슬롯에 hint 가 새 값을 들고 왔으면 우선 적용
+        for k, v in hint.items():
+            if k not in defaults:
+                continue
+            cur = out.get(k)
+            if cur is None or cur == "" or cur == [] or cur == defaults[k]:
+                out[k] = v
+        return out
+
+    design_tokens["spacing"]    = _merge_slot(design_tokens.get("spacing"),    hints["spacing"],    DEFAULT_SPACING)
+    design_tokens["typography"] = _merge_slot(design_tokens.get("typography"), hints["typography"], DEFAULT_TYPOGRAPHY)
+    design_tokens["archetypes"] = _merge_slot(design_tokens.get("archetypes"), hints["archetypes"], DEFAULT_ARCHETYPES)
+
+    # typography.font_style 은 섹션 5 (등록된 제목/본문 폰트) 가 진실의 소스다.
+    # 폰트가 선택돼 있으면 그 family/name 으로 분류한 값으로 비전 추정값을 덮어쓴다.
+    derived_fs = await _derive_font_style_from_design_tokens(design_tokens)
+    if derived_fs:
+        design_tokens["typography"]["font_style"] = derived_fs
 
     now = datetime.utcnow()
     await db.ppt_styles.update_one(

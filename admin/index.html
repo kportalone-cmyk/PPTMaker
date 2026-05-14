@@ -348,6 +348,157 @@
                                 </div>
                             </div>
 
+                            <h4 class="ppt-style-subheading">간격 (Spacing)</h4>
+                            <div class="ppt-style-size-grid">
+                                <div class="skill-form-group">
+                                    <label>밀도 <small style="color:#888;font-weight:400;">density</small></label>
+                                    <select id="pptStyleSpacingDensity">
+                                        <option value="">(미지정)</option>
+                                        <option value="tight">조밀 (tight)</option>
+                                        <option value="comfortable">보통 (comfortable)</option>
+                                        <option value="spacious">여유 (spacious)</option>
+                                    </select>
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>기본 단위 <small style="color:#888;font-weight:400;">base_unit · pt</small></label>
+                                    <input type="number" id="pptStyleSpacingBaseUnit" min="2" max="16" step="1" placeholder="8">
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>슬라이드 좌우 여백 <small style="color:#888;font-weight:400;">slide_margin_x · pt</small></label>
+                                    <input type="number" id="pptStyleSpacingMarginX" min="0" max="120" step="1" placeholder="40">
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>슬라이드 상하 여백 <small style="color:#888;font-weight:400;">slide_margin_y · pt</small></label>
+                                    <input type="number" id="pptStyleSpacingMarginY" min="0" max="120" step="1" placeholder="32">
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>섹션 간격 <small style="color:#888;font-weight:400;">section_gap · pt</small></label>
+                                    <input type="number" id="pptStyleSpacingSectionGap" min="0" max="80" step="1" placeholder="24">
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>요소 간격 <small style="color:#888;font-weight:400;">element_gap · pt</small></label>
+                                    <input type="number" id="pptStyleSpacingElementGap" min="0" max="40" step="1" placeholder="12">
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>카드 패딩 <small style="color:#888;font-weight:400;">card_padding · pt</small></label>
+                                    <input type="number" id="pptStyleSpacingCardPadding" min="0" max="60" step="1" placeholder="16">
+                                </div>
+                            </div>
+
+                            <h4 class="ppt-style-subheading">타이포 디테일 (Typography)</h4>
+                            <div class="ppt-style-size-grid">
+                                <div class="skill-form-group">
+                                    <label>폰트 스타일 <small style="color:#888;font-weight:400;">font_style</small></label>
+                                    <select id="pptStyleTypoFontStyle">
+                                        <option value="">(미지정)</option>
+                                        <option value="sans-serif">sans-serif</option>
+                                        <option value="serif">serif</option>
+                                        <option value="display">display</option>
+                                        <option value="geometric">geometric</option>
+                                        <option value="humanist">humanist</option>
+                                    </select>
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>H1 굵기 <small style="color:#888;font-weight:400;">h1_weight</small></label>
+                                    <select id="pptStyleTypoH1Weight">
+                                        <option value="">(미지정)</option>
+                                        <option value="regular">regular (400)</option>
+                                        <option value="medium">medium (500)</option>
+                                        <option value="bold">bold (700)</option>
+                                        <option value="black">black (900)</option>
+                                    </select>
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>H2 굵기 <small style="color:#888;font-weight:400;">h2_weight</small></label>
+                                    <select id="pptStyleTypoH2Weight">
+                                        <option value="">(미지정)</option>
+                                        <option value="regular">regular (400)</option>
+                                        <option value="medium">medium (500)</option>
+                                        <option value="bold">bold (700)</option>
+                                        <option value="black">black (900)</option>
+                                    </select>
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>본문 굵기 <small style="color:#888;font-weight:400;">body_weight</small></label>
+                                    <select id="pptStyleTypoBodyWeight">
+                                        <option value="">(미지정)</option>
+                                        <option value="regular">regular (400)</option>
+                                        <option value="medium">medium (500)</option>
+                                        <option value="bold">bold (700)</option>
+                                    </select>
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>스탯 굵기 <small style="color:#888;font-weight:400;">stat_weight</small></label>
+                                    <select id="pptStyleTypoStatWeight">
+                                        <option value="">(미지정)</option>
+                                        <option value="regular">regular (400)</option>
+                                        <option value="medium">medium (500)</option>
+                                        <option value="bold">bold (700)</option>
+                                        <option value="black">black (900)</option>
+                                    </select>
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>H1 행간 <small style="color:#888;font-weight:400;">h1_line_height</small></label>
+                                    <input type="number" id="pptStyleTypoH1LineHeight" min="0.8" max="2.0" step="0.05" placeholder="1.15">
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>본문 행간 <small style="color:#888;font-weight:400;">body_line_height</small></label>
+                                    <input type="number" id="pptStyleTypoBodyLineHeight" min="0.8" max="2.5" step="0.05" placeholder="1.45">
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>H1 자간 <small style="color:#888;font-weight:400;">h1_letter_spacing · %</small></label>
+                                    <input type="number" id="pptStyleTypoH1LetterSpacing" min="-10" max="20" step="1" placeholder="-2">
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>본문 자간 <small style="color:#888;font-weight:400;">body_letter_spacing · %</small></label>
+                                    <input type="number" id="pptStyleTypoBodyLetterSpacing" min="-10" max="20" step="1" placeholder="0">
+                                </div>
+                            </div>
+
+                            <h4 class="ppt-style-subheading">슬라이드 아키타입 (Archetypes)</h4>
+                            <div class="ppt-style-size-grid">
+                                <div class="skill-form-group">
+                                    <label>그리드 컬럼 <small style="color:#888;font-weight:400;">grid_columns</small></label>
+                                    <select id="pptStyleArchGridColumns">
+                                        <option value="">(미지정)</option>
+                                        <option value="6">6</option>
+                                        <option value="12">12</option>
+                                        <option value="24">24</option>
+                                    </select>
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>컬럼 거터 <small style="color:#888;font-weight:400;">column_gutter · pt</small></label>
+                                    <input type="number" id="pptStyleArchColumnGutter" min="0" max="60" step="1" placeholder="16">
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>모서리 반경 <small style="color:#888;font-weight:400;">corner_radius</small></label>
+                                    <select id="pptStyleArchCornerRadius">
+                                        <option value="">(미지정)</option>
+                                        <option value="sharp">sharp (0)</option>
+                                        <option value="sm">sm (4)</option>
+                                        <option value="md">md (8)</option>
+                                        <option value="lg">lg (16)</option>
+                                        <option value="pill">pill</option>
+                                    </select>
+                                </div>
+                                <div class="skill-form-group">
+                                    <label>이미지 비율 <small style="color:#888;font-weight:400;">image_aspect</small></label>
+                                    <select id="pptStyleArchImageAspect">
+                                        <option value="">(미지정)</option>
+                                        <option value="16:9">16:9</option>
+                                        <option value="4:3">4:3</option>
+                                        <option value="1:1">1:1</option>
+                                        <option value="free">free</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="skill-form-group" style="margin-top:10px;">
+                                <label>합성 패턴 태그 <small style="color:#888;font-weight:400;">compositions (다중 선택)</small></label>
+                                <div class="ppt-style-comp-grid" id="pptStyleArchCompositionsGrid">
+                                    <!-- 토글 칩이 JS로 렌더링됨 -->
+                                </div>
+                            </div>
+
                             <h4 class="ppt-style-subheading" id="pptStyleExtractedPatternsHeading" style="margin-top:18px;">샘플에서 추출된 패턴 (0개)</h4>
                             <div class="ppt-style-extracted-patterns-grid" id="pptStyleExtractedPatternsGrid">
                                 <!-- 추출 패턴 카드가 JS로 렌더링됨 -->

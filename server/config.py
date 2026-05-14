@@ -40,6 +40,11 @@ class Settings:
     GOOGLE_IMAGE_MODEL: str = os.getenv("GOOGLE_IMAGE_MODEL", "gemini-3.1-flash-image-preview")
     GOOGLE_IMAGE_THINKING: str = os.getenv("GOOGLE_IMAGE_THINKING", "HIGH")  # none, LOW, MEDIUM, HIGH
 
+    # 이미지 생성 워크스페이스(image_gen) 전용 모델 식별자
+    NANO_BANANA_PRO_MODEL: str = os.getenv("NANO_BANANA_PRO_MODEL", "gemini-3-pro-image-preview")
+    NANO_BANANA_2_MODEL: str = os.getenv("NANO_BANANA_2_MODEL", "gemini-2.5-flash-image-preview")
+    IMAGEN_4_MODEL: str = os.getenv("IMAGEN_4_MODEL", "imagen-4.0-generate-001")
+
     # OpenAI (콤마 구분으로 여러 키 등록 가능 → 라운드 로빈)
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_API_KEYS: list = [

@@ -121,6 +121,35 @@ async def get_project(jwt_token: str, project_id: str):
         s["_id"] = str(s["_id"])
         generated_slides.append(s)
 
+    # PPT 스타일 모드: 빌드된 슬라이드 PNG 를 이미지-기반 슬라이드로 변환해 응답.
+    # `generated_slides` 컬렉션의 도큐먼트는 pptx_import_service.parse_pptx_to_slides() 가
+    # 모든 텍스트를 "텍스트를 입력하세요" 플레이스홀더로 치환한 결과여서, PPT 스타일 모드에서
+    # 그대로 렌더하면 실제 콘텐츠가 사라진다. 빌드 결과의 슬라이드 PNG URL 이 있으면
+    # SSE `slide_images` 이벤트가 만들던 것과 동일한 단일 이미지 슬라이드로 감싸서 반환한다.
+    if project.get("ppt_style_id"):
+        pptx_styled = await db.generated_pptx_styled.find_one({"project_id": project_id})
+        if pptx_styled:
+            slide_image_urls = pptx_styled.get("slide_image_urls") or []
+            if slide_image_urls:
+                generated_slides = []
+                for i, url in enumerate(slide_image_urls):
+                    generated_slides.append({
+                        "_id": f"ppt_style_img_{project_id}_{i}",
+                        "project_id": project_id,
+                        "order": i + 1,
+                        "objects": [{
+                            "obj_id": f"img_slide_{i + 1}",
+                            "obj_type": "image",
+                            "x": 0, "y": 0, "width": 960, "height": 540,
+                            "z_index": 0,
+                            "image_url": url,
+                            "image_fit": "cover",
+                        }],
+                        "slide_meta": {"content_type": "image"},
+                        "background_image": None,
+                        "items": [],
+                    })
+
     # 엑셀 데이터 조회 (엑셀 프로젝트인 경우)
     generated_excel = None
     if project.get("project_type") in ("excel", "onlyoffice_xlsx"):
@@ -143,7 +172,13 @@ async def get_project(jwt_token: str, project_id: str):
         if generated_docx:
             generated_docx["_id"] = str(generated_docx["_id"])
 
-    return {
+    # 이미지 생성 워크스페이스 데이터 조회 (project_type == "image_gen")
+    image_generations = None
+    if project_type == "image_gen":
+        from services.image_gen_service import list_generations
+        image_generations = await list_generations(project_id)
+
+    response = {
         "project": project,
         "resources": resources,
         "generated_slides": generated_slides,
@@ -151,6 +186,9 @@ async def get_project(jwt_token: str, project_id: str):
         "onlyoffice_doc": onlyoffice_doc,
         "generated_docx": generated_docx,
     }
+    if image_generations is not None:
+        response["image_generations"] = image_generations
+    return response
 
 
 @router.put("/{jwt_token}/api/projects/{project_id}")

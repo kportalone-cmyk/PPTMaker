@@ -64,6 +64,9 @@ async def init_indexes():
     # generated_excel 컬렉션
     await db.generated_excel.create_index("project_id", unique=True)
 
+    # image_generations 컬렉션 (이미지 생성 워크스페이스)
+    await db.image_generations.create_index([("project_id", 1), ("created_at", -1)])
+
     # onlyoffice_documents 컬렉션
     await db.onlyoffice_documents.create_index("project_id", unique=True)
     await db.onlyoffice_documents.create_index("document_key")

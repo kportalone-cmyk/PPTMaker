@@ -8919,3 +8919,886 @@ body {
     0%, 100% { box-shadow: 0 6px 18px rgba(28, 96, 239, 0.32); }
     50%      { box-shadow: 0 6px 22px rgba(28, 96, 239, 0.55); }
 }
+
+/* ============ 이미지 생성 (Google Flow 스타일) ============ */
+
+/* 사이드바 — 새 프로젝트 + 이미지 생성 버튼 그룹 */
+.sidebar-new-actions {
+    display: flex;
+    gap: 6px;
+    margin: 4px 12px 12px;
+    flex-shrink: 0;
+}
+.sidebar-new-actions .btn-new-project {
+    flex: 1;
+    margin: 0;
+    /* 이미지 생성 버튼과 동일한 outlined 톤 — 브랜드 인디고 색상 */
+    background: rgba(99, 102, 241, 0.18);
+    color: #c7d2fe;
+    border: 1px solid rgba(99, 102, 241, 0.4);
+}
+.sidebar-new-actions .btn-new-project:hover {
+    background: rgba(99, 102, 241, 0.32);
+    color: #fff;
+}
+.sidebar-new-actions .btn-new-project:active {
+    transform: scale(0.97);
+}
+.btn-new-imagegen {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: rgba(168, 85, 247, 0.18);
+    color: #d8b4fe;
+    border: 1px solid rgba(168, 85, 247, 0.32);
+    border-radius: var(--radius);
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background var(--transition), transform var(--transition);
+    white-space: nowrap;
+}
+.btn-new-imagegen:hover { background: rgba(168, 85, 247, 0.32); color: #fff; }
+.btn-new-imagegen:active { transform: scale(0.97); }
+
+/* 프로젝트 타입 아이콘 — image_gen */
+.project-item .proj-icon.ptype-imagegen {
+    background: rgba(168, 85, 247, 0.15);
+    color: #a855f7;
+}
+.project-item.active .proj-icon.ptype-imagegen {
+    background: rgba(168, 85, 247, 0.28);
+}
+.recent-card.ptype-imagegen {
+    border-color: rgba(168, 85, 247, 0.25);
+}
+.recent-card.ptype-imagegen:hover {
+    border-color: rgba(168, 85, 247, 0.5);
+    box-shadow: 0 4px 12px rgba(168, 85, 247, 0.15);
+}
+.rc-type-badge.imagegen {
+    background: rgba(168, 85, 247, 0.15);
+    color: #a855f7;
+}
+
+/* 워크스페이스 컨테이너 */
+.imagegen-workspace {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    background: #f5f6f8;
+    padding: 0;
+    overflow: hidden;
+}
+.imagegen-content {
+    position: relative;
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 24px 8px;
+    min-height: 0;
+}
+
+/* 드래그&드롭 업로드 오버레이 — content 영역 위에 풀커버 */
+.imagegen-dropzone-overlay {
+    position: absolute;
+    inset: 8px;
+    border: 2px dashed rgba(168, 85, 247, 0.6);
+    border-radius: 16px;
+    background: rgba(31, 41, 55, 0.78);
+    color: #f3f4f6;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 10;
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+}
+.imagegen-content.is-dragover .imagegen-dropzone-overlay { display: flex; }
+.imagegen-content.is-dragover { outline: none; }
+.imagegen-dropzone-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    color: #d8b4fe;
+}
+.imagegen-dropzone-inner p {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: #f3f4f6;
+}
+
+/* 빈 상태 */
+.imagegen-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 320px;
+    color: var(--text-secondary, #6b7280);
+    gap: 10px;
+    text-align: center;
+    padding: 40px 20px;
+}
+.imagegen-empty-title {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 8px 0 0;
+    color: var(--text, #111827);
+}
+.imagegen-empty-desc {
+    font-size: 13px;
+    color: var(--text-secondary, #6b7280);
+    margin: 0;
+}
+
+/* 결과 그리드 — Google Flow 풍 justified row layout.
+   각 타일은 동일 높이(--ig-row-h), 비율에 따라 폭이 자연스럽게 결정되고 줄바꿈한다. */
+.imagegen-grid {
+    --ig-row-h: 280px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 4px 0 16px;
+    align-content: flex-start;
+}
+.ig-tile {
+    position: relative;
+    height: var(--ig-row-h);
+    aspect-ratio: var(--ig-tile-ratio, 16/9);
+    border-radius: 14px;
+    overflow: hidden;
+    background: #1f2937;
+    cursor: zoom-in;
+    flex: 0 0 auto;
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+.ig-tile:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+}
+.ig-tile img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+/* Hover overlay — top-right 액션 버튼 + bottom-left 라벨 + 메타 배지 */
+.ig-tile-hover {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transition: opacity 0.18s;
+    pointer-events: none;
+    background: linear-gradient(
+        180deg,
+        rgba(0, 0, 0, 0.55) 0%,
+        rgba(0, 0, 0, 0) 30%,
+        rgba(0, 0, 0, 0) 65%,
+        rgba(0, 0, 0, 0.6) 100%
+    );
+}
+.ig-tile:hover .ig-tile-hover { opacity: 1; }
+
+/* 우상단 빠른 액션 버튼 */
+.ig-tile-actions {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    display: flex;
+    gap: 4px;
+    background: rgba(0, 0, 0, 0.65);
+    border-radius: 999px;
+    padding: 3px;
+    pointer-events: auto;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+}
+.ig-tile-act {
+    width: 28px;
+    height: 28px;
+    background: transparent;
+    border: none;
+    color: #f3f4f6;
+    border-radius: 50%;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.12s, color 0.12s;
+    padding: 0;
+}
+.ig-tile-act:hover { background: rgba(255, 255, 255, 0.18); color: #fff; }
+.ig-tile-act.is-fav { color: #f87171; }
+.ig-tile-act.is-fav:hover { color: #ef4444; background: rgba(248, 113, 113, 0.18); }
+
+/* 좌하단 이미지 라벨 (프롬프트 일부) */
+.ig-tile-label-wrap {
+    position: absolute;
+    left: 12px;
+    right: 96px;
+    bottom: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+    pointer-events: none;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+.ig-tile-label-icon {
+    display: inline-flex;
+    color: #d1d5db;
+    flex-shrink: 0;
+}
+.ig-tile-label-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 우하단 메타 배지 (모델 / 비율) */
+.ig-tile-model-badge,
+.ig-tile-aspect-badge {
+    position: absolute;
+    bottom: 12px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 999px;
+    pointer-events: none;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+.ig-tile-aspect-badge { right: 12px; }
+.ig-tile-model-badge {
+    right: 52px;
+    max-width: 110px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 더보기 드롭다운 메뉴 (타일 안에 absolute, 더보기 버튼 아래) */
+.ig-tile-menu {
+    position: absolute;
+    top: 44px;
+    right: 10px;
+    min-width: 200px;
+    background: #1f2937;
+    color: #f3f4f6;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    padding: 6px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+    z-index: 20;
+    pointer-events: auto;
+    /* hover 가 풀려도 메뉴는 표시 유지: 부모의 opacity 와 무관하게 강제 가시 */
+    opacity: 1 !important;
+}
+.ig-tile .ig-tile-menu { /* hover 영역 밖이어도 보이도록 ig-tile-hover 의 opacity 영향 안 받게 */
+    /* (이미 직접 .ig-tile 의 자식으로 append 됨, hover 컨테이너 안이 아님) */
+}
+.ig-tile-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: #f3f4f6;
+    font-family: inherit;
+    font-size: 13px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.1s;
+}
+.ig-tile-menu-item:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+}
+.ig-tile-menu-item:disabled { opacity: 0.4; cursor: not-allowed; }
+.ig-tile-menu-item svg { color: #9ca3af; flex-shrink: 0; }
+.ig-tile-menu-item.danger { color: #fca5a5; }
+.ig-tile-menu-item.danger:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.18);
+    color: #fff;
+}
+.ig-tile-menu-item.danger svg { color: #f87171; }
+.ig-tile-menu-sep {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.08);
+    margin: 4px 4px;
+}
+
+/* row 높이는 JS (_updateImageGenRowHeight) 가 콘텐츠 영역 너비에 맞춰
+   "16:9 기준 최소 3장이 한 줄에 들어가도록" 동적으로 inline 으로 설정한다.
+   위의 --ig-row-h: 280px 는 JS 가 아직 실행되지 않은 초기 페인트용 폴백.
+   모바일 등 작은 화면에서 갭이 너무 넓게 보이지 않도록 좁은 화면에선 갭만 약간 축소. */
+@media (max-width: 768px) {
+    .imagegen-grid { gap: 8px; }
+}
+.ig-gen-skeleton {
+    width: 100%;
+    aspect-ratio: var(--ig-ratio, 16/9);
+    border-radius: 8px;
+    background: linear-gradient(90deg, #f3f4f6 25%, #e5e7eb 50%, #f3f4f6 75%);
+    background-size: 200% 100%;
+    animation: ig-shimmer 1.4s linear infinite;
+}
+@keyframes ig-shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* 하단 다크 프롬프트 카드 */
+.imagegen-prompt-bar {
+    padding: 8px 20px 20px;
+    flex-shrink: 0;
+}
+.imagegen-prompt-card {
+    position: relative;
+    background: #ffffff;
+    color: #1f2937;
+    border-radius: 20px;
+    padding: 16px 18px 12px;
+    box-shadow: 0 12px 36px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.04);
+    max-width: 960px;
+    margin: 0 auto;
+    border: 1px solid #e5e7eb;
+}
+
+/* @ 멘션 칩 strip (textarea 위, 있을 때만 표시) */
+.imagegen-mention-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 2px 0 8px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid #e5e7eb;
+}
+.ig-mention-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #eef2ff;
+    border: 1px solid #c7d2fe;
+    border-radius: 999px;
+    padding: 3px 10px 3px 4px;
+    color: #4338ca;
+    font-size: 12px;
+    max-width: 260px;
+}
+.ig-mention-chip img {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+    background: #e5e7eb;
+}
+.ig-mention-chip-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 200px;
+}
+.ig-mention-chip-x {
+    background: transparent;
+    border: none;
+    color: #6366f1;
+    cursor: pointer;
+    padding: 1px 3px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.12s, color 0.12s;
+}
+.ig-mention-chip-x:hover {
+    background: rgba(239, 68, 68, 0.92);
+    color: #fff;
+}
+
+/* @ 입력 시 떠오르는 피커 (prompt card 위에 absolute) */
+.ig-mention-picker {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: calc(100% + 8px);
+    max-height: 280px;
+    overflow-y: auto;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 14px;
+    box-shadow: 0 20px 50px rgba(15, 23, 42, 0.18);
+    padding: 6px;
+    z-index: 30;
+}
+.ig-mention-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 0.1s;
+}
+.ig-mention-item:hover,
+.ig-mention-item.selected {
+    background: #eef2ff;
+}
+.ig-mention-thumb {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    object-fit: cover;
+    flex-shrink: 0;
+    background: #f3f4f6;
+}
+.ig-mention-name {
+    color: #1f2937;
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+}
+.ig-mention-empty {
+    padding: 12px;
+    color: #9ca3af;
+    font-size: 12px;
+    text-align: center;
+}
+.imagegen-prompt-card textarea {
+    width: 100%;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #1f2937;
+    font-family: inherit;
+    font-size: 14px;
+    resize: none;
+    max-height: 140px;
+    padding: 4px 0 8px;
+    line-height: 1.5;
+    box-sizing: border-box;
+}
+.imagegen-prompt-card textarea::placeholder { color: #9ca3af; }
+
+/* contenteditable 기반 프롬프트 입력 — 인라인 멘션 pill 을 텍스트에 삽입할 수 있도록 div 로 변경 */
+.imagegen-prompt-input {
+    width: 100%;
+    min-height: 22px;
+    max-height: 140px;
+    overflow-y: auto;
+    background: transparent;
+    color: #1f2937;
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 4px 0 8px;
+    box-sizing: border-box;
+    outline: none;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+}
+.imagegen-prompt-input:empty::before {
+    content: attr(data-placeholder);
+    color: #9ca3af;
+    pointer-events: none;
+}
+/* 인라인 멘션 pill (textarea 안 텍스트에 박혀 있음, contentEditable=false 인 단일 단위) */
+.ig-inline-mention {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #dbeafe;
+    color: #1e40af;
+    border: 1px solid #93c5fd;
+    border-radius: 999px;
+    padding: 1px 9px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.3;
+    margin: 0 2px;
+    vertical-align: baseline;
+    cursor: default;
+    user-select: none;
+    white-space: nowrap;
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ig-inline-mention.is-selected {
+    outline: 2px solid #2563eb;
+    outline-offset: 1px;
+}
+.imagegen-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+}
+.imagegen-controls-left {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.imagegen-select {
+    background: #f3f4f6;
+    color: #1f2937;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-family: inherit;
+    outline: none;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+.imagegen-select:hover { background: #e5e7eb; }
+.imagegen-select:focus { border-color: #a855f7; }
+.imagegen-chip-group {
+    display: flex;
+    gap: 2px;
+    background: #f3f4f6;
+    padding: 3px;
+    border-radius: 10px;
+    border: 1px solid #e5e7eb;
+}
+.ig-chip {
+    background: transparent;
+    color: #4b5563;
+    border: none;
+    padding: 5px 11px;
+    border-radius: 7px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: inherit;
+}
+.ig-chip:hover { color: #111827; background: rgba(0,0,0,0.04); }
+.ig-chip.active {
+    background: #1f2937;
+    color: #fff;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.18);
+}
+.ig-chip.active:hover { background: #111827; color: #fff; }
+.imagegen-submit {
+    background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+    color: #fff;
+    border: none;
+    border-radius: 12px;
+    padding: 9px 18px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
+    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+}
+.imagegen-submit:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(99, 102, 241, 0.5);
+}
+.imagegen-submit:active:not(:disabled) { transform: translateY(0); }
+.imagegen-submit:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    box-shadow: none;
+}
+.imagegen-submit .ig-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: ig-spin 0.8s linear infinite;
+}
+@keyframes ig-spin { to { transform: rotate(360deg); } }
+
+/* 생성 중 스켈레톤 타일 */
+.ig-tile.ig-skel {
+    cursor: progress;
+    background: #1f2937;
+    overflow: hidden;
+}
+.ig-tile.ig-skel:hover { transform: none; box-shadow: none; }
+.ig-skel-shimmer {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        100deg,
+        rgba(255, 255, 255, 0.02) 30%,
+        rgba(168, 85, 247, 0.15) 50%,
+        rgba(255, 255, 255, 0.02) 70%
+    );
+    background-size: 200% 100%;
+    animation: ig-shimmer 1.6s linear infinite;
+}
+.ig-skel-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 10px;
+    pointer-events: none;
+}
+.ig-skel-progress {
+    align-self: flex-end;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.ig-skel-percent { letter-spacing: 0.3px; }
+.ig-skel-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255, 255, 255, 0.25);
+    border-top-color: #d8b4fe;
+    border-radius: 50%;
+    animation: ig-spin 0.9s linear infinite;
+    display: inline-block;
+}
+/* 제출 버튼 안의 작은 스피너 */
+.ig-spinner {
+    width: 12px;
+    height: 12px;
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: ig-spin 0.8s linear infinite;
+    display: inline-block;
+    margin-right: 6px;
+    vertical-align: -2px;
+}
+@keyframes ig-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* 이미지 상세 — 풀스크린 레이어 */
+.imagegen-detail-fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: #0a0a0c;
+    display: flex;
+    flex-direction: column;
+}
+
+/* 상단 바 — 반투명 그라데이션 */
+.ig-detail-topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: linear-gradient(180deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 100%);
+    color: #f3f4f6;
+    flex-shrink: 0;
+}
+.ig-detail-back {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #f3f4f6;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.12s;
+}
+.ig-detail-back:hover { background: rgba(255, 255, 255, 0.18); }
+.ig-detail-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #f3f4f6;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 50vw;
+}
+.ig-detail-counter {
+    color: #9ca3af;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    margin-left: auto;
+}
+.ig-detail-topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.ig-detail-icon-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #f3f4f6;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.12s;
+}
+.ig-detail-icon-btn:hover { background: rgba(255, 255, 255, 0.18); }
+.ig-detail-done {
+    background: rgba(255, 255, 255, 0.95);
+    color: #111827;
+    border: none;
+    padding: 8px 18px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s;
+    margin-left: 4px;
+}
+.ig-detail-done:hover { background: #fff; }
+
+/* 이미지 스테이지 */
+.ig-detail-stage {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 60px;
+    overflow: hidden;
+}
+.ig-detail-stage img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: 12px;
+    box-shadow: 0 16px 50px rgba(0, 0, 0, 0.6);
+    cursor: default;
+}
+
+/* 좌/우 네비게이션 — 스테이지 가장자리에 fixed-style */
+.ig-detail-nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.12s, transform 0.12s, opacity 0.15s;
+    z-index: 5;
+}
+.ig-detail-nav:hover:not(:disabled) { background: rgba(0, 0, 0, 0.85); transform: translateY(-50%) scale(1.06); }
+.ig-detail-nav:disabled { opacity: 0.22; cursor: not-allowed; }
+.ig-detail-nav-prev { left: 14px; }
+.ig-detail-nav-next { right: 14px; }
+
+/* 편집 생성 중 오버레이 — 스테이지 위 */
+.ig-detail-editing-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    z-index: 6;
+}
+.ig-detail-editing-card {
+    background: rgba(0, 0, 0, 0.75);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 999px;
+    padding: 12px 22px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 14px;
+    font-weight: 600;
+}
+.ig-detail-editing-pct { color: #d8b4fe; min-width: 40px; }
+.ig-detail-editing-msg { color: #e5e7eb; font-weight: 500; }
+
+/* 하단 편집 바 */
+.ig-detail-edit-bar {
+    flex-shrink: 0;
+    padding: 12px 20px 20px;
+    background: linear-gradient(0deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 100%);
+}
+.ig-detail-edit-card {
+    background: #1f2937;
+    color: #f3f4f6;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 20px;
+    padding: 14px 18px 10px;
+    max-width: 780px;
+    margin: 0 auto;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+}
+.ig-detail-edit-card textarea {
+    width: 100%;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #f3f4f6;
+    font-family: inherit;
+    font-size: 14px;
+    resize: none;
+    max-height: 120px;
+    padding: 4px 0 8px;
+    line-height: 1.5;
+    box-sizing: border-box;
+}
+.ig-detail-edit-card textarea::placeholder { color: #9ca3af; }
+.ig-detail-edit-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+@media (max-width: 768px) {
+    .ig-detail-stage { padding: 0 12px; }
+    .ig-detail-nav-prev { left: 6px; }
+    .ig-detail-nav-next { right: 6px; }
+    .ig-detail-title { max-width: 36vw; font-size: 13px; }
+}
